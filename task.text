@@ -1,0 +1,412 @@
+import json
+import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+import time
+import psutil
+import random
+
+
+# Global driver and wait objects
+driver = None
+wait = None
+
+def initialize_driver(mode="headed"):
+    """Initialize the Chrome WebDriver."""
+    global driver, wait
+    print("Closing existing Chrome instances...")
+    closed_any = False
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'].lower() in ['chrome', 'chrome.exe', 'chromedriver', 'chromedriver.exe']:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+                closed_any = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    
+    if closed_any:
+        print("Closed Chrome process(es)")
+    time.sleep(1)
+
+    user_data_dir = os.path.expanduser("~/.chrome-user-data")
+    profile_directory = "Default"
+
+    chrome_options = Options()
+    if mode == "headless":
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+    else:
+        chrome_options.add_argument("--start-maximized")
+    
+    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+    chrome_options.add_argument(f"--profile-directory={profile_directory}")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=chrome_options
+    )
+    
+    wait = WebDriverWait(driver, 15)
+    return driver, wait
+
+def load_urls():
+    """Load URLs from the JSON file."""
+    json_path = r"C:\xampp\htdocs\serene task\url.json"
+    try:
+        with open(json_path, 'r') as file:
+            data = json.load(file)
+            return data["uploadposturl"][0]
+    except Exception as e:
+        print(f"Failed to load URLs from JSON: {str(e)}")
+        raise
+
+def writecaption():
+    """Enter the specified text into the post text field if not already present."""
+    try:
+        post_text = "A massive financial breakthrough is coming your way this week, claim it now!"
+        text_field = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+        )
+        # Check if the text is already present
+        current_text = text_field.get_attribute('value') or text_field.text
+        if post_text in current_text:
+            print(f"Text '{post_text}' is already present in the text field. Skipping write operation.")
+            return
+        text_field.click()
+        text_field.send_keys(post_text)
+        print(f"Entered text into post field: '{post_text}'")
+        time.sleep(1)
+    except Exception as e:
+        print(f"Failed to enter text: {str(e)}")
+        try:
+            text_field = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "textarea, div[contenteditable='true'], input[placeholder*='write']"))
+            )
+            # Check again for existing text with alternative locator
+            current_text = text_field.get_attribute('value') or text_field.text
+            if post_text in current_text:
+                print(f"Text '{post_text}' is already present in the text field (alternative locator). Skipping write operation.")
+                return
+            text_field.click()
+            text_field.send_keys(post_text)
+            print(f"Entered text using alternative locator: '{post_text}'")
+            time.sleep(1)
+        except Exception as e2:
+            print(f"Alternative locator for text field failed: {str(e2)}")
+            raise Exception("Could not locate or enter text in post field")
+
+
+def toggleschedule():
+    """Toggle the 'Set date and time' button or checkbox for scheduling a post."""
+    try:
+        # Wait for and locate the scheduling toggle
+        scheduling_toggle = wait.until(
+            EC.element_to_be_clickable((By.XPATH, 
+                "//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'set date and time')]//input[@type='checkbox'] | "
+                "//div[contains(@aria-label, 'Set date and time') or contains(text(), 'Set date and time')]//following-sibling::div[@role='switch'] | "
+                "//span[contains(text(), 'Set date and time')]/following::input[1]"
+            ))
+        )
+        # If it's a checkbox, check if it's already selected
+        if scheduling_toggle.tag_name == 'input' and scheduling_toggle.get_attribute('type') == 'checkbox':
+            if not scheduling_toggle.is_selected():
+                scheduling_toggle.click()
+                print("Toggled 'Set date and time' checkbox on.")
+            else:
+                print("'Set date and time' is already enabled.")
+        else:
+            # For switch-like elements, click the switch
+            scheduling_toggle.click()
+            print("Clicked 'Set date and time' toggle.")
+        
+        time.sleep(2)  # Pause to allow any UI updates after toggling
+        
+    except Exception as e:
+        print(f"Failed to toggle schedule button: {str(e)}")
+        try:
+            # Alternative locator for scheduling toggle
+            scheduling_toggle = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 
+                    "[aria-label*='Schedule'] input[type='checkbox'], [data-testid*='schedule-toggle']"
+                ))
+            )
+            # Check if it's a checkbox and its state
+            if scheduling_toggle.tag_name == 'input' and scheduling_toggle.get_attribute('type') == 'checkbox':
+                if not scheduling_toggle.is_selected():
+                    scheduling_toggle.click()
+                    print("Toggled 'Set date and time' checkbox on using alternative locator.")
+                else:
+                    print("'Set date and time' is already enabled (alternative locator).")
+            else:
+                scheduling_toggle.click()
+                print("Clicked 'Set date and time' toggle using alternative locator.")
+            
+            time.sleep(2)  # Pause to allow UI updates
+            
+        except Exception as e2:
+            print(f"Alternative locator for schedule toggle failed: {str(e2)}")
+            raise Exception("Could not locate or toggle schedule button")
+
+def select_file():
+    """
+    Upload card_12.jpg in Meta Business Suite composer.
+    Handles dynamic file input injection after clicking 'Share photos and videos'.
+    """
+    FILE_TO_UPLOAD = r"C:\xampp\htdocs\serene task\files\next jpg\card_12.jpg"
+
+    if not os.path.isfile(FILE_TO_UPLOAD):
+        raise FileNotFoundError(f"File not found: {FILE_TO_UPLOAD}")
+
+    print(f"Preparing to upload: {FILE_TO_UPLOAD}")
+
+    # --- 1. Wait a moment after clicking "Share photos and videos" ---
+    time.sleep(3)  # Critical: give React time to inject the input
+
+    # --- 2. Try multiple strategies to find the file input ---
+    file_input = None
+    strategies = [
+        # Strategy 1: Standard file input in composer
+        (By.XPATH, "//input[@type='file' and contains(@accept, 'image')]"),
+        (By.XPATH, "//input[@type='file' and contains(@accept, 'video')]"),
+        (By.XPATH, "//input[@type='file' and contains(@name, 'file')]"),
+        (By.XPATH, "//input[@type='file' and contains(@data-testid, 'media')]"),
+        (By.XPATH, "//input[@type='file' and contains(@id, 'media')]"),
+        # Strategy 2: Any file input on the page
+        (By.CSS_SELECTOR, "input[type='file']"),
+        # Strategy 3: Inside a modal/popup
+        (By.XPATH, "//div[contains(@role, 'dialog')]//input[@type='file']"),
+    ]
+
+    for by, selector in strategies:
+        try:
+            print(f"Trying locator: {by} = {selector}")
+            file_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((by, selector))
+            )
+            print(f"Found file input with: {selector}")
+            break
+        except Exception as e:
+            print(f"Failed: {selector} → {str(e)[:100]}...")
+            continue
+
+    if not file_input:
+        # --- FINAL DEBUG: Print ALL file inputs on page ---
+        try:
+            all_file_inputs = driver.find_elements(By.XPATH, "//input[@type='file']")
+            print(f"Found {len(all_file_inputs)} file inputs on page:")
+            for i, inp in enumerate(all_file_inputs):
+                print(f"  [{i}] name={inp.get_attribute('name')}, "
+                      f"accept={inp.get_attribute('accept')}, "
+                      f"id={inp.get_attribute('id')}, "
+                      f"outerHTML={inp.get_attribute('outerHTML')[:150]}...")
+        except:
+            pass
+
+        # --- Also dump the media modal ---
+        try:
+            modal = driver.find_element(By.XPATH, "//div[contains(@role, 'dialog') or contains(@class, 'modal')]")
+            print("MODAL HTML:", modal.get_attribute("outerHTML")[:600])
+        except:
+            pass
+
+        raise Exception("Could not find any file input after multiple strategies.")
+
+    # --- 3. Make input interactable (in case it's hidden) ---
+    try:
+        driver.execute_script("arguments[0].style.display = 'block';", file_input)
+        driver.execute_script("arguments[0].style.visibility = 'visible';", file_input)
+        driver.execute_script("arguments[0].style.height = '1px';", file_input)
+        driver.execute_script("arguments[0].style.width = '1px';", file_input)
+        driver.execute_script("arguments[0].style.opacity = '1';", file_input)
+    except:
+        pass  # Best effort
+
+    # --- 4. Upload the file ---
+    try:
+        file_input.clear()
+        file_input.send_keys(FILE_TO_UPLOAD)
+        print(f"File sent successfully: {os.path.basename(FILE_TO_UPLOAD)}")
+    except Exception as e:
+        raise Exception(f"send_keys failed: {e}")
+
+    # --- 5. Wait for preview ---
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//img[contains(@src, 'blob:') or contains(@alt, 'preview')] | //div[contains(text(), 'card_12')]")
+            )
+        )
+        print("Image preview confirmed!")
+    except:
+        print("No preview found, but file may still be uploading...")
+
+    time.sleep(3)
+    
+def togglesharephotosandvideos():
+    """Locate the 'Photos and Videos' section and click on any input or button within its div."""
+    try:
+        # Wait for and locate the 'Photos and Videos' section
+        media_section = wait.until(
+            EC.presence_of_element_located((By.XPATH, 
+                "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'photos and videos') or "
+                "contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add media') or "
+                "contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add photos/video') or "
+                "contains(@aria-label, 'Photos and Videos') or contains(@aria-label, 'Add Media') or "
+                "contains(@aria-label, 'Add Photos/Video') or contains(@data-testid, 'media-upload') or "
+                "contains(@data-testid, 'composer-media')]"
+            ))
+        )
+        # Log the outer HTML of the media section for debugging
+        print("Located 'Photos and Videos' section. Outer HTML:", media_section.get_attribute('outerHTML')[:200], "...")
+        
+        # Find any clickable element within the media section
+        media_element = wait.until(
+            EC.element_to_be_clickable((By.XPATH, 
+                ".//input[@type='file'] | .//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add') or "
+                "contains(@aria-label, 'Add') or contains(@data-testid, 'media')] | "
+                ".//div[@role='button' or contains(@class, 'media') or contains(@aria-label, 'Add') or contains(@data-testid, 'media')]"
+            ))
+        )
+        media_element.click()
+        print("Clicked input or button in 'Photos and Videos' section:", media_element.get_attribute('outerHTML')[:100], "...")
+        time.sleep(2)  # Pause to allow any UI updates after clicking
+        
+    except Exception as e:
+        print(f"Failed to locate or click in 'Photos and Videos' section: {str(e)}")
+        try:
+            # Alternative locator for media section
+            media_section = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 
+                    "div[aria-label*='Media' i], div[class*='media-upload' i], div[data-testid*='media' i], "
+                    "button[aria-label*='Add Media' i], button[data-testid*='media' i], "
+                    "div[aria-label*='Add Photos/Video' i]"
+                ))
+            )
+            print("Located 'Photos and Videos' section using alternative locator. Outer HTML:", 
+                  media_section.get_attribute('outerHTML')[:200], "...")
+            
+            # Find any clickable element within the alternative media section
+            media_element = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 
+                    "input[type='file'], button[class*='media' i], div[role='button'], "
+                    "div[class*='media' i], button[data-testid*='media' i], div[aria-label*='Add' i]"
+                ))
+            )
+            media_element.click()
+            print("Clicked input or button in 'Photos and Videos' section using alternative locator:", 
+                  media_element.get_attribute('outerHTML')[:100], "...")
+            time.sleep(2)  # Pause to allow UI updates
+            
+        except Exception as e2:
+            print(f"Alternative locator for 'Photos and Videos' section failed: {str(e2)}")
+            raise Exception("Could not locate or click input/button in 'Photos and Videos' section")
+
+def launch_profile():
+    """Navigate to the upload post URL, confirm it, and continuously recheck every 2 seconds."""
+    global driver, wait
+    try:
+        uploadpost_url = load_urls()
+        # Initial navigation attempt
+        while True:
+            current_url = driver.current_url
+            if uploadpost_url in current_url:
+                print(f"Confirmed: URL is {uploadpost_url}.")
+                wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+                )
+                print("Navigated to upload post page.")
+                break
+            else:
+                print(f"Current URL ({current_url}) is not the upload post URL.")
+                try:
+                    # Attempt to find a URL input field and fill it
+                    url_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[@type='url'] | //input[@placeholder*='URL'] | //input[@name='url']"))
+                    )
+                    url_input.clear()
+                    url_input.send_keys(uploadpost_url)
+                    print(f"Filled URL input with: {uploadpost_url}")
+                    # Attempt to submit or navigate
+                    try:
+                        submit_button = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[@type='submit'] | //button[contains(text(), 'Go')] | //button[contains(text(), 'Navigate')]"))
+                        )
+                        submit_button.click()
+                    except:
+                        print("No submit button found, attempting direct navigation.")
+                        driver.get(uploadpost_url)
+                except:
+                    print(f"No URL input field found, navigating directly to {uploadpost_url}.")
+                    driver.get(uploadpost_url)
+                
+                print("Waiting 2 seconds before rechecking URL...")
+                time.sleep(2)
+        
+        # Continuous URL rechecking, caption writing, schedule toggling, media interaction, and file selection
+        while True:
+            try:
+                print("Checking if the URL is the specified")
+                current_url = driver.current_url
+                if uploadpost_url in current_url:
+                    print(f"Recheck confirmed: URL is {uploadpost_url}. Proceeding to write caption, toggle schedule, interact with media, and select file.")
+                    writecaption()
+                    toggleschedule()
+                    togglesharephotosandvideos()  # Toggle media section
+                    select_file()
+                else:
+                    print(f"Recheck failed: Current URL ({current_url}) does not match {uploadpost_url}. Retrying navigation...")
+                    driver.get(uploadpost_url)
+                    wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+                    )
+                    print("Navigated to upload post page.")
+                time.sleep(2)
+            except KeyboardInterrupt:
+                print("Script interrupted by user. Closing browser...")
+                raise
+            except Exception as e:
+                print(f"Error during URL recheck, caption writing, schedule toggling, media interaction, or file selection: {str(e)}")
+                time.sleep(2)  # Continue looping even if an error occurs
+                
+    except Exception as e:
+        if isinstance(e, KeyboardInterrupt):
+            raise  # Re-raise KeyboardInterrupt to handle in main
+        print(f"An error occurred: {str(e)}")
+        print("Browser will remain open for inspection.")
+        raise
+
+def main():
+    try:
+        # Initialize WebDriver
+        driver, wait = initialize_driver(mode="headed")
+        
+        # Execute launch_profile (includes continuous URL checking, caption writing, schedule toggling, and media interaction)
+        launch_profile()
+        
+    except KeyboardInterrupt:
+        print("Main script interrupted by user. Closing browser...")
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+    except Exception as e:
+        print(f"An error occurred in main: {str(e)}")
+        print("Browser will remain open for inspection.")
+        # Keep browser open, no automatic quit
+
+if __name__ == "__main__":
+    main()
+
+#interacts with display

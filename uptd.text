@@ -1,0 +1,644 @@
+import json
+import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys  # ← ADD THIS LINEimport json
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+import time
+import psutil
+import random
+
+
+# Global driver and wait objects
+driver = None
+wait = None
+
+def initialize_driver(mode="headed"):
+    """Initialize the Chrome WebDriver."""
+    global driver, wait
+    print("Closing existing Chrome instances...")
+    closed_any = False
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'].lower() in ['chrome', 'chrome.exe', 'chromedriver', 'chromedriver.exe']:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except psutil.TimeoutExpired:
+                    proc.kill()
+                closed_any = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    
+    if closed_any:
+        print("Closed Chrome process(es)")
+    time.sleep(1)
+
+    user_data_dir = os.path.expanduser("~/.chrome-user-data")
+    profile_directory = "Default"
+
+    chrome_options = Options()
+    if mode == "headless":
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+    else:
+        chrome_options.add_argument("--start-maximized")
+    
+    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+    chrome_options.add_argument(f"--profile-directory={profile_directory}")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=chrome_options
+    )
+    
+    wait = WebDriverWait(driver, 15)
+    return driver, wait
+
+def load_urls():
+    """Load URLs from the JSON file."""
+    json_path = r"C:\xampp\htdocs\serene task\url.json"
+    try:
+        with open(json_path, 'r') as file:
+            data = json.load(file)
+            return data["uploadposturl"][0]
+    except Exception as e:
+        print(f"Failed to load URLs from JSON: {str(e)}")
+        raise
+
+import os
+import json
+import re
+import random
+
+def writecaption():
+    """Enter a caption from divorces.json into the post text field based on card number or randomly."""
+    try:
+        # Path to the image file
+        image_path = r"C:\xampp\htdocs\serene task\files\next jpg\card_12.jpg"
+        
+        # Extract card number from filename using regex
+        filename = os.path.basename(image_path)
+        match = re.search(r'card_(\d+)\.jpg', filename)
+        if not match:
+            raise Exception("Could not extract card number from filename")
+        card_number = int(match.group(1))
+        
+        # Load captions from JSON file
+        json_path = r"C:\xampp\htdocs\serene task\files\captions\divorces.json"
+        if not os.path.exists(json_path):
+            raise Exception(f"JSON file not found at {json_path}")
+        
+        with open(json_path, 'r') as file:
+            captions = json.load(file)
+        
+        # Find caption matching card number
+        selected_caption = None
+        for caption in captions:
+            if caption['id'] == card_number:
+                selected_caption = caption['description']
+                break
+        
+        # If no matching caption, select a random one
+        if not selected_caption:
+            selected_caption = random.choice(captions)['description']
+            print(f"No caption found for card number {card_number}. Selected random caption: '{selected_caption}'")
+        else:
+            print(f"Selected caption for card number {card_number}: '{selected_caption}'")
+        
+        # Locate the text field
+        text_field = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+        )
+        
+        # Check if the text is already present
+        current_text = text_field.get_attribute('value') or text_field.text
+        if selected_caption in current_text:
+            print(f"Text '{selected_caption}' is already present in the text field. Skipping write operation.")
+            return
+        
+        # Enter the selected caption
+        text_field.click()
+        text_field.send_keys(selected_caption)
+        print(f"Entered text into post field: '{selected_caption}'")
+        time.sleep(1)
+        
+    except Exception as e:
+        print(f"Failed to enter text: {str(e)}")
+        try:
+            # Try alternative locator
+            text_field = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "textarea, div[contenteditable='true'], input[placeholder*='write']"))
+            )
+            current_text = text_field.get_attribute('value') or text_field.text
+            if selected_caption in current_text:
+                print(f"Text '{selected_caption}' is already present in the text field (alternative locator). Skipping write operation.")
+                return
+            text_field.click()
+            text_field.send_keys(selected_caption)
+            print(f"Entered text using alternative locator: '{selected_caption}'")
+            time.sleep(1)
+        except Exception as e2:
+            print(f"Alternative locator for text field failed: {str(e2)}")
+            raise Exception("Could not locate or enter text in post field")
+
+
+def toggleschedule():
+    """Toggle the 'Set date and time' button or checkbox for scheduling a post."""
+    try:
+        # Wait for and locate the scheduling toggle
+        scheduling_toggle = wait.until(
+            EC.element_to_be_clickable((By.XPATH, 
+                "//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'set date and time')]//input[@type='checkbox'] | "
+                "//div[contains(@aria-label, 'Set date and time') or contains(text(), 'Set date and time')]//following-sibling::div[@role='switch'] | "
+                "//span[contains(text(), 'Set date and time')]/following::input[1]"
+            ))
+        )
+        # If it's a checkbox, check if it's already selected
+        if scheduling_toggle.tag_name == 'input' and scheduling_toggle.get_attribute('type') == 'checkbox':
+            if not scheduling_toggle.is_selected():
+                scheduling_toggle.click()
+                print("Toggled 'Set date and time' checkbox on.")
+            else:
+                print("'Set date and time' is already enabled.")
+        else:
+            # For switch-like elements, click the switch
+            scheduling_toggle.click()
+            print("Clicked 'Set date and time' toggle.")
+        
+        time.sleep(2)  # Pause to allow any UI updates after toggling
+        
+    except Exception as e:
+        print(f"Failed to toggle schedule button: {str(e)}")
+        try:
+            # Alternative locator for scheduling toggle
+            scheduling_toggle = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 
+                    "[aria-label*='Schedule'] input[type='checkbox'], [data-testid*='schedule-toggle']"
+                ))
+            )
+            # Check if it's a checkbox and its state
+            if scheduling_toggle.tag_name == 'input' and scheduling_toggle.get_attribute('type') == 'checkbox':
+                if not scheduling_toggle.is_selected():
+                    scheduling_toggle.click()
+                    print("Toggled 'Set date and time' checkbox on using alternative locator.")
+                else:
+                    print("'Set date and time' is already enabled (alternative locator).")
+            else:
+                scheduling_toggle.click()
+                print("Clicked 'Set date and time' toggle using alternative locator.")
+            
+            time.sleep(2)  # Pause to allow UI updates
+            
+        except Exception as e2:
+            print(f"Alternative locator for schedule toggle failed: {str(e2)}")
+            raise Exception("Could not locate or toggle schedule button")
+
+def set_schedule():
+    """
+    Set schedule: 30/10/2025 at 07:00
+    Handles Meta Business Suite's split time inputs (hours/minutes).
+    """
+    target_date = "30/10/2025"
+    target_hour = "07"
+    target_minute = "00"
+    
+    print(f"Setting schedule: {target_date} at {target_hour}:{target_minute}")
+
+    try:
+        # --- 1. Wait for schedule panel ---
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'schedule')]")
+            )
+        )
+        print("Schedule panel loaded.")
+        time.sleep(3)
+
+        # --- 2. Find DATE input by placeholder ---
+        date_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//input[@placeholder='dd/mm/yyyy' or contains(@placeholder, 'dd/mm')]")
+            )
+        )
+        print("Date input found (dd/mm/yyyy).")
+
+        # --- 3. Find HOUR input ---
+        hour_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//input[@aria-label='hours' or contains(@aria-label, 'hour')]")
+            )
+        )
+        print("Hour input found.")
+
+        # --- 4. Find MINUTE input ---
+        minute_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//input[@aria-label='minutes' or contains(@aria-label, 'minute')]")
+            )
+        )
+        print("Minute input found.")
+
+        # --- 5. Set values via JS ---
+        driver.execute_script(f"""
+            const el = arguments[0];
+            const val = {json.dumps(target_date)};
+            el.focus();
+            el.value = '';
+            el.value = val;
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            el.blur();
+        """, date_input)
+        print(f"JS: Date set to '{target_date}'")
+
+        driver.execute_script(f"""
+            const el = arguments[0];
+            const val = {json.dumps(target_hour)};
+            el.focus();
+            el.value = '';
+            el.value = val;
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            el.blur();
+        """, hour_input)
+        print(f"JS: Hour set to '{target_hour}'")
+
+        driver.execute_script(f"""
+            const el = arguments[0];
+            const val = {json.dumps(target_minute)};
+            el.focus();
+            el.value = '';
+            el.value = val;
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            el.blur();
+        """, minute_input)
+        print(f"JS: Minute set to '{target_minute}'")
+
+        # --- 6. Verify ---
+        actual_date = driver.execute_script("return arguments[0].value;", date_input)
+        actual_hour = driver.execute_script("return arguments[0].value;", hour_input)
+        actual_minute = driver.execute_script("return arguments[0].value;", minute_input)
+        print(f"Verified: Date='{actual_date}', Time='{actual_hour}:{actual_minute}'")
+
+        if actual_date != target_date:
+            raise Exception(f"Date mismatch: '{actual_date}' != '{target_date}'")
+        if actual_hour != target_hour or actual_minute != target_minute:
+            raise Exception(f"Time mismatch: '{actual_hour}:{actual_minute}' != '{target_hour}:{target_minute}'")
+
+    except Exception as e:
+        print(f"Schedule failed: {e}")
+        driver.save_screenshot("schedule_final_debug.png")
+        raise
+def set_schedule():
+    """
+    Set schedule: 30/10/2025 at 07:00
+    Paste date + accept Facebook's display format.
+    """
+    target_date = "30/10/2025"
+    target_hour = "07"
+    target_minute = "00"
+    
+    print(f"Setting schedule: {target_date} at {target_hour}:{target_minute}")
+
+    try:
+        # --- 1. Wait for schedule panel ---
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'schedule')]")
+            )
+        )
+        print("Schedule panel loaded.")
+        time.sleep(4)
+
+        # --- 2. Get inputs ---
+        inputs = WebDriverWait(driver, 15).until(
+            EC.presence_of_all_elements_located((By.TAG_NAME, "input"))
+        )
+        print(f"Found {len(inputs)} inputs.")
+
+        date_input = hour_input = minute_input = None
+        for i, inp in enumerate(inputs):
+            ph = inp.get_attribute("placeholder") or ""
+            al = inp.get_attribute("aria-label") or ""
+            if "dd/mm/yyyy" in ph.lower():
+                date_input = inp
+                print(f"Date input at [{i}]: {ph}")
+            elif "hour" in al.lower():
+                hour_input = inp
+                print(f"Hour input at [{i}]: {al}")
+            elif "minute" in al.lower():
+                minute_input = inp
+                print(f"Minute input at [{i}]: {al}")
+
+        if not all([date_input, hour_input, minute_input]):
+            raise Exception("Missing inputs")
+
+        # --- 3. PASTE DATE ---
+        driver.execute_script("arguments[0].scrollIntoView(true);", date_input)
+        date_input.click()
+        time.sleep(0.5)
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+        print("Selected all text.")
+        time.sleep(0.5)
+        ActionChains(driver).send_keys(target_date).perform()
+        print(f"Pasted: {target_date}")
+        time.sleep(0.5)
+        date_input.send_keys(Keys.TAB)
+        print("Tabbed out.")
+        time.sleep(1)
+
+        # --- 4. TIME ---
+        hour_input.click()
+        hour_input.clear()
+        hour_input.send_keys(target_hour)
+        hour_input.send_keys(Keys.TAB)
+        print(f"Hour: {target_hour}")
+        time.sleep(1)
+
+        minute_input.click()
+        minute_input.clear()
+        minute_input.send_keys(target_minute)
+        minute_input.send_keys(Keys.TAB)
+        print(f"Minute: {target_minute}")
+        time.sleep(1)
+
+        # --- 5. VERIFY (FIXED) ---
+        final_date = date_input.get_attribute("value")
+        final_hour = hour_input.get_attribute("value")
+        final_minute = minute_input.get_attribute("value")
+        print(f"FINAL: Date='{final_date}', Time='{final_hour}:{final_minute}'")
+
+        # Accept: "30 October 2025", "30 Oct 2025", etc.
+        normalized = final_date.lower().replace("october", "oct")
+        if "30 oct 2025" not in normalized:
+            raise Exception(f"Date not set: '{final_date}'")
+
+        if final_hour != target_hour or final_minute != target_minute:
+            raise Exception(f"Time not set: '{final_hour}:{final_minute}'")
+
+    except Exception as e:
+        print(f"Schedule failed: {e}")
+        driver.save_screenshot("final_debug.png")
+        raise
+
+
+
+def click_schedule_button():
+    try:
+        # Wait for button to be enabled
+        btn = WebDriverWait(driver, 20).until(
+            EC.element_to_be_clickable(
+                (By.XPATH, 
+                 "//button[contains(translate(., 'SCHEDULE', 'schedule'), 'schedule') and not(@disabled)] | "
+                 "//div[@role='button' and contains(translate(., 'SCHEDULE', 'schedule'), 'schedule')]"
+                )
+            )
+        )
+        driver.execute_script("arguments[0].scrollIntoView(true);", btn)
+        time.sleep(1)
+        driver.execute_script("arguments[0].click();", btn)
+        print("SCHEDULED SUCCESSFULLY!")
+
+        # Confirm
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(text(), 'scheduled')]")
+            )
+        )
+        print("Success message confirmed.")
+
+    except Exception as e:
+        print(f"Failed to schedule: {e}")
+        driver.save_screenshot("final_click_debug.png")
+        raise
+
+def togglesharephotosandvideos():
+    try:
+        media_section = wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'share photos and videos')]")
+            )
+        )
+        print("Located 'Share photos and videos' block.")
+
+        # Click + prepare dropzone
+        driver.execute_script("""
+            arguments[0].click();
+            // Make sure dropzone is active
+            const zone = arguments[0];
+            zone.style.border = '2px dashed #1877f2';
+            zone.style.background = '#f0f2f5';
+        """, media_section)
+        print("Media section clicked and visually activated.")
+        time.sleep(4)  # Give time for React to render dropzone
+    except Exception as e:
+        print(f"Failed to activate media: {e}")
+        raise
+def select_file():
+    """
+    Upload ANY .jpg file from the folder:
+    C:\\xampp\\htdocs\\serene task\\files\\next jpg\\
+    Picks one randomly if multiple exist.
+    """
+    folder_path = r"C:\xampp\htdocs\serene task\files\next jpg"
+
+    if not os.path.isdir(folder_path):
+        raise NotADirectoryError(f"Folder not found: {folder_path}")
+
+    # --- 1. Find all .jpg files (case-insensitive) ---
+    jpg_files = [
+        f for f in os.listdir(folder_path)
+        if f.lower().endswith(('.jpg', '.jpeg'))
+    ]
+
+    if not jpg_files:
+        raise FileNotFoundError(f"No .jpg files found in: {folder_path}")
+
+    # --- 2. Pick one randomly ---
+    chosen_file = random.choice(jpg_files)
+    FILE_TO_UPLOAD = os.path.join(folder_path, chosen_file)
+
+    print(f"Randomly selected: {chosen_file} (from {len(jpg_files)} file(s))")
+
+    # --- 3. Read file as base64 ---
+    import base64
+    with open(FILE_TO_UPLOAD, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    filename = os.path.basename(FILE_TO_UPLOAD)
+
+    # --- 4. Find dropzone ---
+    dropzone = driver.execute_script("""
+        // 1. Our visual border
+        let zone = document.querySelector('div[style*="border"]');
+        if (zone) return zone;
+
+        // 2. Media upload button
+        zone = document.querySelector('div[role="button"]:has(div:contains("Share photos"))');
+        if (zone) return zone;
+
+        // 3. Fallback: any button with media
+        zone = document.querySelector('div[role="button"], [data-testid*="media"]');
+        if (zone) return zone;
+
+        // 4. Last resort
+        return document.body;
+    """)
+
+    # --- 5. Simulate drag-and-drop ---
+    script = f"""
+    (function() {{
+        const byteCharacters = atob('{b64}');
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {{
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }}
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], {{ type: 'image/jpeg' }});
+        const file = new File([blob], '{filename}', {{ type: 'image/jpeg' }});
+
+        const dt = new DataTransfer();
+        dt.items.add(file);
+
+        const target = arguments[0];
+        ['dragenter', 'dragover', 'drop'].forEach(type => {{
+            const event = new DragEvent(type, {{
+                dataTransfer: dt,
+                bubbles: true,
+                cancelable: true
+            }});
+            target.dispatchEvent(event);
+        }});
+    }})(arguments[0]);
+    """
+
+    try:
+        driver.execute_script(script, dropzone)
+        print(f"Uploaded: {filename}")
+    except Exception as e:
+        raise Exception(f"Drag-drop failed: {e}")
+
+    # --- 6. Confirm preview ---
+    try:
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located(
+                (By.XPATH, 
+                 f"//img[contains(@src, 'blob:')] | //div[contains(text(), '{chosen_file}')]"
+                )
+            )
+        )
+        print("PREVIEW CONFIRMED!")
+    except:
+        print("No preview detected. Check screenshot.")
+        driver.save_screenshot("no_preview_debug.png")
+   
+
+def launch_profile():
+    """Navigate to the upload post URL, confirm it, and continuously recheck every 2 seconds."""
+    global driver, wait
+    try:
+        uploadpost_url = load_urls()
+        # Initial navigation attempt
+        while True:
+            current_url = driver.current_url
+            if uploadpost_url in current_url:
+                print(f"Confirmed: URL is {uploadpost_url}.")
+                wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+                )
+                print("Navigated to upload post page.")
+                break
+            else:
+                print(f"Current URL ({current_url}) is not the upload post URL.")
+                try:
+                    # Attempt to find a URL input field and fill it
+                    url_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[@type='url'] | //input[@placeholder*='URL'] | //input[@name='url']"))
+                    )
+                    url_input.clear()
+                    url_input.send_keys(uploadpost_url)
+                    print(f"Filled URL input with: {uploadpost_url}")
+                    # Attempt to submit or navigate
+                    try:
+                        submit_button = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[@type='submit'] | //button[contains(text(), 'Go')] | //button[contains(text(), 'Navigate')]"))
+                        )
+                        submit_button.click()
+                    except:
+                        print("No submit button found, attempting direct navigation.")
+                        driver.get(uploadpost_url)
+                except:
+                    print(f"No URL input field found, navigating directly to {uploadpost_url}.")
+                    driver.get(uploadpost_url)
+                
+                print("Waiting 2 seconds before rechecking URL...")
+                time.sleep(2)
+        
+        # Continuous URL rechecking, caption writing, schedule toggling, media interaction, and file selection
+        while True:
+            try:
+                print("Checking if the URL is the specified")
+                current_url = driver.current_url
+                if uploadpost_url in current_url:
+                    print(f"Recheck confirmed: URL is {uploadpost_url}. Proceeding to write caption, toggle schedule, interact with media, and select file.")
+                    select_file()
+                    writecaption()
+                    toggleschedule()
+                    set_schedule()
+                    togglesharephotosandvideos() 
+                    #click_schedule_button()
+                else:
+                    print(f"Recheck failed: Current URL ({current_url}) does not match {uploadpost_url}. Retrying navigation...")
+                    driver.get(uploadpost_url)
+                    wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+                    )
+                    print("Navigated to upload post page.")
+                time.sleep(2)
+            except KeyboardInterrupt:
+                print("Script interrupted by user. Closing browser...")
+                raise
+            except Exception as e:
+                print(f"Error during URL recheck, caption writing, schedule toggling, media interaction, or file selection: {str(e)}")
+                time.sleep(2)  # Continue looping even if an error occurs
+                
+    except Exception as e:
+        if isinstance(e, KeyboardInterrupt):
+            raise  # Re-raise KeyboardInterrupt to handle in main
+        print(f"An error occurred: {str(e)}")
+        print("Browser will remain open for inspection.")
+        raise
+
+def main():
+    try:
+        # Initialize WebDriver
+        driver, wait = initialize_driver(mode="headed")
+        
+        # Execute launch_profile (includes continuous URL checking, caption writing, schedule toggling, and media interaction)
+        launch_profile()
+        
+    except KeyboardInterrupt:
+        print("Main script interrupted by user. Closing browser...")
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+    except Exception as e:
+        print(f"An error occurred in main: {str(e)}")
+        print("Browser will remain open for inspection.")
+        # Keep browser open, no automatic quit
+
+if __name__ == "__main__":
+    main()

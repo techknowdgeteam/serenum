@@ -1,0 +1,14 @@
+{
+    "last_schedule": {
+        "id": "22_2000",
+        "date": "22/10/2025",
+        "time_12hour": "08:00 PM",
+        "time_24hour": "20:00"
+    },
+    "next_schedule": {
+        "id": "22_2200",
+        "date": "22/10/2025",
+        "time_12hour": "10:00 PM",
+        "time_24hour": "22:00"
+    }
+}

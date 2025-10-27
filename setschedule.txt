@@ -1,0 +1,100 @@
+import json  # ← Must be at top
+
+def set_schedule():
+    """
+    Set schedule: 30/10/2025 at 07:00
+    Handles Meta Business Suite's split time inputs (hours/minutes).
+    """
+    target_date = "30/10/2025"
+    target_hour = "07"
+    target_minute = "00"
+    
+    print(f"Setting schedule: {target_date} at {target_hour}:{target_minute}")
+
+    try:
+        # --- 1. Wait for schedule panel ---
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'schedule')]")
+            )
+        )
+        print("Schedule panel loaded.")
+        time.sleep(3)
+
+        # --- 2. Find DATE input by placeholder ---
+        date_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//input[@placeholder='dd/mm/yyyy' or contains(@placeholder, 'dd/mm')]")
+            )
+        )
+        print("Date input found (dd/mm/yyyy).")
+
+        # --- 3. Find HOUR input ---
+        hour_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//input[@aria-label='hours' or contains(@aria-label, 'hour')]")
+            )
+        )
+        print("Hour input found.")
+
+        # --- 4. Find MINUTE input ---
+        minute_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//input[@aria-label='minutes' or contains(@aria-label, 'minute')]")
+            )
+        )
+        print("Minute input found.")
+
+        # --- 5. Set values via JS ---
+        driver.execute_script(f"""
+            const el = arguments[0];
+            const val = {json.dumps(target_date)};
+            el.focus();
+            el.value = '';
+            el.value = val;
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            el.blur();
+        """, date_input)
+        print(f"JS: Date set to '{target_date}'")
+
+        driver.execute_script(f"""
+            const el = arguments[0];
+            const val = {json.dumps(target_hour)};
+            el.focus();
+            el.value = '';
+            el.value = val;
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            el.blur();
+        """, hour_input)
+        print(f"JS: Hour set to '{target_hour}'")
+
+        driver.execute_script(f"""
+            const el = arguments[0];
+            const val = {json.dumps(target_minute)};
+            el.focus();
+            el.value = '';
+            el.value = val;
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            el.blur();
+        """, minute_input)
+        print(f"JS: Minute set to '{target_minute}'")
+
+        # --- 6. Verify ---
+        actual_date = driver.execute_script("return arguments[0].value;", date_input)
+        actual_hour = driver.execute_script("return arguments[0].value;", hour_input)
+        actual_minute = driver.execute_script("return arguments[0].value;", minute_input)
+        print(f"Verified: Date='{actual_date}', Time='{actual_hour}:{actual_minute}'")
+
+        if actual_date != target_date:
+            raise Exception(f"Date mismatch: '{actual_date}' != '{target_date}'")
+        if actual_hour != target_hour or actual_minute != target_minute:
+            raise Exception(f"Time mismatch: '{actual_hour}:{actual_minute}' != '{target_hour}:{target_minute}'")
+
+    except Exception as e:
+        print(f"Schedule failed: {e}")
+        driver.save_screenshot("schedule_final_debug.png")
+        raise
+        

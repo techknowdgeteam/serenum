@@ -1,0 +1,53 @@
+[
+    {
+        "last_schedule": {
+            "id": "01_2200",
+            "date": "01/11/2025",
+            "time_12hour": "10:00 PM",
+            "time_24hour": "22:00"
+        },
+        "next_schedule": {
+            "id": "02_0000",
+            "date": "02/11/2025",
+            "time_12hour": "12:00 AM",
+            "time_24hour": "00:00"
+        }
+    },
+    {
+        "last_schedule": {
+            "id": "27_1000",
+            "date": "27/10/2025",
+            "time_12hour": "10:00 AM",
+            "time_24hour": "10:00"
+        },
+        "next_schedule": {
+            "id": "27_1200",
+            "date": "27/10/2025",
+            "time_12hour": "12:00 PM",
+            "time_24hour": "12:00"
+        }
+    },
+    {
+        "last_schedule": null,
+        "next_schedule": {
+            "id": "27_1000",
+            "date": "27/10/2025",
+            "time_12hour": "10:00 AM",
+            "time_24hour": "10:00"
+        }
+    },
+    {
+        "last_schedule": {
+            "id": "01_0200",
+            "date": "01/11/2025",
+            "time_12hour": "02:00 AM",
+            "time_24hour": "02:00"
+        },
+        "next_schedule": {
+            "id": "01_0400",
+            "date": "01/11/2025",
+            "time_12hour": "04:00 AM",
+            "time_24hour": "04:00"
+        }
+    }
+]

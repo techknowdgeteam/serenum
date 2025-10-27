@@ -1,0 +1,89 @@
+def select_file():
+    """
+    Upload ANY .jpg file from the folder:
+    C:\\xampp\\htdocs\\serene task\\files\\next jpg\\
+    Picks one randomly if multiple exist.
+    """
+    folder_path = r"C:\xampp\htdocs\serene task\files\next jpg"
+
+    if not os.path.isdir(folder_path):
+        raise NotADirectoryError(f"Folder not found: {folder_path}")
+
+    # --- 1. Find all .jpg files (case-insensitive) ---
+    jpg_files = [
+        f for f in os.listdir(folder_path)
+        if f.lower().endswith(('.jpg', '.jpeg'))
+    ]
+
+    if not jpg_files:
+        raise FileNotFoundError(f"No .jpg files found in: {folder_path}")
+
+    # --- 2. Pick one randomly ---
+    chosen_file = random.choice(jpg_files)
+    FILE_TO_UPLOAD = os.path.join(folder_path, chosen_file)
+
+    print(f"Randomly selected: {chosen_file} (from {len(jpg_files)} file(s))")
+
+    # --- 3. Read file as base64 ---
+    import base64
+    with open(FILE_TO_UPLOAD, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    filename = os.path.basename(FILE_TO_UPLOAD)
+
+    # --- 4. Find dropzone ---
+    dropzone_script = """
+    return document.querySelector('div[role="button"], [data-testid*="media"], div.x1n2onr6, div[contenteditable]') 
+           || document.body;
+    """
+    try:
+        dropzone = driver.execute_script(dropzone_script)
+    except:
+        dropzone = driver.find_element(By.TAG_NAME, "body")
+
+    # --- 5. Simulate drag-and-drop ---
+    script = f"""
+    (function() {{
+        const byteCharacters = atob('{b64}');
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {{
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }}
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], {{ type: 'image/jpeg' }});
+        const file = new File([blob], '{filename}', {{ type: 'image/jpeg' }});
+
+        const dt = new DataTransfer();
+        dt.items.add(file);
+
+        const target = arguments[0];
+        ['dragenter', 'dragover', 'drop'].forEach(type => {{
+            const event = new DragEvent(type, {{
+                dataTransfer: dt,
+                bubbles: true,
+                cancelable: true
+            }});
+            target.dispatchEvent(event);
+        }});
+    }})(arguments[0]);
+    """
+
+    try:
+        driver.execute_script(script, dropzone)
+        print(f"Uploaded: {filename}")
+    except Exception as e:
+        raise Exception(f"Drag-drop failed: {e}")
+
+    # --- 6. Confirm preview ---
+    try:
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located(
+                (By.XPATH, 
+                 f"//img[contains(@src, 'blob:')] | //div[contains(text(), '{chosen_file}')]"
+                )
+            )
+        )
+        print("PREVIEW CONFIRMED!")
+    except:
+        print("No preview detected. Check screenshot.")
+        driver.save_screenshot("no_preview_debug.png")
+   
