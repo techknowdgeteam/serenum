@@ -197,12 +197,12 @@ def launch_profile():
                     update_calendar()
                     manage_group_switch()
                     resetgroupswitchandscheduledate()
-                    #selectgroups()
-                    #toggleaddphoto()
-                    writecaption_ocr()
-                    #toggleschedule()
-                    #set_webschedule()
-                    #writecaption_element()
+                    selectgroups()
+                    toggleaddphoto()
+                    #writecaption_ocr()
+                    writecaption_element()
+                    toggleschedule()
+                    set_webschedule()
                     time.sleep(12093)
                     click_schedule_button()
                     uploadedjpgs()
@@ -248,16 +248,40 @@ def launch_profile():
 
 def reset_trackers():
     """Reset all function trackers to their initial state, excluding update_calendar."""
+    # ---- Caption writers ----
     writecaption_ocr.last_written_caption = None
+    if hasattr(writecaption_element, 'last_written_caption'):
+        writecaption_element.last_written_caption = None
+    writecaption_element.has_written = False
+
+    # ---- set_webschedule (NEW) ----
+    set_webschedule.has_set = False  # ADD THIS LINE
+
+    # ---- toggleaddphoto ----
     toggleaddphoto.is_toggled = False
+
+    # ---- toggleschedule ----
     toggleschedule.is_toggled = False
+
+    # ---- selectmedia ----
     selectmedia.has_uploaded = False
+
+    # ---- selectgroups ----
     selectgroups.is_dropdown_opened = False
     selectgroups.is_see_more_clicked = False
     selectgroups.groups_selected = False
     selectgroups.is_page_selected = False
-    print("Reset all function trackers: last_written_caption, is_toggled (toggleaddphoto), is_toggled (toggleschedule), has_uploaded, is_dropdown_opened, is_see_more_clicked, groups_selected, is_page_selected, has_detected_date, has_detected_time")
 
+    print(
+        "Reset all function trackers: "
+        "last_written_caption (ocr & element), "
+        "has_written (writecaption_element), "
+        "has_set (set_webschedule), "
+        "is_toggled (toggleaddphoto), is_toggled (toggleschedule), "
+        "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
+        "groups_selected, is_page_selected"
+    )
+    
 def manage_group_switch():
     """
     Manages the group selection history in uploadgroups.json and schedules in {type}schedules.json
@@ -2519,103 +2543,114 @@ def markjpgs():
 
 
 def toggleaddphoto():
+    """
+    Uses OCR to locate and click the 'Add photo' or 'Add photo/video' button.
+    Tracks whether the button has already been toggled via function attribute.
+    """
+    # ---- STATE TRACKER ----
+    if hasattr(toggleaddphoto, 'is_toggled') and toggleaddphoto.is_toggled:
+        print("'Add photo/video' button already toggled. Skipping.")
+        return
+
     print("Searching for 'Add photo' or 'Add photo/video' text content")
     try:
         retry_count = 0
         max_retries = 3
         save_path = r"C:\xampp\htdocs\serenum\files\gui"
+
         while retry_count < max_retries:
             # Capture screenshot
             screenshot = ImageGrab.grab()
             screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
-            
+
             # Save screenshot
             os.makedirs(save_path, exist_ok=True)
             screenshot_file = os.path.join(save_path, "windowstext.png")
             cv2.imwrite(screenshot_file, screenshot_cv)
             print(f"Screenshot captured and saved as '{screenshot_file}'")
-            
+
             # Image processing
             gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
             resized = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                         cv2.THRESH_BINARY, 11, 2)
-            
-            # OCR with improved configuration
+            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY, 11, 2)
+
+            # OCR
             data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT, config='--psm 3')
             print("OCR data keys:", data.keys())
             print("All detected text with positions:")
             for i, text in enumerate(data["text"]):
                 if text.strip():
                     print(f"Index {i}: '{text}' (Confidence: {data['conf'][i]}, Left: {data['left'][i]}, Top: {data['top'][i]})")
-            
-            # Search for "Add photo" or "Add photo/video"
+
+            # Search for target phrases
             text_lower = [t.lower() for t in data["text"]]
             texts_index = None
             detected_phrase = None
-            
-            # Check for "Add" followed by "photo/video" or "photo"
+
+            # Case 1: "Add" + "photo/video"
             for i, text in enumerate(text_lower):
                 if text == "add":
-                    # Check for "photo/video" as the next token
                     if i + 1 < len(text_lower) and text_lower[i + 1] == "photo/video":
                         texts_index = i
                         detected_phrase = "add photo/video"
                         break
-                    # Fallback: Check for "photo" (with optional "video")
                     if i + 1 < len(text_lower) and text_lower[i + 1] == "photo":
                         texts_index = i
                         detected_phrase = "add photo"
-                        # Check for "video" to confirm "Add photo/video"
                         if i + 2 < len(text_lower) and text_lower[i + 2] == "video":
                             detected_phrase = "add photo/video"
                         break
-            
-            # Check for single-token "addphoto"
+
+            # Case 2: "addphoto" as single token
             if texts_index is None:
                 for i, text in enumerate(text_lower):
                     if text == "addphoto":
                         texts_index = i
                         detected_phrase = "addphoto"
                         break
-            
-            # Proceed if a valid phrase is detected and it's not "addvideo"
+
+            # Proceed if valid phrase found
             if texts_index is not None and text_lower[texts_index] != "addvideo":
-                # Get coordinates (adjust for resizing)
                 x = data["left"][texts_index] // 1.5
                 y = data["top"][texts_index] // 1.5
                 w = data["width"][texts_index] // 1.5
                 h = data["height"][texts_index] // 1.5
                 center_x = x + w // 2
                 center_y = y + h // 2
+
                 print(f"Detected: {detected_phrase}")
                 print(f"Coordinates: left={x}, top={y}, width={w}, height={h}")
                 print(f"Moving to: ({center_x}, {center_y})")
-                
-                # Click the detected text location
+
                 pyautogui.moveTo(center_x, center_y)
                 time.sleep(0.1)
                 pyautogui.click()
-                print("✅ Clicked on 'Add photo' or 'Add photo/video'")
+                print("Clicked on 'Add photo' or 'Add photo/video'")
+
+                # SET TRACKER: Mark as toggled
+                toggleaddphoto.is_toggled = True
+
                 time.sleep(3)
                 selectmedia()
-                return  # Exit the function after successful click
+                return  # Success → exit
+
             else:
                 retry_count += 1
                 print(f"Retry {retry_count}/{max_retries}: No 'Add photo' or 'Add photo/video' found")
                 if retry_count == max_retries:
-                    # Check for "loading" text as a fallback
                     loading_index = next((i for i, t in enumerate(text_lower) if "loading" in t), None)
                     if loading_index is not None:
                         print("Detected 'loading' text, retrying with new screenshot")
-                        time.sleep(1)  # Wait briefly before retrying
+                        time.sleep(1)
                         continue
-                    print("Max retries reached. No 'Add photo' or 'Add photo/video' found.")
-                    return  # Exit after max retries
-                time.sleep(1)  # Wait before retrying
+                    print("Max retries reached. Button not found.")
+                    return
+                time.sleep(1)
+
     except Exception as e:
-        print(f"An error occurred: {e}")      
+        print(f"An error occurred in toggleaddphoto(): {e}")
 
 def selectmedia():
     """Select media by COPYING the file path and PASTING it (faster & more reliable)."""
@@ -2706,7 +2741,7 @@ def confirmselectedmedia():
     # === SEARCH FOR editmedia.png ===
     try:
         editmedia = pyautogui.locateOnScreen(
-            f'{GUI_PATH}\\editmedia.png',
+            f'{GUI_PATH}\\cropandfilter.png',
             confidence=0.8,
             region=top,
             grayscale=True  # Faster + more robust
@@ -2915,9 +2950,17 @@ def writecaption_element():
     Finds the Facebook post composer by writing a *real* random caption
     from the same JSON file that writecaption_ocr() uses.
     Returns the working WebElement or None.
-    
-    NEW: Checks if the caption is already written before typing.
+
+    NEW: 
+      - Uses `writecaption_element.has_written` (like toggleaddphoto.is_toggled)
+      - Skips entire process if caption already written this session
+      - Reset via reset_trackers()
     """
+    # ---- EARLY EXIT: Already written this session ----
+    if getattr(writecaption_element, 'has_written', False):
+        print("\n=== CAPTION ALREADY WRITTEN THIS SESSION. SKIPPING. ===")
+        return None
+
     print("\n=== LOCATING POST COMPOSER (via real caption test) ===")
 
     # --------------------------------------------------------------------- #
@@ -2931,16 +2974,16 @@ def writecaption_element():
         if group_types not in ['uk', 'others']:
             group_types = 'others'
         json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({group_types}).json"
-        
+
         if not os.path.exists(json_path):
             raise FileNotFoundError(json_path)
-        
+
         with open(json_path, 'r') as f:
             captions = json.load(f)
-        
+
         selected_caption = random.choice(captions)['description']
         print(f"Loaded caption for author '{author}' (group '{group_types}'): '{selected_caption}'")
-    
+
     except Exception as e:
         print(f"Could not load caption JSON: {e}")
         return None
@@ -2997,9 +3040,8 @@ def writecaption_element():
             if norm_current == norm_caption:
                 print(f"  [{i}] Caption already present – using this element.")
                 working_element = el
-                if not hasattr(writecaption_element, 'last_written_caption'):
-                    writecaption_element.last_written_caption = None
                 writecaption_element.last_written_caption = selected_caption
+                writecaption_element.has_written = True  # MARK AS DONE
                 break
 
             # ---- CLICK & WRITE (ONLY IF NOT ALREADY THERE) ----
@@ -3014,12 +3056,12 @@ def writecaption_element():
             ).strip()
 
             print(f"     Wrote caption  Got back: '{current_text}'")
+
             if selected_caption.lower() in current_text.lower():
                 print(f"     SUCCESS! This is the real composer.")
                 working_element = el
-                if not hasattr(writecaption_element, 'last_written_caption'):
-                    writecaption_element.last_written_caption = None
                 writecaption_element.last_written_caption = selected_caption
+                writecaption_element.has_written = True  # MARK AS DONE
                 break
             else:
                 print(f"     Failed – caption did not appear.")
@@ -3038,8 +3080,8 @@ def writecaption_element():
         return working_element
     else:
         print("\nNo candidate accepted the caption. Composer not found.")
+        writecaption_ocr()
         return None
-
     
          
 
@@ -3185,7 +3227,18 @@ def set_webschedule():
     UI expects:
         • Date: mm/dd/yyyy  (e.g. 10/29/2025)
         • Time: 3 separate inputs → hours, minutes, meridiem (AM/PM)
+
+    NEW:
+      - `set_webschedule.has_set` tracker prevents re-execution
+      - Skips if already correct
+      - Reset via reset_trackers()
     """
+    # ---- EARLY EXIT: Already set this session ----
+    if getattr(set_webschedule, 'has_set', False):
+        print("\n=== SCHEDULE ALREADY SET THIS SESSION. SKIPPING. ===")
+        return
+
+    print("\n=== SETTING WEB SCHEDULE ===")
 
     # ------------------------------------------------------------------ #
     # 1. Load config + target schedule
@@ -3193,9 +3246,9 @@ def set_webschedule():
     try:
         with open(JSON_CONFIG_PATH, 'r') as f:
             cfg = json.load(f)
-        author      = cfg['author']
-        type_value  = cfg.get('type', '')
-        sched_path  = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
+        author     = cfg['author']
+        type_value = cfg.get('type', '')
+        sched_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
     except Exception as e:
         print(f"Failed to load {JSON_CONFIG_PATH}: {e}")
         return
@@ -3203,7 +3256,7 @@ def set_webschedule():
     try:
         with open(sched_path, 'r') as f:
             data = json.load(f)['next_schedule']
-        target_date      = data['date']          # "29/10/2025" → we convert to mm/dd/yyyy
+        target_date      = data['date']          # "29/10/2025" → we convert
         target_time_12h  = data['time_12hour']    # "07:00 AM"
         target_time_24h  = data['time_24hour']    # "07:00"
         if not all([target_date, target_time_12h, target_time_24h]):
@@ -3230,7 +3283,6 @@ def set_webschedule():
     def ui_date_mmddyyyy(ddmmyyyy: str) -> str:
         d, m, y = ddmmyyyy.split('/')
         return f"{m.zfill(2)}/{d.zfill(2)}/{y}"  # e.g. 10/29/2025
-
     ui_target_date = ui_date_mmddyyyy(target_date)
     print(f"UI date string → '{ui_target_date}'")
 
@@ -3253,16 +3305,13 @@ def set_webschedule():
     # 5. Locate ONLY the 4 inputs we need
     # ------------------------------------------------------------------ #
     date_input = hour_input = minute_input = meridiem_input = None
-
     inputs = WebDriverWait(driver, 15).until(
         EC.presence_of_all_elements_located((By.TAG_NAME, "input"))
     )
     print(f"Found {len(inputs)} <input> elements.")
-
     for idx, el in enumerate(inputs):
         ph = (el.get_attribute("placeholder") or "").lower()
         al = (el.get_attribute("aria-label") or "").lower()
-
         if "mm/dd/yyyy" in ph:
             date_input = el
             print(f"Date input [{idx}]: placeholder='{ph}' value='{el.get_attribute('value')}'")
@@ -3279,15 +3328,14 @@ def set_webschedule():
     if not (date_input and hour_input and minute_input and meridiem_input):
         missing = [n for n, v in [("date", date_input), ("hour", hour_input),
                                   ("minute", minute_input), ("meridiem", meridiem_input)] if not v]
-        raise Exception(f"Missing inputs: {', '.join(missing)}")
+        print(f"Missing inputs: {', '.join(missing)}")
+        return
 
     # ------------------------------------------------------------------ #
     # 6. Read current UI values
     # ------------------------------------------------------------------ #
     current_date = (date_input.get_attribute("value") or "").strip()
     print(f"Current UI date → '{current_date}'")
-
-    # OCR time (your extract_texts)
     _, extracted_time, _ = extract_texts()
     print(f"Current OCR time → '{extracted_time}'")
 
@@ -3300,7 +3348,8 @@ def set_webschedule():
                     extracted_time == f"Time: {hour_12}:{minute_12}")
 
     if date_matches and time_matches:
-        print("Schedule already correct – skipping.")
+        print("Schedule already correct – marking as set.")
+        set_webschedule.has_set = True  # MARK AS DONE
         return
 
     # ------------------------------------------------------------------ #
@@ -3322,8 +3371,9 @@ def set_webschedule():
                 print("Date click intercepted → reload")
                 reset_trackers()
                 driver.refresh()
-                raise
-            raise
+                return
+            print(f"Error setting date: {e}")
+            return
 
     # ------------------------------------------------------------------ #
     # 9. SET TIME (if needed)
@@ -3343,8 +3393,9 @@ def set_webschedule():
                 print("Hour click intercepted → reload")
                 reset_trackers()
                 driver.refresh()
-                raise
-            raise
+                return
+            print(f"Error setting hour: {e}")
+            return
 
         # Minute
         try:
@@ -3360,8 +3411,9 @@ def set_webschedule():
                 print("Minute click intercepted → reload")
                 reset_trackers()
                 driver.refresh()
-                raise
-            raise
+                return
+            print(f"Error setting minute: {e}")
+            return
 
         # Meridiem
         try:
@@ -3375,8 +3427,9 @@ def set_webschedule():
                 print("Meridiem click intercepted → reload")
                 reset_trackers()
                 driver.refresh()
-                raise
-            raise
+                return
+            print(f"Error setting meridiem: {e}")
+            return
 
     # ------------------------------------------------------------------ #
     # 10. FINAL VERIFICATION
@@ -3384,17 +3437,20 @@ def set_webschedule():
     final_date = (date_input.get_attribute("value") or "").strip()
     _, final_time_ocr, _ = extract_texts()
 
-    # Verify date (direct UI value)
+    # Verify date
     if final_date != ui_target_date:
-        raise Exception(f"Date verification failed: UI='{final_date}' ≠ expected='{ui_target_date}'")
+        print(f"Date verification failed: UI='{final_date}' ≠ expected='{ui_target_date}'")
+        return
 
-    # Verify time (OCR)
+    # Verify time
     expected_ocr = f"Time: {int(hour_12):d}:{minute_12}"
     if final_time_ocr not in (expected_ocr, f"Time: {hour_12}:{minute_12}"):
-        raise Exception(f"Time verification failed: OCR='{final_time_ocr}' ≠ expected='{expected_ocr}'")
+        print(f"Time verification failed: OCR='{final_time_ocr}' ≠ expected='{expected_ocr}'")
+        return
 
     print("Schedule set & verified successfully!")
-    
+    set_webschedule.has_set = True  # MARK AS DONE    
+
 
 
 
