@@ -202,7 +202,7 @@ def launch_profile():
                     #writecaption_ocr()
                     writecaption_element()
                     toggleschedule()
-                    set_webschedule()
+                    set_webschedule_v2()
                     time.sleep(12093)
                     click_schedule_button()
                     uploadedjpgs()
@@ -254,8 +254,8 @@ def reset_trackers():
         writecaption_element.last_written_caption = None
     writecaption_element.has_written = False
 
-    # ---- set_webschedule (NEW) ----
-    set_webschedule.has_set = False  # ADD THIS LINE
+    # ---- set_webschedule_v2 (NEW) ----
+    set_webschedule_v2.has_set = False  # ADD THIS LINE
 
     # ---- toggleaddphoto ----
     toggleaddphoto.is_toggled = False
@@ -276,12 +276,12 @@ def reset_trackers():
         "Reset all function trackers: "
         "last_written_caption (ocr & element), "
         "has_written (writecaption_element), "
-        "has_set (set_webschedule), "
+        "has_set (set_webschedule_v2), "
         "is_toggled (toggleaddphoto), is_toggled (toggleschedule), "
         "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
         "groups_selected, is_page_selected"
     )
-    
+
 def manage_group_switch():
     """
     Manages the group selection history in uploadgroups.json and schedules in {type}schedules.json
@@ -3221,7 +3221,7 @@ def toggleschedule():
             print(f"Alternative locator for schedule toggle failed: {str(e2)}")
             raise Exception("Could not locate or toggle schedule button")
 
-def set_webschedule():
+def set_webschedule_v2():
     """
     Set schedule using {type}schedules.json.
     UI expects:
@@ -3229,12 +3229,12 @@ def set_webschedule():
         • Time: 3 separate inputs → hours, minutes, meridiem (AM/PM)
 
     NEW:
-      - `set_webschedule.has_set` tracker prevents re-execution
+      - `set_webschedule_v2.has_set` tracker prevents re-execution
       - Skips if already correct
       - Reset via reset_trackers()
     """
     # ---- EARLY EXIT: Already set this session ----
-    if getattr(set_webschedule, 'has_set', False):
+    if getattr(set_webschedule_v2, 'has_set', False):
         print("\n=== SCHEDULE ALREADY SET THIS SESSION. SKIPPING. ===")
         return
 
@@ -3349,7 +3349,7 @@ def set_webschedule():
 
     if date_matches and time_matches:
         print("Schedule already correct – marking as set.")
-        set_webschedule.has_set = True  # MARK AS DONE
+        set_webschedule_v2.has_set = True  # MARK AS DONE
         return
 
     # ------------------------------------------------------------------ #
@@ -3449,7 +3449,7 @@ def set_webschedule():
         return
 
     print("Schedule set & verified successfully!")
-    set_webschedule.has_set = True  # MARK AS DONE    
+    set_webschedule_v2.has_set = True  # MARK AS DONE    
 
 
 
