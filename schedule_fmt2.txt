@@ -1,0 +1,190 @@
+def set_webschedule_v2():
+    """
+    Set schedule using {type}schedules.json.
+    UI expects:
+        • Date: mm/dd/yyyy (e.g. 10/29/2025)
+        • Time: 3 separate inputs → hours, minutes, meridiem (AM/PM)
+    NEW:
+      - `set_webschedule_v2.has_set` tracker prevents re-execution
+      - Skips if already correct (date input only)
+      - Reset via reset_trackers()
+      - NO VERIFICATION AFTER WRITE — write = success
+    """
+    # ---- EARLY EXIT: Already set this session ----
+    if getattr(set_webschedule_v2, 'has_set', False):
+        print("\n=== SCHEDULE ALREADY SET THIS SESSION. SKIPPING. ===")
+        return
+    print("\n=== SETTING WEB SCHEDULE ===")
+    # ------------------------------------------------------------------ #
+    # 1. Load config + target schedule
+    # ------------------------------------------------------------------ #
+    try:
+        with open(JSON_CONFIG_PATH, 'r') as f:
+            cfg = json.load(f)
+        author = cfg['author']
+        type_value = cfg.get('type', '')
+        sched_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
+    except Exception as e:
+        print(f"Failed to load {JSON_CONFIG_PATH}: {e}")
+        return
+    try:
+        with open(sched_path, 'r') as f:
+            data = json.load(f)['next_schedule']
+        target_date = data['date']  # "29/10/2025" → we convert
+        target_time_12h = data['time_12hour']  # "07:00 AM"
+        if not all([target_date, target_time_12h]):
+            raise ValueError("Missing fields in schedules.json")
+    except Exception as e:
+        print(f"Failed to read {sched_path}: {e}")
+        return
+    # ------------------------------------------------------------------ #
+    # 2. Parse JSON times
+    # ------------------------------------------------------------------ #
+    m12 = re.match(r"(\d{1,2}):(\d{2})\s*(AM|PM)", target_time_12h, re.I)
+    if not m12:
+        print("Invalid time format in JSON")
+        return
+    hour_12, minute_12, period = m12.groups()
+    print(f"Target → {target_date} {target_time_12h}")
+    # ------------------------------------------------------------------ #
+    # 3. Convert dd/mm/yyyy → mm/dd/yyyy (UI format)
+    # ------------------------------------------------------------------ #
+    def ui_date_mmddyyyy(ddmmyyyy: str) -> str:
+        d, m, y = ddmmyyyy.split('/')
+        return f"{m.zfill(2)}/{d.zfill(2)}/{y}"  # e.g. 10/29/2025
+    ui_target_date = ui_date_mmddyyyy(target_date)
+    print(f"UI date string → '{ui_target_date}'")
+    # ------------------------------------------------------------------ #
+    # 4. Wait for panel
+    # ------------------------------------------------------------------ #
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'schedule')]")
+            )
+        )
+        print("Schedule panel loaded.")
+        time.sleep(2)
+    except Exception as e:
+        print(f"Panel not found: {e}")
+        return
+    # ------------------------------------------------------------------ #
+    # 5. Locate ONLY the 4 inputs we need
+    # ------------------------------------------------------------------ #
+    date_input = hour_input = minute_input = meridiem_input = None
+    inputs = WebDriverWait(driver, 15).until(
+        EC.presence_of_all_elements_located((By.TAG_NAME, "input"))
+    )
+    print(f"Found {len(inputs)} <input> elements.")
+    for idx, el in enumerate(inputs):
+        ph = (el.get_attribute("placeholder") or "").lower()
+        al = (el.get_attribute("aria-label") or "").lower()
+        if "mm/dd/yyyy" in ph:
+            date_input = el
+            print(f"Date input [{idx}]: placeholder='{ph}' value='{el.get_attribute('value')}'")
+        elif al == "hours":
+            hour_input = el
+            print(f"Hour input [{idx}]: aria-label='hours'")
+        elif al == "minutes":
+            minute_input = el
+            print(f"Minute input [{idx}]: aria-label='minutes'")
+        elif al == "meridiem":
+            meridiem_input = el
+            print(f"Meridiem input [{idx}]: aria-label='meridiem'")
+    if not (date_input and hour_input and minute_input and meridiem_input):
+        missing = [n for n, v in [("date", date_input), ("hour", hour_input),
+                                  ("minute", minute_input), ("meridiem", meridiem_input)] if not v]
+        print(f"Missing inputs: {', '.join(missing)}")
+        return
+    # ------------------------------------------------------------------ #
+    # 6. Read current UI date only (skip OCR)
+    # ------------------------------------------------------------------ #
+    current_date = (date_input.get_attribute("value") or "").strip()
+    print(f"Current UI date → '{current_date}'")
+    # ------------------------------------------------------------------ #
+    # 7. Skip if date already correct
+    # ------------------------------------------------------------------ #
+    if current_date == ui_target_date:
+        print("Date already correct – marking as set.")
+        set_webschedule_v2.has_set = True
+        return
+    # ------------------------------------------------------------------ #
+    # 8. SET DATE
+    # ------------------------------------------------------------------ #
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", date_input)
+        date_input.click()
+        time.sleep(0.3)
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+        time.sleep(0.2)
+        ActionChains(driver).send_keys(ui_target_date).perform()
+        date_input.send_keys(Keys.TAB)
+        print(f"Date set → '{ui_target_date}'")
+        time.sleep(1)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Date click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting date: {e}")
+        return
+    # ------------------------------------------------------------------ #
+    # 9. SET TIME (always, since no verification)
+    # ------------------------------------------------------------------ #
+    # Hour
+    try:
+        hour_input.click()
+        time.sleep(0.2)
+        hour_input.clear()
+        hour_input.send_keys(str(int(hour_12)))
+        print(f"Hour set → {int(hour_12)}")
+        hour_input.send_keys(Keys.TAB)
+        time.sleep(0.5)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Hour click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting hour: {e}")
+        return
+    # Minute
+    try:
+        minute_input.click()
+        time.sleep(0.2)
+        minute_input.clear()
+        minute_input.send_keys(minute_12)
+        print(f"Minute set → {minute_12}")
+        minute_input.send_keys(Keys.TAB)
+        time.sleep(0.5)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Minute click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting minute: {e}")
+        return
+    # Meridiem
+    try:
+        meridiem_input.click()
+        time.sleep(0.2)
+        ActionChains(driver).send_keys(period.upper()).send_keys(Keys.ENTER).perform()
+        print(f"Meridiem set → {period.upper()}")
+        time.sleep(0.5)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Meridiem click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting meridiem: {e}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # DONE: No verification — write = success
+    # ------------------------------------------------------------------ #
+    print("Schedule write completed –success!")
+    set_webschedule_v2.has_set = True  # MARK AS DONE
+    click_schedule_button()
