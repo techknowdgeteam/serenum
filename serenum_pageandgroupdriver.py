@@ -111,19 +111,7 @@ def load_urls():
     except Exception as e:
         print(f"Failed to load URLs from JSON: {str(e)}")
         raise
-
-def reset_trackers():
-    """Reset all function trackers to their initial state, excluding update_calendar."""
-    writecaption.last_written_caption = None
-    toggleaddphoto.is_toggled = False
-    toggleschedule.is_toggled = False
-    selectmedia.has_uploaded = False
-    selectgroups.is_dropdown_opened = False
-    selectgroups.is_see_more_clicked = False
-    selectgroups.groups_selected = False
-    selectgroups.is_page_selected = False
-    print("Reset all function trackers: last_written_caption, is_toggled (togglesharephotosandvideos), is_toggled (toggleschedule), has_uploaded, is_dropdown_opened, is_see_more_clicked, groups_selected, is_page_selected")
-    
+   
 
 def launch_profile():
     """Navigate to the upload post URL, confirm it, and continuously recheck every 2 seconds."""
@@ -207,9 +195,9 @@ def launch_profile():
                     resetgroupswitchandscheduledate()
                     selectgroups()
                     toggleaddphoto()
-                    writecaption()
+                    writecaption_element()
                     toggleschedule()
-                    set_schedule()
+                    set_webschedule()
                     click_schedule_button()
                     uploadedjpgs()
                 else:
@@ -252,7 +240,42 @@ def launch_profile():
         print("Browser will remain open for inspection.")
         raise
 
+def reset_trackers():
+    """Reset all function trackers to their initial state, excluding update_calendar."""
+    # ---- Caption writers ----
+    writecaption_ocr.last_written_caption = None
+    if hasattr(writecaption_element, 'last_written_caption'):
+        writecaption_element.last_written_caption = None
+    writecaption_element.has_written = False
 
+    # ---- set_webschedule (NEW) ----
+    set_webschedule.has_set = False  # ADD THIS LINE
+
+    # ---- toggleaddphoto ----
+    toggleaddphoto.is_toggled = False
+
+    # ---- toggleschedule ----
+    toggleschedule.is_toggled = False
+
+    # ---- selectmedia ----
+    selectmedia.has_uploaded = False
+
+    # ---- selectgroups ----
+    selectgroups.is_dropdown_opened = False
+    selectgroups.is_see_more_clicked = False
+    selectgroups.groups_selected = False
+    selectgroups.is_page_selected = False
+
+    print(
+        "Reset all function trackers: "
+        "last_written_caption (ocr & element), "
+        "has_written (writecaption_element), "
+        "has_set (set_webschedule), "
+        "is_toggled (toggleaddphoto), is_toggled (toggleschedule), "
+        "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
+        "groups_selected, is_page_selected"
+    )
+    
 def manage_group_switch():
     """
     Manages the group selection history in uploadgroups.json and schedules in {type}schedules.json
@@ -440,8 +463,10 @@ def manage_group_switch():
                     print(f"No valid records with next_schedule found in {schedules_records_path}. {schedules_path} remains empty.")
             else:
                 print(f"{schedules_records_path} is empty. No data to restore. {schedules_path} remains empty.")
+                update_calendar_free()
         else:
             print(f"{schedules_records_path} does not exist or is empty. No data to restore. {schedules_path} remains empty.")
+            update_calendar_free()
 
     # Handle group_switch logic for uploadgroups.json
     json_exists = os.path.exists(upload_json_path) and os.path.getsize(upload_json_path) > 0
@@ -1542,6 +1567,177 @@ def selectgroups():
 
 
 
+def update_calendar_free():
+    """Update the calendar and write to JSON, unconditionally."""
+
+    # Get current date and time
+    now = datetime.now()
+    current_year = now.year
+    current_month = now.month
+    current_day = now.day
+    current_time_12hour = now.strftime("%I:%M %p").lower()
+    current_time_24hour = now.strftime("%H:%M")
+    current_date = datetime.strptime(f"{current_day:02d}/{current_month:02d}/{current_year}", "%d/%m/%Y")
+    
+    print(f"Current date and time: {current_date.strftime('%d/%m/%Y')} {current_time_12hour} ({current_time_24hour})")
+    
+    # Read pageandgroupauthors.json
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
+    try:
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
+        return
+    except json.decoder.JSONDecodeError:
+        print(f"Error: pageandgroupauthors.json contains invalid JSON")
+        return
+    
+    author = pageauthors['author']
+    type_value = pageauthors['type']
+    print(f"Author: {author}, Type: {type_value}")
+    
+    # Read timeorders.json
+    timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
+    print(f"Reading timeorders.json from {timeorders_path}")
+    try:
+        with open(timeorders_path, 'r') as f:
+            timeorders_data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: timeorders.json not found at {timeorders_path}")
+        return
+    except json.decoder.JSONDecodeError:
+        print(f"Error: timeorders.json contains invalid JSON")
+        return
+    
+    # Select time slots based on type
+    if type_value not in timeorders_data:
+        print(f"Error: Type '{type_value}' not found in timeorders.json")
+        return
+    timeorders = timeorders_data[type_value]
+    print(f"Time slots loaded from timeorders.json for type '{type_value}':")
+    for t in timeorders:
+        print(f"  - {t['12hours']} ({t['24hours']})")
+    
+    # Sort timeorders by 24-hour format for consistent ordering
+    sorted_timeorders = sorted(timeorders, key=lambda x: x["24hours"])
+    
+    # Find ALL time slots after current time for TODAY
+    time_ahead_today = []
+    current_time = datetime.strptime(current_time_24hour, "%H:%M")
+    current_datetime = datetime.combine(current_date, current_time.time())
+    
+    print(f"Searching for time slots after {current_time_24hour}")
+    for t in sorted_timeorders:
+        slot_time = datetime.strptime(t["24hours"], "%H:%M")
+        delta = slot_time - current_time
+        minutes_distance = int(delta.total_seconds() / 60)
+        
+        # TODAY: Collect all slots >= current time AND before midnight (exclude 00:00)
+        if minutes_distance >= 0 and t["24hours"] != "00:00":
+            slot = {
+                "id": f"{current_day:02d}_{t['24hours'].replace(':', '')}",
+                "12hours": t["12hours"],
+                "24hours": t["24hours"],
+                "minutes_distance": minutes_distance,
+                "consideration": f"passed {t['12hours']}" if minutes_distance >= 50 else f"skip {t['12hours']}"
+            }
+            time_ahead_today.append(slot)
+            print(f"Slot TODAY: {t['12hours']} ({t['24hours']}): id={slot['id']}, minutes_distance={minutes_distance}, consideration={slot['consideration']}")
+    
+    # Calculate next month and year
+    next_month = current_month + 1 if current_month < 12 else 1
+    next_year = current_year if current_month < 12 else current_year + 1
+    
+    # Create calendar data structure
+    calendar_data = {
+        "calendars": [
+            {
+                "year": current_year,
+                "month": calendar.month_name[current_month],
+                "days": [
+                    {
+                        "week": week_idx + 1,
+                        "days": [
+                            {
+                                "day": {
+                                    "date": f"{day:02d}/{current_month:02d}/{current_year}" if day != 0 else None,
+                                    "time_12hour": current_time_12hour if day == current_day else "00:00 pm" if day != 0 else None,
+                                    "time_24hour": current_time_24hour if day == current_day else "00:00" if day != 0 else None,
+                                    "time_ahead": (
+                                        time_ahead_today if day == current_day else
+                                        [
+                                            {
+                                                "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
+                                                "12hours": t["12hours"],
+                                                "24hours": t["24hours"],
+                                                "minutes_distance": int((
+                                                    datetime.strptime(
+                                                        f"{day:02d}/{current_month:02d}/{current_year} {t['24hours']}",
+                                                        "%d/%m/%Y %H:%M"
+                                                    ) - current_datetime
+                                                ).total_seconds() / 60),
+                                                "consideration": f"passed {t['12hours']}"
+                                            } for t in sorted_timeorders
+                                        ] if day != 0 else []
+                                    )
+                                } if day != 0 and day >= current_day else {"day": None}
+                            } for day in week
+                        ]
+                    } for week_idx, week in enumerate(calendar.monthcalendar(current_year, current_month))
+                    if any(day >= current_day or day == 0 for day in week)
+                ]
+            },
+            {
+                "year": next_year,
+                "month": calendar.month_name[next_month],
+                "days": [
+                    {
+                        "week": week_idx + 1,
+                        "days": [
+                            {
+                                "day": {
+                                    "date": f"{day:02d}/{next_month:02d}/{next_year}" if day != 0 else None,
+                                    "time_12hour": "00:00 pm" if day != 0 else None,
+                                    "time_24hour": "00:00" if day != 0 else None,
+                                    "time_ahead": [
+                                        {
+                                            "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
+                                            "12hours": t["12hours"],
+                                            "24hours": t["24hours"],
+                                            "minutes_distance": int((
+                                                datetime.strptime(
+                                                    f"{day:02d}/{next_month:02d}/{next_year} {t['24hours']}",
+                                                    "%d/%m/%Y %H:%M"
+                                                ) - current_datetime
+                                            ).total_seconds() / 60),
+                                            "consideration": f"passed {t['12hours']}"
+                                        } for t in sorted_timeorders
+                                    ] if day != 0 else []
+                                } if day != 0 else {"day": None}
+                            } for day in week
+                        ]
+                    } for week_idx, week in enumerate(calendar.monthcalendar(next_year, next_month))
+                ]
+            }
+        ]
+    }
+    
+    # Define output path with author and type
+    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}calendar.json"
+    print(f"Writing calendar data to {output_path}")
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Write to JSON file
+    with open(output_path, 'w') as f:
+        json.dump(calendar_data, f, indent=4)
+    print(f"Calendar data successfully written to {output_path}")
+    
+    # Call schedule_time
+    update_timeschedule()
 
 def update_calendar():
     """Update the calendar and write to JSON, conditional on driverprogress.json status."""
@@ -1999,6 +2195,7 @@ def check_schedule_time():
     print(f"Reading schedules.json from {schedules_path}")
     if not os.path.exists(schedules_path):
         print(f"Error: schedules.json not found at {schedules_path}")
+        update_calendar_free()
         return
     
     try:
@@ -2011,6 +2208,7 @@ def check_schedule_time():
     # Check for next_schedule
     if 'next_schedule' not in schedules_data:
         print(f"Error: 'next_schedule' field missing in schedules.json")
+        update_calendar_free()
         return
     
     next_schedule = schedules_data['next_schedule']
@@ -2339,103 +2537,114 @@ def markjpgs():
 
 
 def toggleaddphoto():
+    """
+    Uses OCR to locate and click the 'Add photo' or 'Add photo/video' button.
+    Tracks whether the button has already been toggled via function attribute.
+    """
+    # ---- STATE TRACKER ----
+    if hasattr(toggleaddphoto, 'is_toggled') and toggleaddphoto.is_toggled:
+        print("'Add photo/video' button already toggled. Skipping.")
+        return
+
     print("Searching for 'Add photo' or 'Add photo/video' text content")
     try:
         retry_count = 0
         max_retries = 3
         save_path = r"C:\xampp\htdocs\serenum\files\gui"
+
         while retry_count < max_retries:
             # Capture screenshot
             screenshot = ImageGrab.grab()
             screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
-            
+
             # Save screenshot
             os.makedirs(save_path, exist_ok=True)
             screenshot_file = os.path.join(save_path, "windowstext.png")
             cv2.imwrite(screenshot_file, screenshot_cv)
             print(f"Screenshot captured and saved as '{screenshot_file}'")
-            
+
             # Image processing
             gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
             resized = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                         cv2.THRESH_BINARY, 11, 2)
-            
-            # OCR with improved configuration
+            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY, 11, 2)
+
+            # OCR
             data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT, config='--psm 3')
             print("OCR data keys:", data.keys())
             print("All detected text with positions:")
             for i, text in enumerate(data["text"]):
                 if text.strip():
                     print(f"Index {i}: '{text}' (Confidence: {data['conf'][i]}, Left: {data['left'][i]}, Top: {data['top'][i]})")
-            
-            # Search for "Add photo" or "Add photo/video"
+
+            # Search for target phrases
             text_lower = [t.lower() for t in data["text"]]
             texts_index = None
             detected_phrase = None
-            
-            # Check for "Add" followed by "photo/video" or "photo"
+
+            # Case 1: "Add" + "photo/video"
             for i, text in enumerate(text_lower):
                 if text == "add":
-                    # Check for "photo/video" as the next token
                     if i + 1 < len(text_lower) and text_lower[i + 1] == "photo/video":
                         texts_index = i
                         detected_phrase = "add photo/video"
                         break
-                    # Fallback: Check for "photo" (with optional "video")
                     if i + 1 < len(text_lower) and text_lower[i + 1] == "photo":
                         texts_index = i
                         detected_phrase = "add photo"
-                        # Check for "video" to confirm "Add photo/video"
                         if i + 2 < len(text_lower) and text_lower[i + 2] == "video":
                             detected_phrase = "add photo/video"
                         break
-            
-            # Check for single-token "addphoto"
+
+            # Case 2: "addphoto" as single token
             if texts_index is None:
                 for i, text in enumerate(text_lower):
                     if text == "addphoto":
                         texts_index = i
                         detected_phrase = "addphoto"
                         break
-            
-            # Proceed if a valid phrase is detected and it's not "addvideo"
+
+            # Proceed if valid phrase found
             if texts_index is not None and text_lower[texts_index] != "addvideo":
-                # Get coordinates (adjust for resizing)
                 x = data["left"][texts_index] // 1.5
                 y = data["top"][texts_index] // 1.5
                 w = data["width"][texts_index] // 1.5
                 h = data["height"][texts_index] // 1.5
                 center_x = x + w // 2
                 center_y = y + h // 2
+
                 print(f"Detected: {detected_phrase}")
                 print(f"Coordinates: left={x}, top={y}, width={w}, height={h}")
                 print(f"Moving to: ({center_x}, {center_y})")
-                
-                # Click the detected text location
+
                 pyautogui.moveTo(center_x, center_y)
                 time.sleep(0.1)
                 pyautogui.click()
-                print("✅ Clicked on 'Add photo' or 'Add photo/video'")
+                print("Clicked on 'Add photo' or 'Add photo/video'")
+
+                # SET TRACKER: Mark as toggled
+                toggleaddphoto.is_toggled = True
+
                 time.sleep(3)
                 selectmedia()
-                return  # Exit the function after successful click
+                return  # Success → exit
+
             else:
                 retry_count += 1
                 print(f"Retry {retry_count}/{max_retries}: No 'Add photo' or 'Add photo/video' found")
                 if retry_count == max_retries:
-                    # Check for "loading" text as a fallback
                     loading_index = next((i for i, t in enumerate(text_lower) if "loading" in t), None)
                     if loading_index is not None:
                         print("Detected 'loading' text, retrying with new screenshot")
-                        time.sleep(1)  # Wait briefly before retrying
+                        time.sleep(1)
                         continue
-                    print("Max retries reached. No 'Add photo' or 'Add photo/video' found.")
-                    return  # Exit after max retries
-                time.sleep(1)  # Wait before retrying
+                    print("Max retries reached. Button not found.")
+                    return
+                time.sleep(1)
+
     except Exception as e:
-        print(f"An error occurred: {e}")      
+        print(f"An error occurred in toggleaddphoto(): {e}")
 
 def selectmedia():
     """Select media by COPYING the file path and PASTING it (faster & more reliable)."""
@@ -2526,7 +2735,7 @@ def confirmselectedmedia():
     # === SEARCH FOR editmedia.png ===
     try:
         editmedia = pyautogui.locateOnScreen(
-            f'{GUI_PATH}\\editmedia.png',
+            f'{GUI_PATH}\\cropandfilter.png',
             confidence=0.8,
             region=top,
             grayscale=True  # Faster + more robust
@@ -2569,10 +2778,8 @@ def confirm_fileisready():
 
 
 
-
-
-def writecaption():
-    """Enter a random caption using GUI automation with same variable tracking as writecaption(),
+def writecaption_ocr():
+    """Enter a random caption using GUI automation with OCR text detection, 
     constructing the JSON path using author and group_types from pageandgroupauthors.json."""
     try:
         # Load configuration from JSON
@@ -2604,83 +2811,273 @@ def writecaption():
         print(f"Selected random caption for author '{author}' (group_types '{group_types}', GUI): '{selected_caption}'")
         
         # Static variable to store the last written caption
-        if not hasattr(writecaption, 'last_written_caption'):
-            writecaption.last_written_caption = None
+        if not hasattr(writecaption_ocr, 'last_written_caption'):
+            writecaption_ocr.last_written_caption = None
         
-        # GUI screen regions
-        screen_width, screen_height = pyautogui.size()
-        top = (0, 0, screen_width, screen_height)
-        bottom = (0, screen_height // 2, screen_width, screen_height // 2)
+        # OCR-based text detection
+        print("Searching for 'text' to locate input field")
+        retry_count = 0
+        max_retries = 3
+        save_path = r"C:\xampp\htdocs\serenum\files\gui"
         
-        # Locate text area using GUI
-        text = pyautogui.locateOnScreen(f'{GUI_PATH}\\text.png', confidence=0.8, region=top)
-        
-        if not text:
-            print("Text area image not found")
-            return False
-        
-        x, y = pyautogui.center(text)
-        pyautogui.click(x, y + 50)
-        print("Found text area, clicked text area")
-        time.sleep(2)
-        
-        # Get current text in text field using GUI
-        # Select all text (Ctrl+A)
-        pyautogui.hotkey('ctrl', 'a')
-        time.sleep(0.5)
-        
-        # Copy selected text to clipboard
-        pyautogui.hotkey('ctrl', 'c')
-        time.sleep(0.5)
-        
-        # Get current text from clipboard
-        current_text = pyperclip.paste().strip()
-        print(f"Current text in field (GUI): '{current_text}'")
-        
-        # EXACT SAME LOGIC FOR TEXT VALIDATION & WRITING
-        if not current_text or (current_text != selected_caption and current_text != writecaption.last_written_caption):
-            # Clear the text field (Ctrl+A, Delete)
-            pyautogui.hotkey('ctrl', 'a')
+        while retry_count < max_retries:
+            # Capture screenshot
+            screenshot = ImageGrab.grab()
+            screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
             
-            # Enter the selected caption
-            pyautogui.write(selected_caption)
-            print(f"Entered text into post field (GUI): '{selected_caption}'")
+            # Save screenshot
+            os.makedirs(save_path, exist_ok=True)
+            screenshot_file = os.path.join(save_path, "caption_text_area.png")
+            cv2.imwrite(screenshot_file, screenshot_cv)
+            print(f"Screenshot captured and saved as '{screenshot_file}'")
             
-            # Save the written caption to the static variable
-            writecaption.last_written_caption = selected_caption
-            print(f"Saved caption to last_written_caption (GUI): '{selected_caption}'")
-            time.sleep(1)
-        
-        elif current_text == selected_caption or current_text == writecaption.last_written_caption:
-            print(f"Text '{current_text}' is already correct in the text field (GUI). Skipping write operation.")
-            # Ensure the last written caption is saved if it matches
-            if current_text == selected_caption:
-                writecaption.last_written_caption = selected_caption
-                print(f"Updated last_written_caption to match current text (GUI): '{selected_caption}'")
-            return True
-        
-        else:
-            print(f"Text field contains different text (GUI): '{current_text}'. Replacing with saved caption.")
-            # Clear and replace with last written caption if available
-            if writecaption.last_written_caption:
-                pyautogui.hotkey('ctrl', 'a')
-                pyautogui.write(writecaption.last_written_caption)
-                print(f"Replaced text with last written caption (GUI): '{writecaption.last_written_caption}'")
+            # Image processing
+            gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
+            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            resized = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                         cv2.THRESH_BINARY, 11, 2)
+            
+            # OCR with improved configuration
+            data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT, config='--psm 3')
+            print("OCR data keys:", data.keys())
+            print("All detected text with positions:")
+            for i, text in enumerate(data["text"]):
+                if text.strip():
+                    print(f"Index {i}: '{text}' (Confidence: {data['conf'][i]}, Left: {data['left'][i]}, Top: {data['top'][i]})")
+            
+            # Search for "text"
+            text_lower = [t.lower() for t in data["text"]]
+            text_index = None
+            for i, text in enumerate(text_lower):
+                if text == "text":
+                    text_index = i
+                    break
+            
+            if text_index is not None:
+                # Get coordinates (adjust for resizing)
+                x = data["left"][text_index] // 1.5
+                y = data["top"][text_index] // 1.5
+                w = data["width"][text_index] // 1.5
+                h = data["height"][text_index] // 1.5
+                center_x = x + w // 2
+                center_y = y + h // 2
+                print(f"Detected: 'text'")
+                print(f"Coordinates: left={x}, top={y}, width={w}, height={h}")
+                print(f"Moving to: ({center_x}, {center_y})")
+                
+                # Click the detected text location (slightly offset to target input field)
+                pyautogui.moveTo(center_x, center_y + 50)  # Offset to click inside the input field
+                time.sleep(0.1)
+                pyautogui.click()
+                print("✅ Clicked on 'text' input field")
                 time.sleep(1)
+                
+                # Proceed with caption input logic
+                # Get current text in text field using GUI
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.5)
+                pyautogui.hotkey('ctrl', 'c')
+                time.sleep(0.5)
+                current_text = pyperclip.paste().strip()
+                print(f"Current text in field (GUI): '{current_text}'")
+                
+                # EXACT SAME LOGIC FOR TEXT VALIDATION & WRITING
+                if not current_text or (current_text != selected_caption and current_text != writecaption_ocr.last_written_caption):
+                    # Clear the text field (Ctrl+A, Delete)
+                    pyautogui.hotkey('ctrl', 'a')
+                    pyautogui.hotkey('delete')
+                    time.sleep(0.5)
+                    
+                    # Enter the selected caption
+                    pyautogui.write(selected_caption)
+                    print(f"Entered text into post field (GUI): '{selected_caption}'")
+                    
+                    # Save the written caption to the static variable
+                    writecaption_ocr.last_written_caption = selected_caption
+                    print(f"Saved caption to last_written_caption (GUI): '{selected_caption}'")
+                    time.sleep(1)
+                
+                elif current_text == selected_caption or current_text == writecaption_ocr.last_written_caption:
+                    print(f"Text '{current_text}' is already correct in the text field (GUI). Skipping write operation.")
+                    if current_text == selected_caption:
+                        writecaption_ocr.last_written_caption = selected_caption
+                        print(f"Updated last_written_caption to match current text (GUI): '{selected_caption}'")
+                    return True
+                
+                else:
+                    print(f"Text field contains different text (GUI): '{current_text}'. Replacing with saved caption.")
+                    if writecaption_ocr.last_written_caption:
+                        pyautogui.hotkey('ctrl', 'a')
+                        pyautogui.hotkey('delete')
+                        time.sleep(0.5)
+                        pyautogui.write(writecaption_ocr.last_written_caption)
+                        print(f"Replaced text with last written caption (GUI): '{writecaption_ocr.last_written_caption}'")
+                        time.sleep(1)
+                    else:
+                        pyautogui.hotkey('ctrl', 'a')
+                        pyautogui.hotkey('delete')
+                        time.sleep(0.5)
+                        pyautogui.write(selected_caption)
+                        writecaption_ocr.last_written_caption = selected_caption
+                        print(f"No previous caption saved. Entered new caption (GUI): '{selected_caption}'")
+                        time.sleep(1)
+                
+                return True
+            
             else:
-                # If no last written caption, use the selected caption
-                pyautogui.hotkey('ctrl', 'a')
-                pyautogui.write(selected_caption)
-                writecaption.last_written_caption = selected_caption
-                print(f"No previous caption saved. Entered new caption (GUI): '{selected_caption}'")
-                time.sleep(1)
+                retry_count += 1
+                print(f"Retry {retry_count}/{max_retries}: No 'text' found")
+                if retry_count == max_retries:
+                    print("Max retries reached. No 'text' input field found.")
+                    return False
+                time.sleep(1)  # Wait before retrying
         
-        return True
-        
+        return False
+    
     except Exception as e:
         print(f"Failed to enter text (GUI): {str(e)}")
-        return False        
+        return False
 
+def writecaption_element():
+    """
+    Finds the Facebook post composer by writing a *real* random caption
+    from the same JSON file that writecaption_ocr() uses.
+    Returns the working WebElement or None.
+
+    NEW: 
+      - Uses `writecaption_element.has_written` (like toggleaddphoto.is_toggled)
+      - Skips entire process if caption already written this session
+      - Reset via reset_trackers()
+    """
+    # ---- EARLY EXIT: Already written this session ----
+    if getattr(writecaption_element, 'has_written', False):
+        print("\n=== CAPTION ALREADY WRITTEN THIS SESSION. SKIPPING. ===")
+        return None
+
+    print("\n=== LOCATING POST COMPOSER (via real caption test) ===")
+
+    # --------------------------------------------------------------------- #
+    # 0. Load caption (same as writecaption_ocr)
+    # --------------------------------------------------------------------- #
+    try:
+        with open(JSON_CONFIG_PATH, 'r') as json_file:
+            config = json.load(json_file)
+        author       = config['author']
+        group_types  = config.get('group_types', 'others').lower()
+        if group_types not in ['uk', 'others']:
+            group_types = 'others'
+        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({group_types}).json"
+
+        if not os.path.exists(json_path):
+            raise FileNotFoundError(json_path)
+
+        with open(json_path, 'r') as f:
+            captions = json.load(f)
+
+        selected_caption = random.choice(captions)['description']
+        print(f"Loaded caption for author '{author}' (group '{group_types}'): '{selected_caption}'")
+
+    except Exception as e:
+        print(f"Could not load caption JSON: {e}")
+        return None
+
+    # --------------------------------------------------------------------- #
+    # 1. Get candidates
+    # --------------------------------------------------------------------- #
+    xpath = """
+        //div[
+            (@contenteditable='true' or @contenteditable='plaintext-only')
+            and
+            (
+                contains(@class, 'notranslate') or
+                contains(@class, 'textinput') or
+                contains(@class, 'composer') or
+                contains(@data-text, 'true') or
+                contains(@aria-label, 'Text') or
+                contains(@role, 'textbox')
+            )
+        ]
+    """
+    try:
+        candidates = WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.XPATH, xpath))
+        )
+        print(f"Found {len(candidates)} candidate(s).")
+    except Exception:
+        print("No candidates found.")
+        return None
+
+    # --------------------------------------------------------------------- #
+    # 2. Test each candidate (with "already-written" check)
+    # --------------------------------------------------------------------- #
+    working_element = None
+    for i, el in enumerate(candidates):
+        try:
+            if not el.is_displayed():
+                print(f"  [{i}] Skipped – not visible")
+                continue
+
+            size = el.size
+            w, h = size.get('width', 0), size.get('height', 0)
+            print(f"  [{i}] Size: {w}x{h}")
+
+            # ---- READ CURRENT CONTENT BEFORE TOUCHING ----
+            current_text = driver.execute_script(
+                "return arguments[0].textContent || arguments[0].innerText || '';", el
+            ).strip()
+
+            # Normalize for comparison
+            norm_caption = selected_caption.strip().lower()
+            norm_current = current_text.strip().lower()
+
+            if norm_current == norm_caption:
+                print(f"  [{i}] Caption already present – using this element.")
+                working_element = el
+                writecaption_element.last_written_caption = selected_caption
+                writecaption_element.has_written = True  # MARK AS DONE
+                break
+
+            # ---- CLICK & WRITE (ONLY IF NOT ALREADY THERE) ----
+            el.click()
+            time.sleep(0.3)
+            ActionChains(driver).send_keys(selected_caption).perform()
+            time.sleep(1.0)
+
+            # Read back what we just wrote
+            current_text = driver.execute_script(
+                "return arguments[0].textContent || arguments[0].innerText || '';", el
+            ).strip()
+
+            print(f"     Wrote caption  Got back: '{current_text}'")
+
+            if selected_caption.lower() in current_text.lower():
+                print(f"     SUCCESS! This is the real composer.")
+                working_element = el
+                writecaption_element.last_written_caption = selected_caption
+                writecaption_element.has_written = True  # MARK AS DONE
+                break
+            else:
+                print(f"     Failed – caption did not appear.")
+                # Clear failed attempt
+                driver.execute_script("arguments[0].textContent = '';", el)
+
+        except Exception as e:
+            print(f"  [{i}] Error: {e}")
+
+    # --------------------------------------------------------------------- #
+    # 3. Return result
+    # --------------------------------------------------------------------- #
+    if working_element:
+        final_size = working_element.size
+        print(f"\nCOMPOSER FOUND! Using candidate with size {final_size}")
+        return working_element
+    else:
+        print("\nNo candidate accepted the caption. Composer not found.")
+        writecaption_ocr()
+        return None
+    
+         
 
 
 def extract_texts(return_time_value=None, additional_texts=None):
@@ -2817,7 +3214,8 @@ def toggleschedule():
         except Exception as e2:
             print(f"Alternative locator for schedule toggle failed: {str(e2)}")
             raise Exception("Could not locate or toggle schedule button")
-def set_schedule():
+
+def set_webschedule():
     """
     Set schedule by reading target date and time from {type_value}schedules.json.
     Checks if current UI date matches JSON date before setting.
@@ -3136,7 +3534,11 @@ def set_schedule():
             driver.refresh()
             raise Exception("Page reloaded due to overlay")
         raise
-    
+
+
+
+
+
 
 def click_schedule_button():
     try:
@@ -3309,4 +3711,5 @@ def main():
 if __name__ == "__main__":
    main()
    
+
 
