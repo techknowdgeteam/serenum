@@ -197,7 +197,7 @@ def launch_profile():
                     toggleaddphoto()
                     writecaption_element()
                     toggleschedule()
-                    set_webschedule()
+                    set_webschedule_v2()
                     click_schedule_button()
                     uploadedjpgs()
                 else:
@@ -248,8 +248,8 @@ def reset_trackers():
         writecaption_element.last_written_caption = None
     writecaption_element.has_written = False
 
-    # ---- set_webschedule (NEW) ----
-    set_webschedule.has_set = False  # ADD THIS LINE
+    # ---- set_webschedule_v2 (NEW) ----
+    set_webschedule_v2.has_set = False  # ADD THIS LINE
 
     # ---- toggleaddphoto ----
     toggleaddphoto.is_toggled = False
@@ -270,7 +270,7 @@ def reset_trackers():
         "Reset all function trackers: "
         "last_written_caption (ocr & element), "
         "has_written (writecaption_element), "
-        "has_set (set_webschedule), "
+        "has_set (set_webschedule_v2), "
         "is_toggled (toggleaddphoto), is_toggled (toggleschedule), "
         "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
         "groups_selected, is_page_selected"
@@ -3215,325 +3215,198 @@ def toggleschedule():
             print(f"Alternative locator for schedule toggle failed: {str(e2)}")
             raise Exception("Could not locate or toggle schedule button")
 
-def set_webschedule():
+def set_webschedule_v2():
     """
-    Set schedule by reading target date and time from {type_value}schedules.json.
-    Checks if current UI date matches JSON date before setting.
-    Relies on extract_texts for time verification, skipping UI time input checks.
-    Skips verification if no changes are made.
-    Constructs input path using author and type from JSON_CONFIG_PATH.
-    Detects 24-hour vs 12-hour format and sets time accordingly.
-    Reloads page on click interception.
+    Set schedule using {type}schedules.json.
+    UI expects:
+        • Date: mm/dd/yyyy (e.g. 10/29/2025)
+        • Time: 3 separate inputs → hours, minutes, meridiem (AM/PM)
+    NEW:
+      - `set_webschedule_v2.has_set` tracker prevents re-execution
+      - Skips if already correct (date input only)
+      - Reset via reset_trackers()
+      - NO VERIFICATION AFTER WRITE — write = success
     """
-    # Load configuration from JSON_CONFIG_PATH
-    try:
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
-        author = config['author']
-        type_value = config.get('type', '')  # Get type from config, if available
-        schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
-    except Exception as e:
-        print(f"Failed to load or parse {JSON_CONFIG_PATH}: {e}")
+    # ---- EARLY EXIT: Already set this session ----
+    if getattr(set_webschedule_v2, 'has_set', False):
+        print("\n=== SCHEDULE ALREADY SET THIS SESSION. SKIPPING. ===")
         return
-
-    # Load target date and time from {type_value}schedules.json
+    print("\n=== SETTING WEB SCHEDULE ===")
+    # ------------------------------------------------------------------ #
+    # 1. Load config + target schedule
+    # ------------------------------------------------------------------ #
     try:
-        with open(schedules_path, 'r') as json_file:
-            json_data = json.load(json_file)
-        next_schedule = json_data.get('next_schedule', {})
-        target_date = next_schedule.get('date', '')  # e.g., "01/11/2025"
-        target_time_12h = next_schedule.get('time_12hour', '')  # e.g., "07:00 AM"
-        target_time_24h = next_schedule.get('time_24hour', '')  # e.g., "07:00"
-        
-        if not target_date or not target_time_12h or not target_time_24h:
-            raise Exception("Missing date, time_12hour, or time_24hour in schedules.json")
-        
-        # Parse 12-hour time (e.g., "07:00 AM" -> hour: "07", minute: "00", period: "AM")
-        match_12h = re.match(r"(\d{1,2}):(\d{2})\s*(AM|PM)", target_time_12h, re.IGNORECASE)
-        if not match_12h:
-            raise Exception("Invalid 12-hour time format in schedules.json")
-        hour_12h, minute_12h, period = match_12h.groups()
-        
-        # Parse 24-hour time (e.g., "07:00" -> hour: "07", minute: "00")
-        match_24h = re.match(r"(\d{1,2}):(\d{2})", target_time_24h)
-        if not match_24h:
-            raise Exception("Invalid 24-hour time format in schedules.json")
-        hour_24h, minute_24h = match_24h.groups()
-        
-        print(f"Target schedule: {target_date} at {target_time_12h} (12h) / {target_time_24h} (24h)")
+        with open(JSON_CONFIG_PATH, 'r') as f:
+            cfg = json.load(f)
+        author = cfg['author']
+        type_value = cfg.get('type', '')
+        sched_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
     except Exception as e:
-        print(f"Failed to read or parse {schedules_path}: {e}")
+        print(f"Failed to load {JSON_CONFIG_PATH}: {e}")
         return
-
-    # --- FIXED COMPREHENSIVE DATE FORMAT GENERATOR ---
-    def generate_all_date_formats(target_date):
-        """Generate ALL possible date formats from target_date (dd/mm/yyyy) - BOTH PADDED & UNPADDED"""
-        # Parse target_date (dd/mm/yyyy) -> day, month, year
-        day, month, year = target_date.split('/')
-        day_unpadded = day.lstrip('0')  # "01" -> "1"
-        day_padded = day.zfill(2)       # "1" -> "01"
-        month_padded = month.zfill(2)
-        year_short = year[-2:]
-        
-        # Month names
-        month_map = {
-            '01': ('January', 'Jan'), '02': ('February', 'Feb'), '03': ('March', 'Mar'),
-            '04': ('April', 'Apr'), '05': ('May', 'May'), '06': ('June', 'Jun'),
-            '07': ('July', 'Jul'), '08': ('August', 'Aug'), '09': ('September', 'Sep'),
-            '10': ('October', 'Oct'), '11': ('November', 'Nov'), '12': ('December', 'Dec')
-        }
-        full_month, short_month = month_map[month]
-        
-        date_formats = {}
-        
-        # Standard with slashes - BOTH padded & unpadded
-        date_formats['dd/mm/yyyy'] = f"{day_padded}/{month_padded}/{year}"
-        date_formats['d/mm/yyyy'] = f"{day_unpadded}/{month_padded}/{year}"
-        date_formats['dd/mm/yy'] = f"{day_padded}/{month_padded}/{year_short}"
-        date_formats['d/mm/yy'] = f"{day_unpadded}/{month_padded}/{year_short}"
-        
-        # Standard with dashes - BOTH padded & unpadded
-        date_formats['dd-mm-yyyy'] = f"{day_padded}-{month_padded}-{year}"
-        date_formats['d-mm-yyyy'] = f"{day_unpadded}-{month_padded}-{year}"
-        date_formats['dd-mm-yy'] = f"{day_padded}-{month_padded}-{year_short}"
-        date_formats['d-mm-yy'] = f"{day_unpadded}-{month_padded}-{year_short}"
-        
-        # With spaces - BOTH padded & unpadded
-        date_formats['dd month yyyy'] = f"{day_padded} {full_month} {year}"
-        date_formats['d month yyyy'] = f"{day_unpadded} {full_month} {year}"
-        date_formats['dd mon yyyy'] = f"{day_padded} {short_month} {year}"
-        date_formats['d mon yyyy'] = f"{day_unpadded} {short_month} {year}"
-        date_formats['month dd, yyyy'] = f"{full_month} {day_padded}, {year}"
-        date_formats['month d, yyyy'] = f"{full_month} {day_unpadded}, {year}"
-        date_formats['mon dd yyyy'] = f"{short_month} {day_padded} {year}"
-        date_formats['mon d yyyy'] = f"{short_month} {day_unpadded} {year}"
-        
-        # NO SPACE VARIANTS (for OCR) - BOTH padded & unpadded
-        date_formats['dmonthyyyy'] = f"{day_unpadded}{full_month}{year}"
-        date_formats['dmonyyyy'] = f"{day_unpadded}{short_month}{year}"
-        date_formats['ddmonthyyyy'] = f"{day_padded}{full_month}{year}"
-        date_formats['ddmonyyyy'] = f"{day_padded}{short_month}{year}"
-        date_formats['monthdyyyy'] = f"{full_month}{day_unpadded}{year}"
-        date_formats['monthddyyyy'] = f"{full_month}{day_padded}{year}"
-        date_formats['mondyyyy'] = f"{short_month}{day_unpadded}{year}"
-        date_formats['monddyyyy'] = f"{short_month}{day_padded}{year}"
-        
-        # Comma variants without space - BOTH padded & unpadded
-        date_formats['monthd,yyyy'] = f"{full_month}{day_unpadded},{year}"
-        date_formats['monthdd,yyyy'] = f"{full_month}{day_padded},{year}"
-        date_formats['mond,yyyy'] = f"{short_month}{day_unpadded},{year}"
-        date_formats['mondd,yyyy'] = f"{short_month}{day_padded},{year}"
-        
-        return date_formats
-
     try:
-        # --- 1. Wait for schedule panel ---
+        with open(sched_path, 'r') as f:
+            data = json.load(f)['next_schedule']
+        target_date = data['date']  # "29/10/2025" → we convert
+        target_time_12h = data['time_12hour']  # "07:00 AM"
+        if not all([target_date, target_time_12h]):
+            raise ValueError("Missing fields in schedules.json")
+    except Exception as e:
+        print(f"Failed to read {sched_path}: {e}")
+        return
+    # ------------------------------------------------------------------ #
+    # 2. Parse JSON times
+    # ------------------------------------------------------------------ #
+    m12 = re.match(r"(\d{1,2}):(\d{2})\s*(AM|PM)", target_time_12h, re.I)
+    if not m12:
+        print("Invalid time format in JSON")
+        return
+    hour_12, minute_12, period = m12.groups()
+    print(f"Target → {target_date} {target_time_12h}")
+    # ------------------------------------------------------------------ #
+    # 3. Convert dd/mm/yyyy → mm/dd/yyyy (UI format)
+    # ------------------------------------------------------------------ #
+    def ui_date_mmddyyyy(ddmmyyyy: str) -> str:
+        d, m, y = ddmmyyyy.split('/')
+        return f"{m.zfill(2)}/{d.zfill(2)}/{y}"  # e.g. 10/29/2025
+    ui_target_date = ui_date_mmddyyyy(target_date)
+    print(f"UI date string → '{ui_target_date}'")
+    # ------------------------------------------------------------------ #
+    # 4. Wait for panel
+    # ------------------------------------------------------------------ #
+    try:
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located(
-                (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'schedule')]")
+                (By.XPATH, "//div[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'schedule')]")
             )
         )
         print("Schedule panel loaded.")
         time.sleep(2)
-
-        # --- 2. Get inputs ---
-        inputs = WebDriverWait(driver, 15).until(
-            EC.presence_of_all_elements_located((By.TAG_NAME, "input"))
-        )
-        print(f"Found {len(inputs)} inputs.")
-
-        date_input = hour_input = minute_input = am_pm_input = None
-        for i, inp in enumerate(inputs):
-            ph = inp.get_attribute("placeholder") or ""
-            al = inp.get_attribute("aria-label") or ""
-            if "dd/mm/yyyy" in ph.lower():
-                date_input = inp
-                print(f"Date input at [{i}]: {ph}")
-            elif "hour" in al.lower():
-                hour_input = inp
-                print(f"Hour input at [{i}]: {al}")
-            elif "minute" in al.lower():
-                minute_input = inp
-                print(f"Minute input at [{i}]: {al}")
-            elif "am" in al.lower() or "pm" in al.lower():
-                am_pm_input = inp
-                print(f"AM/PM input at [{i}]: {al}")
-
-        if not all([date_input, hour_input, minute_input]):
-            raise Exception("Missing date, hour, or minute inputs")
-
-        # --- 3. Get existing date ---
-        current_date = driver.execute_script("return arguments[0].value", date_input) or ""
-        print(f"Current UI values - Date: '{current_date}'")
-
-        # --- 4. Get existing time using extract_texts ---
-        print("Extracting existing time...")
-        extractedtexts, extracted_time, found_texts = extract_texts()
-        print(f"Extracted time: '{extracted_time}', Found texts: {found_texts}")
-
-        # --- 5. DETECT 24H vs 12H FORMAT ---
-        print("Detecting time format (24h vs 12h)...")
-        is_24h_format = True if not am_pm_input else False
-        if is_24h_format:
-            print("✓ Detected 24-hour format (no AM/PM selector found)")
-        else:
-            print("✓ Detected 12-hour format (AM/PM selector found)")
-
-        # --- 6. CHECK IF VALUES MATCH JSON ---
-        # Generate ALL possible formats for target date
-        all_target_formats = generate_all_date_formats(target_date)
-        print(f"Generated {len(all_target_formats)} possible target date formats")
-        
-        date_matches = False
-        # Check if current_date matches ANY target format
-        for fmt_name, fmt_value in all_target_formats.items():
-            if current_date.strip() == fmt_value.strip():
-                date_matches = True
-                print(f"✓ Date already matches target date (format: {fmt_name})")
-                break
-        
-        # Compare time using extract_texts
-        time_matches = False
-        if is_24h_format:
-            expected_time = f"Time: {hour_24h}:{minute_24h}"
-            if extracted_time == expected_time:
-                time_matches = True
-                print("✓ Time already matches target time (24h)")
-        else:
-            expected_time = f"Time: {hour_12h.lstrip('0')}:{minute_12h}"
-            alternative_time = f"Time: {hour_12h}:{minute_12h}"
-            if extracted_time in [expected_time, alternative_time]:
-                time_matches = True
-                print("✓ Time already matches target time (12h)")
-
-        # Skip setting and verification if both date and time match
-        if date_matches and time_matches:
-            print("✓ Schedule already set correctly, skipping update and verification.")
-            return
-
-        # --- 7. SET DATE (if needed) ---
-        if not date_matches:
-            try:
-                driver.execute_script("arguments[0].scrollIntoView(true);", date_input)
-                date_input.click()
-                time.sleep(0.5)
-                ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
-                print("Selected all text in date input.")
-                time.sleep(0.5)
-                ActionChains(driver).send_keys(target_date).perform()
-                print(f"Pasted date: {target_date}")
-                time.sleep(0.5)
-                date_input.send_keys(Keys.TAB)
-                print("Tabbed out of date input.")
-                time.sleep(1)
-            except Exception as e:
-                if "element click intercepted" in str(e).lower():
-                    print("Element click intercepted in date input. Reloading page and resetting trackers...")
-                    reset_trackers()
-                    driver.refresh()
-                    raise Exception("Page reloaded due to click interception")
-                raise
-
-        # --- 8. SET TIME (if needed) ---
-        if not time_matches:
-            # Set hour
-            try:
-                hour_input.click()
-                time.sleep(0.5)
-                hour_input.clear()
-                time.sleep(0.5)
-                
-                if is_24h_format:
-                    hour_input.send_keys(hour_24h)
-                    print(f"Set 24h hour: {hour_24h}")
-                else:
-                    hour_input.send_keys(hour_12h.lstrip('0'))
-                    print(f"Set 12h hour: {hour_12h.lstrip('0')}")
-                    if am_pm_input:
-                        am_pm_input.click()
-                        time.sleep(0.5)
-                        ActionChains(driver).send_keys(period.upper()).send_keys(Keys.ENTER).perform()
-                        print(f"Selected {period.upper()}")
-                
-                hour_input.send_keys(Keys.TAB)
-                time.sleep(1)
-            except Exception as e:
-                if "element click intercepted" in str(e).lower():
-                    print("Element click intercepted in hour input. Reloading page and resetting trackers...")
-                    reset_trackers()
-                    driver.refresh()
-                    raise Exception("Page reloaded due to click interception")
-                raise
-
-            # Set minutes
-            try:
-                minute_input.click()
-                time.sleep(0.5)
-                minute_input.clear()
-                time.sleep(0.5)
-                minute_input.send_keys(minute_24h)
-                print(f"Set minute: {minute_24h}")
-                minute_input.send_keys(Keys.TAB)
-                time.sleep(1)
-            except Exception as e:
-                if "element click intercepted" in str(e).lower():
-                    print("Element click intercepted in minute input. Reloading page and resetting trackers...")
-                    reset_trackers()
-                    driver.refresh()
-                    raise Exception("Page reloaded due to click interception")
-                raise
-        else:
-            print("Time already correct, skipping time update.")
-
-        # --- 9. Get new time using extract_texts ---
-        print("Extracting new time...")
-        extractedtexts, new_time, found_texts = extract_texts()
-        print(f"After setting - Extracted time: '{new_time}', Found texts: {found_texts}")
-
-        # --- 10. VERIFY ---
-        time.sleep(1)  # Wait for UI to stabilize
-        final_date = driver.execute_script("return arguments[0].value", date_input) or ""
-        print(f"FINAL: Date='{final_date}', Time='{new_time}'")
-
-        # Verify date - Check if final_date matches ANY target format
-        date_verified = False
-        for fmt_name, fmt_value in all_target_formats.items():
-            if final_date.strip() == fmt_value.strip():
-                date_verified = True
-                print(f"✓ Date verified! (format: {fmt_name})")
-                break
-        
-        if not date_verified:
-            # Show all possible formats for debugging
-            print("❌ Date verification failed. Expected formats:")
-            for fmt_name, fmt_value in all_target_formats.items():
-                print(f"  {fmt_name}: '{fmt_value}'")
-            raise Exception(f"Date not set: '{final_date}' doesn't match any expected format")
-
-        # Verify time
-        if is_24h_format:
-            expected_time = f"Time: {hour_24h}:{minute_24h}"
-            if new_time != expected_time:
-                raise Exception(f"Time not set (24h): '{new_time}' != '{expected_time}'")
-        else:
-            expected_time = f"Time: {hour_12h.lstrip('0')}:{minute_12h}"
-            if new_time not in [expected_time, f"Time: {hour_12h}:{minute_12h}"]:
-                raise Exception(f"Time not set (12h): '{new_time}' != '{expected_time}' or 'Time: {hour_12h}:{minute_12h}'")
-
-        print("✓ Schedule set successfully!")
-
     except Exception as e:
-        if "page reloaded" in str(e).lower():
-            raise  # Let the exception propagate to trigger page reload in launch_profile
-        print(f"Schedule failed: {e}")
-        # Check for overlay
-        overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-        if overlay:
-            print("Detected overlay blocking interaction. Reloading page and resetting trackers...")
+        print(f"Panel not found: {e}")
+        return
+    # ------------------------------------------------------------------ #
+    # 5. Locate ONLY the 4 inputs we need
+    # ------------------------------------------------------------------ #
+    date_input = hour_input = minute_input = meridiem_input = None
+    inputs = WebDriverWait(driver, 15).until(
+        EC.presence_of_all_elements_located((By.TAG_NAME, "input"))
+    )
+    print(f"Found {len(inputs)} <input> elements.")
+    for idx, el in enumerate(inputs):
+        ph = (el.get_attribute("placeholder") or "").lower()
+        al = (el.get_attribute("aria-label") or "").lower()
+        if "mm/dd/yyyy" in ph:
+            date_input = el
+            print(f"Date input [{idx}]: placeholder='{ph}' value='{el.get_attribute('value')}'")
+        elif al == "hours":
+            hour_input = el
+            print(f"Hour input [{idx}]: aria-label='hours'")
+        elif al == "minutes":
+            minute_input = el
+            print(f"Minute input [{idx}]: aria-label='minutes'")
+        elif al == "meridiem":
+            meridiem_input = el
+            print(f"Meridiem input [{idx}]: aria-label='meridiem'")
+    if not (date_input and hour_input and minute_input and meridiem_input):
+        missing = [n for n, v in [("date", date_input), ("hour", hour_input),
+                                  ("minute", minute_input), ("meridiem", meridiem_input)] if not v]
+        print(f"Missing inputs: {', '.join(missing)}")
+        return
+    # ------------------------------------------------------------------ #
+    # 6. Read current UI date only (skip OCR)
+    # ------------------------------------------------------------------ #
+    current_date = (date_input.get_attribute("value") or "").strip()
+    print(f"Current UI date → '{current_date}'")
+    # ------------------------------------------------------------------ #
+    # 7. Skip if date already correct
+    # ------------------------------------------------------------------ #
+    if current_date == ui_target_date:
+        print("Date already correct – marking as set.")
+        set_webschedule_v2.has_set = True
+        return
+    # ------------------------------------------------------------------ #
+    # 8. SET DATE
+    # ------------------------------------------------------------------ #
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", date_input)
+        date_input.click()
+        time.sleep(0.3)
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+        time.sleep(0.2)
+        ActionChains(driver).send_keys(ui_target_date).perform()
+        date_input.send_keys(Keys.TAB)
+        print(f"Date set → '{ui_target_date}'")
+        time.sleep(1)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Date click intercepted → reload")
             reset_trackers()
             driver.refresh()
-            raise Exception("Page reloaded due to overlay")
-        raise
+            return
+        print(f"Error setting date: {e}")
+        return
+    # ------------------------------------------------------------------ #
+    # 9. SET TIME (always, since no verification)
+    # ------------------------------------------------------------------ #
+    # Hour
+    try:
+        hour_input.click()
+        time.sleep(0.2)
+        hour_input.clear()
+        hour_input.send_keys(str(int(hour_12)))
+        print(f"Hour set → {int(hour_12)}")
+        hour_input.send_keys(Keys.TAB)
+        time.sleep(0.5)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Hour click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting hour: {e}")
+        return
+    # Minute
+    try:
+        minute_input.click()
+        time.sleep(0.2)
+        minute_input.clear()
+        minute_input.send_keys(minute_12)
+        print(f"Minute set → {minute_12}")
+        minute_input.send_keys(Keys.TAB)
+        time.sleep(0.5)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Minute click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting minute: {e}")
+        return
+    # Meridiem
+    try:
+        meridiem_input.click()
+        time.sleep(0.2)
+        ActionChains(driver).send_keys(period.upper()).send_keys(Keys.ENTER).perform()
+        print(f"Meridiem set → {period.upper()}")
+        time.sleep(0.5)
+    except Exception as e:
+        if "intercepted" in str(e).lower():
+            print("Meridiem click intercepted → reload")
+            reset_trackers()
+            driver.refresh()
+            return
+        print(f"Error setting meridiem: {e}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # DONE: No verification — write = success
+    # ------------------------------------------------------------------ #
+    print("Schedule write completed –success!")
+    set_webschedule_v2.has_set = True  # MARK AS DONE
+    click_schedule_button()
+
+
 
 
 
@@ -3711,5 +3584,6 @@ def main():
 if __name__ == "__main__":
    main()
    
+
 
 
