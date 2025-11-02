@@ -200,7 +200,6 @@ def launch_profile():
                     writecaption_element()
                     toggleschedule()
                     set_webschedule_v2()
-                    click_schedule_button()
                     uploadedjpgs()
                 else:
                     print(f"Recheck failed: Current URL ({current_url}) does not match {uploadpost_url}. Reloading page and resetting trackers...")
@@ -3298,13 +3297,13 @@ def toggleschedule():
 
 def set_webschedule_v2():
     """
-    Set schedule using {type}schedules.json.
+    Set schedule using {type}schedules.json (NEW STRUCTURE).
     UI expects:
         • Date: mm/dd/yyyy (e.g. 10/29/2025)
         • Time: 3 separate inputs → hours, minutes, meridiem (AM/PM)
-    NEW:
-      - `set_webschedule_v2.has_set` tracker prevents re-execution
-      - Skips if already correct (date input only)
+    FEATURES:
+      - `has_set` tracker prevents re-execution
+      - Skips if date already correct
       - Reset via reset_trackers()
       - NO VERIFICATION AFTER WRITE — write = success
     """
@@ -3312,48 +3311,66 @@ def set_webschedule_v2():
     if getattr(set_webschedule_v2, 'has_set', False):
         print("\n=== SCHEDULE ALREADY SET THIS SESSION. SKIPPING. ===")
         return
-    print("\n=== SETTING WEB SCHEDULE ===")
+    print("\n=== SETTING WEB SCHEDULE (v2) ===")
+
     # ------------------------------------------------------------------ #
-    # 1. Load config + target schedule
+    # 1. Load author, type, group_types from pageandgroupauthors.json
     # ------------------------------------------------------------------ #
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
     try:
-        with open(JSON_CONFIG_PATH, 'r') as f:
-            cfg = json.load(f)
-        author = cfg['author']
-        type_value = cfg.get('type', '')
-        sched_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+        author = pageauthors['author']
+        type_value = pageauthors['type']
+        group_types = pageauthors['group_types']
+        print(f"Loaded from pageandgroupauthors.json → Author: {author}, Type: {type_value}, Group: {group_types}")
     except Exception as e:
-        print(f"Failed to load {JSON_CONFIG_PATH}: {e}")
+        print(f"Failed to load {pageauthors_path}: {e}")
         return
+
+    # ------------------------------------------------------------------ #
+    # 2. Construct NEW schedules.json path
+    # ------------------------------------------------------------------ #
+    sched_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    print(f"Reading schedules.json from: {sched_path}")
+
     try:
         with open(sched_path, 'r') as f:
-            data = json.load(f)['next_schedule']
-        target_date = data['date']  # "29/10/2025" → we convert
-        target_time_12h = data['time_12hour']  # "07:00 AM"
+            data = json.load(f)
+        next_schedule = data.get('next_schedule')
+        if not next_schedule:
+            raise ValueError("Missing 'next_schedule' in JSON")
+        target_date = next_schedule['date']  # e.g., "29/10/2025" (dd/mm/yyyy)
+        target_time_12h = next_schedule['time_12hour']  # e.g., "07:00 AM"
         if not all([target_date, target_time_12h]):
-            raise ValueError("Missing fields in schedules.json")
+            raise ValueError("Missing date or time_12hour in next_schedule")
     except Exception as e:
         print(f"Failed to read {sched_path}: {e}")
         return
+
     # ------------------------------------------------------------------ #
-    # 2. Parse JSON times
+    # 3. Parse JSON time
     # ------------------------------------------------------------------ #
     m12 = re.match(r"(\d{1,2}):(\d{2})\s*(AM|PM)", target_time_12h, re.I)
     if not m12:
-        print("Invalid time format in JSON")
+        print(f"Invalid time format in JSON: '{target_time_12h}'")
         return
     hour_12, minute_12, period = m12.groups()
+    period = period.upper()
     print(f"Target → {target_date} {target_time_12h}")
+
     # ------------------------------------------------------------------ #
-    # 3. Convert dd/mm/yyyy → mm/dd/yyyy (UI format)
+    # 4. Convert dd/mm/yyyy → mm/dd/yyyy (UI format)
     # ------------------------------------------------------------------ #
     def ui_date_mmddyyyy(ddmmyyyy: str) -> str:
         d, m, y = ddmmyyyy.split('/')
-        return f"{m.zfill(2)}/{d.zfill(2)}/{y}"  # e.g. 10/29/2025
+        return f"{m.zfill(2)}/{d.zfill(2)}/{y}"  # e.g., "10/29/2025"
+
     ui_target_date = ui_date_mmddyyyy(target_date)
     print(f"UI date string → '{ui_target_date}'")
+
     # ------------------------------------------------------------------ #
-    # 4. Wait for panel
+    # 5. Wait for schedule panel
     # ------------------------------------------------------------------ #
     try:
         WebDriverWait(driver, 15).until(
@@ -3366,8 +3383,9 @@ def set_webschedule_v2():
     except Exception as e:
         print(f"Panel not found: {e}")
         return
+
     # ------------------------------------------------------------------ #
-    # 5. Locate ONLY the 4 inputs we need
+    # 6. Locate the 4 required inputs
     # ------------------------------------------------------------------ #
     date_input = hour_input = minute_input = meridiem_input = None
     inputs = WebDriverWait(driver, 15).until(
@@ -3389,25 +3407,29 @@ def set_webschedule_v2():
         elif al == "meridiem":
             meridiem_input = el
             print(f"Meridiem input [{idx}]: aria-label='meridiem'")
+
     if not (date_input and hour_input and minute_input and meridiem_input):
         missing = [n for n, v in [("date", date_input), ("hour", hour_input),
                                   ("minute", minute_input), ("meridiem", meridiem_input)] if not v]
         print(f"Missing inputs: {', '.join(missing)}")
         return
+
     # ------------------------------------------------------------------ #
-    # 6. Read current UI date only (skip OCR)
+    # 7. Read current UI date only
     # ------------------------------------------------------------------ #
     current_date = (date_input.get_attribute("value") or "").strip()
     print(f"Current UI date → '{current_date}'")
+
     # ------------------------------------------------------------------ #
-    # 7. Skip if date already correct
+    # 8. Skip if date already correct
     # ------------------------------------------------------------------ #
     if current_date == ui_target_date:
         print("Date already correct – marking as set.")
         set_webschedule_v2.has_set = True
         return
+
     # ------------------------------------------------------------------ #
-    # 8. SET DATE
+    # 9. SET DATE
     # ------------------------------------------------------------------ #
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", date_input)
@@ -3427,8 +3449,9 @@ def set_webschedule_v2():
             return
         print(f"Error setting date: {e}")
         return
+
     # ------------------------------------------------------------------ #
-    # 9. SET TIME (always, since no verification)
+    # 10. SET TIME (always)
     # ------------------------------------------------------------------ #
     # Hour
     try:
@@ -3447,6 +3470,7 @@ def set_webschedule_v2():
             return
         print(f"Error setting hour: {e}")
         return
+
     # Minute
     try:
         minute_input.click()
@@ -3464,12 +3488,13 @@ def set_webschedule_v2():
             return
         print(f"Error setting minute: {e}")
         return
+
     # Meridiem
     try:
         meridiem_input.click()
         time.sleep(0.2)
-        ActionChains(driver).send_keys(period.upper()).send_keys(Keys.ENTER).perform()
-        print(f"Meridiem set → {period.upper()}")
+        ActionChains(driver).send_keys(period).send_keys(Keys.ENTER).perform()
+        print(f"Meridiem set → {period}")
         time.sleep(0.5)
     except Exception as e:
         if "intercepted" in str(e).lower():
@@ -3481,10 +3506,10 @@ def set_webschedule_v2():
         return
 
     # ------------------------------------------------------------------ #
-    # DONE: No verification — write = success
+    # DONE: Write = success → mark as set + trigger button
     # ------------------------------------------------------------------ #
-    print("Schedule write completed –success!")
-    set_webschedule_v2.has_set = True  # MARK AS DONE
+    print("Schedule write completed – success!")
+    set_webschedule_v2.has_set = True
     click_schedule_button()
 
 
