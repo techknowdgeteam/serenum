@@ -223,7 +223,6 @@ def launch_profile():
                     set_custom_schedule_date()
                     update_calendar()
                     toggleaddphoto()
-                    time.sleep(12393)
                     manage_group_switch()
                     resetgroupswitchandscheduledate()
                     selectgroups()
