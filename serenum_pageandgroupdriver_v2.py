@@ -42,14 +42,23 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\serenum\pytesseract\tessdata"
 
 
+import os
+import time
+import psutil
+import shutil
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+
 def initialize_driver(mode="headed"):
-    """Initialize the Chrome WebDriver."""
+    """Initialize Chrome WebDriver using a specific local profile (safe copy, offline)."""
     global driver, wait
     print("Closing existing Chrome instances...")
     closed_any = False
     for proc in psutil.process_iter(['name']):
         try:
-            if proc.info['name'].lower() in ['chrome', 'chrome.exe', 'chromedriver', 'chromedriver.exe']:
+            if proc.info['name'] and proc.info['name'].lower() in ['chrome', 'chrome.exe', 'chromedriver', 'chromedriver.exe']:
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)
@@ -58,33 +67,54 @@ def initialize_driver(mode="headed"):
                 closed_any = True
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    
+
     if closed_any:
         print("Closed Chrome process(es)")
     time.sleep(1)
 
-    user_data_dir = os.path.expanduser("~/.chrome-user-data")
-    profile_directory = "Default"
+    # --- Local Chrome paths ---
+    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    driver_path = r"C:\Program Files\Google\Chrome\Application\chromedriver.exe"
 
+    if not os.path.exists(chrome_path):
+        raise FileNotFoundError(f"Chrome not found at: {chrome_path}")
+    if not os.path.exists(driver_path):
+        raise FileNotFoundError(f"ChromeDriver not found at: {driver_path}")
+
+    # --- Define source & Selenium profile directories ---
+    real_user_data = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+    source_profile = os.path.join(real_user_data, "Profile 1")  # <<< change if you use "Default" or another name
+    selenium_profile = os.path.expanduser(r"~\.chrome_selenium_profile")
+
+    # Create a copy of the profile if not exists
+    if not os.path.exists(selenium_profile):
+        print("Creating Selenium Chrome profile...")
+        shutil.copytree(source_profile, selenium_profile, dirs_exist_ok=True)
+    else:
+        print("Using existing Selenium profile...")
+
+    # --- Chrome Options ---
     chrome_options = Options()
+    chrome_options.binary_location = chrome_path
+    chrome_options.add_argument(f"--user-data-dir={selenium_profile}")
+    chrome_options.add_argument("--profile-directory=Default")  # always "Default" inside that copied folder
+
     if mode == "headless":
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
     else:
         chrome_options.add_argument("--start-maximized")
-    
-    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-    chrome_options.add_argument(f"--profile-directory={profile_directory}")
+
     chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=chrome_options
-    )
-    
+    # --- Start local driver ---
+    service = Service(driver_path)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     wait = WebDriverWait(driver, 15)
+    print("✅ ChromeDriver initialized successfully with targeted profile (offline mode).")
     return driver, wait
+
 
 
 def load_urls():
@@ -192,6 +222,7 @@ def launch_profile():
                     markjpgs()
                     set_custom_schedule_date()
                     update_calendar()
+                    toggleaddphoto()
                     time.sleep(12393)
                     manage_group_switch()
                     resetgroupswitchandscheduledate()
