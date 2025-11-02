@@ -278,249 +278,75 @@ def reset_trackers():
     
 def manage_group_switch():
     """
-    Manages the group selection history in uploadgroups.json and schedules in {type}schedules.json
-    based on the group_switch and schedule_date fields in pageandgroupauthors.json.
-    - If group_switch is 'switch', moves current_selected groups to last_selected and clears current_selected.
-    - If group_switch is 'no', clears last_selected data.
-    - If schedule_date is 'resumetocurrentdate', transfers data from {type}schedules.json to {type}schedulesrecords.json (appending, not overwriting) if it has actual records, clears {type}schedules.json by writing {}, then calls update_timeschedule().
-    - If schedule_date is 'continuefromlastdate', clears {type}schedules.json and retrieves the most recent schedule from {type}schedulesrecords.json to write to {type}schedules.json.
-    - If schedule_date is 'none' or invalid, skips schedule-related operations.
+    Handles **only** group switching:
+      • switch → move current_selected → last_selected, clear current_selected
+      • no     → clear last_selected
     """
-    # JSON file paths
-    config_json_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    upload_json_path = r"C:\xampp\htdocs\serenum\files\groups\uploadgroups.json"
+    import os, json
 
-    # Read pageandgroupauthors.json to get group_switch, author, and schedule_date
-    group_switch = 'no'
-    author = None
-    schedule_date = 'none'
-    type_value = None
-    if os.path.exists(config_json_path) and os.path.getsize(config_json_path) > 0:
+    cfg_path   = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    upload_path = r"C:\xampp\htdocs\serenum\files\groups\uploadgroups.json"
+
+    # ---------- read config ----------
+    group_switch = "no"
+    if os.path.exists(cfg_path) and os.path.getsize(cfg_path):
         try:
-            with open(config_json_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                group_switch = config_data.get('group_switch', 'no').lower()
-                author = config_data.get('author', None)
-                schedule_date = config_data.get('schedule_date', 'none').lower()
-                type_value = config_data.get('type', None)
-                print(f"Read from {config_json_path}: group_switch={group_switch}, author={author}, schedule_date={schedule_date}, type={type_value}")
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            group_switch = cfg.get("group_switch", "no").lower()
         except Exception as e:
-            print(f"Error reading JSON file {config_json_path}: {str(e)}")
-            group_switch = 'no'
-            schedule_date = 'none'
-            print("Defaulting group_switch to 'no' and schedule_date to 'none' due to error.")
-    else:
-        print(f"JSON file {config_json_path} does not exist or is empty. Defaulting group_switch to 'no' and schedule_date to 'none'.")
+            print(f"[group] config read error: {e}")
 
-    # Validate group_switch and schedule_date values
-    if group_switch not in ['switch', 'no']:
-        print(f"Invalid group_switch value: '{group_switch}'. Defaulting to 'no'.")
-        group_switch = 'no'
-    if schedule_date not in ['resumetocurrentdate', 'continuefromlastdate', 'none']:
-        print(f"Invalid schedule_date value: '{schedule_date}'. Defaulting to 'none'.")
-        schedule_date = 'none'
-    if not author or not type_value:
-        print(f"Error: 'author' or 'type' missing in {config_json_path}. Cannot proceed with schedule management.")
-        return False
+    if group_switch not in ("switch", "no"):
+        group_switch = "no"
 
-    # Paths for schedules.json and schedulesrecords.json
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
-    schedules_records_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedulesrecords.json"
-    print(f"Schedules path: {schedules_path}")
-    print(f"Schedules records path: {schedules_records_path}")
-
-    # Handle schedule_date logic
-    if schedule_date == 'none':
-        print(f"schedule_date is 'none'. Skipping schedule-related operations.")
-    elif schedule_date == 'resumetocurrentdate':
-        print(f"schedule_date is 'resumetocurrentdate'. Processing {schedules_path}.")
-        # Check if schedules.json exists and has data to transfer
-        schedules_data = {}
-        schedules_has_data = False
-        if os.path.exists(schedules_path) and os.path.getsize(schedules_path) > 0:
-            try:
-                with open(schedules_path, 'r', encoding='utf-8') as f:
-                    schedules_data = json.load(f)
-                    # Check if schedules_data has actual records (not just {})
-                    if schedules_data and (schedules_data.get('last_schedule') or schedules_data.get('next_schedule')):
-                        schedules_has_data = True
-                        print(f"Read schedules.json: {schedules_data}")
-                    else:
-                        print(f"{schedules_path} contains no actual records: {schedules_data}")
-            except Exception as e:
-                print(f"Error reading {schedules_path}: {str(e)}")
-                schedules_data = {}
-        
-        if schedules_has_data:
-            # Read existing schedulesrecords.json
-            records_data = []
-            if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path) > 0:
-                try:
-                    with open(schedules_records_path, 'r', encoding='utf-8') as f:
-                        records_data = json.load(f)
-                        if not isinstance(records_data, list):
-                            print(f"Error: {schedules_records_path} is not a list. Initializing as empty list.")
-                            records_data = []
-                except Exception as e:
-                    print(f"Error reading {schedules_records_path}: {str(e)}")
-                    records_data = []
-            
-            # Check for duplicates by comparing schedules_data with each record in records_data
-            is_duplicate = False
-            for record in records_data:
-                if record == schedules_data:  # Deep comparison of JSON objects
-                    is_duplicate = True
-                    print(f"Duplicate found in {schedules_records_path}: {schedules_data}. Skipping append.")
-                    break
-            
-            if not is_duplicate:
-                # Append schedules_data to records_data
-                records_data.append(schedules_data)
-                print(f"Appending to schedulesrecords.json: {schedules_data}")
-                
-                # Write to schedulesrecords.json
-                try:
-                    os.makedirs(os.path.dirname(schedules_records_path), exist_ok=True)
-                    with open(schedules_records_path, 'w', encoding='utf-8') as f:
-                        json.dump(records_data, f, indent=4)
-                    print(f"Successfully appended data to {schedules_records_path}")
-                except Exception as e:
-                    print(f"Error writing to {schedules_records_path}: {str(e)}")
-                    return False
-            else:
-                print(f"Skipping write to {schedules_records_path} due to duplicate record.")
-        
-        # Clear schedules.json by writing an empty dictionary
-        try:
-            os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
-            with open(schedules_path, 'w', encoding='utf-8') as f:
-                json.dump({}, f, indent=4)
-            print(f"Successfully cleared {schedules_path}")
-        except Exception as e:
-            print(f"Error clearing {schedules_path}: {str(e)}")
-            return False
-        
-        # Call update_timeschedule (ensure this function is defined)
-        print("Calling update_timeschedule()")
-        try:
-            update_timeschedule()  # Ensure this function exists
-        except NameError:
-            print("Error: update_timeschedule() is not defined. Please define this function.")
-            return False
-    
-    elif schedule_date == 'continuefromlastdate':
-        print(f"schedule_date is 'continuefromlastdate'. Clearing {schedules_path} and restoring most recent data from {schedules_records_path}.")
-        
-        # Clear schedules.json by writing an empty dictionary
-        try:
-            os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
-            with open(schedules_path, 'w', encoding='utf-8') as f:
-                json.dump({}, f, indent=4)
-            print(f"Successfully cleared {schedules_path}")
-        except Exception as e:
-            print(f"Error clearing {schedules_path}: {str(e)}")
-            return False
-        
-        # Read schedulesrecords.json
-        records_data = []
-        if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path) > 0:
-            try:
-                with open(schedules_records_path, 'r', encoding='utf-8') as f:
-                    records_data = json.load(f)
-                    if not isinstance(records_data, list):
-                        print(f"Error: {schedules_records_path} is not a list. Cannot restore data.")
-                        return False
-            except Exception as e:
-                print(f"Error reading {schedules_records_path}: {str(e)}")
-                return False
-            
-            if records_data:
-                # Find the most recent schedule based on next_schedule date
-                most_recent_schedule = None
-                latest_date = None
-                for record in records_data:
-                    next_schedule = record.get('next_schedule', {})
-                    if next_schedule and 'date' in next_schedule:
-                        try:
-                            record_date = datetime.strptime(next_schedule['date'], "%d/%m/%Y")
-                            if latest_date is None or record_date > latest_date:
-                                latest_date = record_date
-                                most_recent_schedule = record
-                        except ValueError:
-                            print(f"Invalid date format in record: {next_schedule.get('date')}")
-                            continue
-                
-                if most_recent_schedule:
-                    # Write the most recent schedule to schedules.json
-                    try:
-                        with open(schedules_path, 'w', encoding='utf-8') as f:
-                            json.dump(most_recent_schedule, f, indent=4)
-                        print(f"Successfully restored most recent schedule to {schedules_path}: {most_recent_schedule}")
-                    except Exception as e:
-                        print(f"Error writing to {schedules_path}: {str(e)}")
-                        return False
-                else:
-                    print(f"No valid records with next_schedule found in {schedules_records_path}. {schedules_path} remains empty.")
-            else:
-                print(f"{schedules_records_path} is empty. No data to restore. {schedules_path} remains empty.")
-                update_calendar_free()
-        else:
-            print(f"{schedules_records_path} does not exist or is empty. No data to restore. {schedules_path} remains empty.")
-            update_calendar_free()
-
-    # Handle group_switch logic for uploadgroups.json
-    json_exists = os.path.exists(upload_json_path) and os.path.getsize(upload_json_path) > 0
-    upload_data = {
+    # ---------- read / init uploadgroups ----------
+    default = {
         "groups_selected": {
             "last_selected": [],
             "current_selected": {"1st": "", "2nd": "", "3rd": ""},
             "status": "no groups selected"
         }
     }
-    
-    if json_exists:
+
+    data = default
+    if os.path.exists(upload_path) and os.path.getsize(upload_path):
         try:
-            with open(upload_json_path, 'r', encoding='utf-8') as f:
-                upload_data = json.load(f)
-                print(f"Read uploadgroups.json: {upload_data}")
+            with open(upload_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
         except Exception as e:
-            print(f"Error reading JSON file {upload_json_path}: {str(e)}")
-            print("Using default upload_data structure due to error.")
+            print(f"[group] uploadgroups read error: {e}")
 
-    # Extract current_selected groups
-    current_selected = [
-        upload_data.get('groups_selected', {}).get('current_selected', {}).get('1st', ''),
-        upload_data.get('groups_selected', {}).get('current_selected', {}).get('2nd', ''),
-        upload_data.get('groups_selected', {}).get('current_selected', {}).get('3rd', '')
+    cur = [
+        data.get("groups_selected", {}).get("current_selected", {}).get("1st", ""),
+        data.get("groups_selected", {}).get("current_selected", {}).get("2nd", ""),
+        data.get("groups_selected", {}).get("current_selected", {}).get("3rd", "")
     ]
-    current_selected = [name for name in current_selected if name]  # Filter out empty strings
-    print(f"Current selected groups: {current_selected}")
+    cur = [x for x in cur if x]
 
-    # Handle group_switch logic
-    if group_switch == 'switch':
-        print("group_switch is 'switch'. Moving current_selected to last_selected and clearing current_selected.")
-        last_selected = upload_data.get('groups_selected', {}).get('last_selected', [])
-        last_selected = list(set(last_selected + current_selected))  # Merge and remove duplicates
-        upload_data['groups_selected']['last_selected'] = last_selected
-        upload_data['groups_selected']['current_selected'] = {"1st": "", "2nd": "", "3rd": ""}
-        print(f"Updated last_selected: {last_selected}")
-        print("Cleared current_selected.")
-    else:  # group_switch == 'no'
-        print("group_switch is 'no'. Clearing last_selected.")
-        upload_data['groups_selected']['last_selected'] = []
-        print("last_selected cleared.")
+    # ---------- apply switch ----------
+    if group_switch == "switch":
+        last = data.get("groups_selected", {}).get("last_selected", [])
+        last = list(set(last + cur))
+        data["groups_selected"]["last_selected"] = last
+        data["groups_selected"]["current_selected"] = {"1st": "", "2nd": "", "3rd": ""}
+        print(f"[group] switched → last_selected = {last}")
+    else:
+        data["groups_selected"]["last_selected"] = []
+        print("[group] cleared last_selected")
 
-    # Write updated data back to uploadgroups.json
+    # ---------- write back ----------
+    os.makedirs(os.path.dirname(upload_path), exist_ok=True)
     try:
-        os.makedirs(os.path.dirname(upload_json_path), exist_ok=True)
-        with open(upload_json_path, 'w', encoding='utf-8') as f:
-            json.dump(upload_data, f, indent=4)
-        print(f"Successfully updated {upload_json_path} with group_switch action: {group_switch}")
+        with open(upload_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        print("[group] uploadgroups.json updated")
         return True
     except Exception as e:
-        print(f"Error writing to JSON file {upload_json_path}: {str(e)}")
+        print(f"[group] write error: {e}")
         return False
-
+  
+  
 def resetgroupswitchandscheduledate():
     """
     Resets the group_switch to 'no' and schedule_date to 'none' in pageandgroupauthors.json.
@@ -1596,7 +1422,8 @@ def update_calendar_free():
     
     author = pageauthors['author']
     type_value = pageauthors['type']
-    print(f"Author: {author}, Type: {type_value}")
+    group_types = pageauthors['group_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
     
     # Read timeorders.json
     timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
@@ -1706,7 +1533,7 @@ def update_calendar_free():
                                             "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
                                             "12hours": t["12hours"],
                                             "24hours": t["24hours"],
-                                            "minutes_distance": int((
+                                            "minutes_DISTANCE": int((
                                                 datetime.strptime(
                                                     f"{day:02d}/{next_month:02d}/{next_year} {t['24hours']}",
                                                     "%d/%m/%Y %H:%M"
@@ -1724,8 +1551,8 @@ def update_calendar_free():
         ]
     }
     
-    # Define output path with author and type
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}calendar.json"
+    # Define output path with author, group_types, and type
+    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
     print(f"Writing calendar data to {output_path}")
     
     # Ensure directory exists
@@ -1738,7 +1565,203 @@ def update_calendar_free():
     
     # Call schedule_time
     update_timeschedule()
+def set_custom_schedule_date():
+    """
+    Handles **all** schedule_date actions:
+      • custom date (dd/mm/yyyy) → next_schedule = that date 00:00
+      • resumetocurrentdate   → archive current schedule, clear schedules.json, call update_timeschedule()
+      • continuefromlastdate  → restore most recent record from schedulesrecords.json
+      • none / invalid        → do nothing
+    """
+    import os, json
+    from datetime import datetime
 
+    # ------------------------------------------------------------------ #
+    # 1. Load config
+    # ------------------------------------------------------------------ #
+    cfg_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    if not os.path.exists(cfg_path):
+        print("[schedule] config not found")
+        return
+
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        print(f"[schedule] error reading config: {e}")
+        return
+
+    author       = cfg.get("author")
+    typ          = cfg.get("type")
+    group_types  = cfg.get("group_types", "")
+    schedule_raw = cfg.get("schedule_date", "none").strip().lower()
+
+    if not author or not typ:
+        print("[schedule] missing author or type")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 2. Paths (updated to new structure)
+    # ------------------------------------------------------------------ #
+    base_dir = fr"C:\xampp\htdocs\serenum\files\next jpg\{author}\jsons\{group_types}"
+    schedules_path       = os.path.join(base_dir, f"{typ}schedules.json")
+    schedules_records_path = os.path.join(base_dir, f"{typ}schedulesrecords.json")
+
+    # ------------------------------------------------------------------ #
+    # 3. CUSTOM DATE
+    # ------------------------------------------------------------------ #
+    if schedule_raw not in ("none", "resumetocurrentdate", "continuefromlastdate"):
+        try:
+            custom_dt = datetime.strptime(schedule_raw, "%d/%m/%Y")
+        except ValueError:
+            print(f"[schedule] invalid custom date '{schedule_raw}' – use dd/mm/yyyy")
+            return
+
+        # preserve old next_schedule as last_schedule
+        last_sched = None
+        if os.path.exists(schedules_path) and os.path.getsize(schedules_path):
+            try:
+                with open(schedules_path, "r", encoding="utf-8") as f:
+                    old = json.load(f)
+                last_sched = old.get("next_schedule")
+            except Exception:
+                pass
+
+        next_sched = {
+            "id":           f"{custom_dt.day:02d}_0000",
+            "date":         custom_dt.strftime("%d/%m/%Y"),
+            "time_12hour":  "12:00 am",
+            "time_24hour":  "00:00"
+        }
+
+        new_data = {"last_schedule": last_sched, "next_schedule": next_sched}
+        os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
+        with open(schedules_path, "w", encoding="utf-8") as f:
+            json.dump(new_data, f, indent=4)
+
+        print(f"[schedule] custom start written → {next_sched['date']} 00:00")
+
+        # reset field so it does not fire again
+        cfg["schedule_date"] = "none"
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+        return
+
+    # ------------------------------------------------------------------ #
+    # 4. RESUME TO CURRENT DATE
+    # ------------------------------------------------------------------ #
+    if schedule_raw == "resumetocurrentdate":
+        print("[schedule] resumetocurrentdate")
+
+        # read current schedules
+        cur = {}
+        if os.path.exists(schedules_path) and os.path.getsize(schedules_path):
+            try:
+                with open(schedules_path, "r", encoding="utf-8") as f:
+                    cur = json.load(f)
+            except Exception as e:
+                print(f"[schedule] read error: {e}")
+
+        has_data = cur and (cur.get("last_schedule") or cur.get("next_schedule"))
+
+        if has_data:
+            # load / create records list
+            recs = []
+            if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path):
+                try:
+                    with open(schedules_records_path, "r", encoding="utf-8") as f:
+                        recs = json.load(f)
+                        if not isinstance(recs, list):
+                            recs = []
+                except Exception:
+                    recs = []
+
+            # avoid duplicate
+            if cur not in recs:
+                recs.append(cur)
+                os.makedirs(os.path.dirname(schedules_records_path), exist_ok=True)
+                with open(schedules_records_path, "w", encoding="utf-8") as f:
+                    json.dump(recs, f, indent=4)
+                print("[schedule] archived current schedule")
+
+        # clear schedules.json
+        os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
+        with open(schedules_path, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4)
+
+        # reset flag & continue
+        cfg["schedule_date"] = "none"
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+
+        try:
+            update_timeschedule()
+        except NameError:
+            print("[schedule] update_timeschedule not defined")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 5. CONTINUE FROM LAST DATE
+    # ------------------------------------------------------------------ #
+    if schedule_raw == "continuefromlastdate":
+        print("[schedule] continuefromlastdate")
+
+        # clear current schedules
+        os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
+        with open(schedules_path, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4)
+
+        # read records
+        recs = []
+        if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path):
+            try:
+                with open(schedules_records_path, "r", encoding="utf-8") as f:
+                    recs = json.load(f)
+                    if not isinstance(recs, list):
+                        recs = []
+            except Exception:
+                recs = []
+
+        if not recs:
+            print("[schedule] no records to restore")
+            cfg["schedule_date"] = "none"
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4)
+            update_calendar_free()
+            return
+
+        # pick most recent by next_schedule date
+        latest = None
+        latest_dt = None
+        for r in recs:
+            ns = r.get("next_schedule", {})
+            if not ns or "date" not in ns:
+                continue
+            try:
+                dt = datetime.strptime(ns["date"], "%d/%m/%Y")
+                if latest_dt is None or dt > latest_dt:
+                    latest_dt = dt
+                    latest = r
+            except ValueError:
+                continue
+
+        if latest:
+            with open(schedules_path, "w", encoding="utf-8") as f:
+                json.dump(latest, f, indent=4)
+            print(f"[schedule] restored latest schedule: {latest.get('next_schedule')}")
+        else:
+            print("[schedule] no valid next_schedule in records")
+
+        cfg["schedule_date"] = "none"
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+        return
+
+    # ------------------------------------------------------------------ #
+    # 6. NONE / default
+    # ------------------------------------------------------------------ #
+    print("[schedule] schedule_date = 'none' – nothing to do")
+    
 def update_calendar():
     """Update the calendar and write to JSON, conditional on driverprogress.json status."""
     check_schedule_time()
@@ -1787,7 +1810,8 @@ def update_calendar():
     
     author = pageauthors['author']
     type_value = pageauthors['type']
-    print(f"Author: {author}, Type: {type_value}")
+    group_types = pageauthors['group_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
     
     # Read timeorders.json
     timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
@@ -1915,8 +1939,8 @@ def update_calendar():
         ]
     }
     
-    # Define output path with author and type
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}calendar.json"
+    # Define output path with author, group_types, and type
+    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
     print(f"Writing calendar data to {output_path}")
     
     # Ensure directory exists
@@ -1942,7 +1966,7 @@ def update_timeschedule():
     
     print(f"Current date and time: {current_date} {current_time_12hour} ({current_time_24hour})")
     
-    # Read pageandgroupauthors.json to get author and type
+    # Read pageandgroupauthors.json to get author, type, and group_types
     pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
     print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
     try:
@@ -1957,10 +1981,11 @@ def update_timeschedule():
     
     author = pageauthors['author']
     type_value = pageauthors['type']
-    print(f"Author: {author}, Type: {type_value}")
+    group_types = pageauthors['group_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
     
-    # Read calendar.json based on author and type
-    calendar_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}calendar.json"
+    # Read calendar.json based on new path structure
+    calendar_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
     print(f"Reading calendar.json from {calendar_path}")
     try:
         with open(calendar_path, 'r') as f:
@@ -1973,7 +1998,7 @@ def update_timeschedule():
         return
     
     # Read existing schedules.json to get the last recorded slot and previous next_schedule
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
     last_schedule = None
     previous_next_schedule = None
     if os.path.exists(schedules_path):
@@ -2148,12 +2173,12 @@ def update_timeschedule():
     
     # Prepare the output JSON with last_schedule set to previous next_schedule
     output_data = {
-        "last_schedule": previous_next_schedule if previous_next_schedule else last_schedule,  # Use previous next_schedule
-        "next_schedule": next_slot  # Update to the new next_slot
+        "last_schedule": previous_next_schedule if previous_next_schedule else last_schedule,
+        "next_schedule": next_slot
     }
     
     # Write the new data to schedules.json
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
+    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
     print(f"Writing to schedules.json at {output_path}")
     
     # Ensure directory exists
@@ -2173,7 +2198,7 @@ def check_schedule_time():
     
     print(f"Current date and time: {current_date} {current_time_24hour}")
     
-    # Read pageandgroupauthors.json to get author and type
+    # Read pageandgroupauthors.json to get author, type, and group_types
     pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
     print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
     try:
@@ -2188,10 +2213,11 @@ def check_schedule_time():
     
     author = pageauthors['author']
     type_value = pageauthors['type']
-    print(f"Author: {author}, Type: {type_value}")
+    group_types = pageauthors['group_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
     
-    # Read schedules.json based on author and type
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\jsons\\{type_value}schedules.json"
+    # Read schedules.json based on new path structure
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
     print(f"Reading schedules.json from {schedules_path}")
     if not os.path.exists(schedules_path):
         print(f"Error: schedules.json not found at {schedules_path}")
@@ -3584,6 +3610,7 @@ def main():
 if __name__ == "__main__":
    main()
    
+
 
 
 
