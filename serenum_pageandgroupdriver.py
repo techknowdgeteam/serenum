@@ -190,6 +190,7 @@ def launch_profile():
                     print(f"Recheck confirmed: URL is {uploadpost_url}. Proceeding to write caption, toggle schedule, interact with media, and select file.")
                     print("checking add photo")
                     markjpgs()
+                    set_custom_schedule_date()
                     update_calendar()
                     #manage_group_switch()
                     resetgroupswitchandscheduledate()
@@ -2005,7 +2006,7 @@ def update_calendar():
     # Call schedule_time
     update_timeschedule()
 def update_timeschedule():
-    set_custom_schedule_date()
+   
     """Determine the next schedule time and write to schedules.json."""
     # Get current date and time
     now = datetime.now()
@@ -3787,7 +3788,7 @@ def main():
 
 
 if __name__ == "__main__":
-   update_timeschedule()
+   main()
    
 
 
