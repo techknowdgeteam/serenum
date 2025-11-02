@@ -1567,13 +1567,14 @@ def update_calendar_free():
 def set_custom_schedule_date():
     """
     Handles **all** schedule_date actions:
-      • custom date (dd/mm/yyyy) → next_schedule = that date 00:00
+      • custom date + time (dd/mm/yyyy hh:mm or hh:mm AM/PM) → next_schedule = that datetime
       • resumetocurrentdate   → archive current schedule, clear schedules.json, call update_timeschedule()
       • continuefromlastdate  → restore most recent record from schedulesrecords.json
       • none / invalid        → do nothing
     """
     import os, json
     from datetime import datetime
+    import re
 
     # ------------------------------------------------------------------ #
     # 1. Load config
@@ -1593,30 +1594,70 @@ def set_custom_schedule_date():
     author       = cfg.get("author")
     typ          = cfg.get("type")
     group_types  = cfg.get("group_types", "")
-    schedule_raw = cfg.get("schedule_date", "none").strip().lower()
+    schedule_raw = cfg.get("schedule_date", "none").strip()
 
     if not author or not typ:
         print("[schedule] missing author or type")
         return
 
     # ------------------------------------------------------------------ #
-    # 2. Paths (updated to new structure)
+    # 2. Paths
     # ------------------------------------------------------------------ #
     base_dir = fr"C:\xampp\htdocs\serenum\files\next jpg\{author}\jsons\{group_types}"
     schedules_path       = os.path.join(base_dir, f"{typ}schedules.json")
     schedules_records_path = os.path.join(base_dir, f"{typ}schedulesrecords.json")
 
     # ------------------------------------------------------------------ #
-    # 3. CUSTOM DATE
+    # 3. Helper: Parse datetime from flexible input
     # ------------------------------------------------------------------ #
-    if schedule_raw not in ("none", "resumetocurrentdate", "continuefromlastdate"):
-        try:
-            custom_dt = datetime.strptime(schedule_raw, "%d/%m/%Y")
-        except ValueError:
-            print(f"[schedule] invalid custom date '{schedule_raw}' – use dd/mm/yyyy")
-            return
+    def parse_custom_datetime(input_str):
+        input_str = input_str.strip()
+        if not input_str or input_str.lower() in ("none", "resumetocurrentdate", "continuefromlastdate"):
+            return None
 
-        # preserve old next_schedule as last_schedule
+        # Regex patterns
+        pattern_24 = r'^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}):(\d{2})$'  # dd/mm/yyyy hh:mm
+        pattern_12 = r'^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$'  # with AM/PM
+        pattern_12_spaced = r'^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}):(\d{2})\s+(AM|PM)$'  # extra space
+
+        match = None
+        for pattern in [pattern_24, pattern_12, pattern_12_spaced]:
+            match = re.match(pattern, input_str, re.IGNORECASE)
+            if match:
+                break
+
+        if not match:
+            return None
+
+        date_part = match.group(1)
+        try:
+            dt = datetime.strptime(date_part, "%d/%m/%Y")
+        except ValueError:
+            return None
+
+        if len(match.groups()) == 3:  # 24-hour format
+            hh, mm = int(match.group(2)), int(match.group(3))
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                return None
+            dt = dt.replace(hour=hh, minute=mm)
+        else:  # 12-hour format
+            hh, mm, ampm = int(match.group(2)), int(match.group(3)), match.group(4).upper()
+            if not (1 <= hh <= 12 and 0 <= mm <= 59):
+                return None
+            if hh == 12:
+                hh = 0 if ampm == 'AM' else 12
+            else:
+                hh = hh if ampm == 'AM' else hh + 12
+            dt = dt.replace(hour=hh, minute=mm)
+
+        return dt
+
+    # ------------------------------------------------------------------ #
+    # 4. CUSTOM DATE + TIME
+    # ------------------------------------------------------------------ #
+    parsed_dt = parse_custom_datetime(schedule_raw)
+    if parsed_dt:
+        # Preserve old next_schedule as last_schedule
         last_sched = None
         if os.path.exists(schedules_path) and os.path.getsize(schedules_path):
             try:
@@ -1626,11 +1667,23 @@ def set_custom_schedule_date():
             except Exception:
                 pass
 
+        # Format times
+        date_str = parsed_dt.strftime("%d/%m/%Y")
+        time_24 = parsed_dt.strftime("%H:%M")
+        time_12 = parsed_dt.strftime("%I:%M %p").lstrip("0").replace(" 0", " ").lower()
+        # Fix: "12:05 am" → "12:05 am", "01:05 pm" → "1:05 pm"
+        if time_12.startswith("0"):
+            time_12 = time_12[1:]
+        time_12 = time_12.replace("am", "AM").replace("pm", "PM")  # standardize
+
+        hour_24 = int(time_24.split(":")[0])
+        id_str = f"{parsed_dt.day:02d}_{hour_24:02d}00"
+
         next_sched = {
-            "id":           f"{custom_dt.day:02d}_0000",
-            "date":         custom_dt.strftime("%d/%m/%Y"),
-            "time_12hour":  "12:00 am",
-            "time_24hour":  "00:00"
+            "id":           id_str,
+            "date":         date_str,
+            "time_12hour":  time_12,
+            "time_24hour":  time_24
         }
 
         new_data = {"last_schedule": last_sched, "next_schedule": next_sched}
@@ -1638,21 +1691,20 @@ def set_custom_schedule_date():
         with open(schedules_path, "w", encoding="utf-8") as f:
             json.dump(new_data, f, indent=4)
 
-        print(f"[schedule] custom start written → {next_sched['date']} 00:00")
+        print(f"[schedule] custom datetime written → {date_str} {time_24}")
 
-        # reset field so it does not fire again
+        # Reset config
         cfg["schedule_date"] = "none"
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)
         return
 
     # ------------------------------------------------------------------ #
-    # 4. RESUME TO CURRENT DATE
+    # 5. RESUME TO CURRENT DATE
     # ------------------------------------------------------------------ #
-    if schedule_raw == "resumetocurrentdate":
+    if schedule_raw.lower() == "resumetocurrentdate":
         print("[schedule] resumetocurrentdate")
 
-        # read current schedules
         cur = {}
         if os.path.exists(schedules_path) and os.path.getsize(schedules_path):
             try:
@@ -1664,7 +1716,6 @@ def set_custom_schedule_date():
         has_data = cur and (cur.get("last_schedule") or cur.get("next_schedule"))
 
         if has_data:
-            # load / create records list
             recs = []
             if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path):
                 try:
@@ -1675,7 +1726,6 @@ def set_custom_schedule_date():
                 except Exception:
                     recs = []
 
-            # avoid duplicate
             if cur not in recs:
                 recs.append(cur)
                 os.makedirs(os.path.dirname(schedules_records_path), exist_ok=True)
@@ -1683,12 +1733,10 @@ def set_custom_schedule_date():
                     json.dump(recs, f, indent=4)
                 print("[schedule] archived current schedule")
 
-        # clear schedules.json
         os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
         with open(schedules_path, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=4)
 
-        # reset flag & continue
         cfg["schedule_date"] = "none"
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)
@@ -1700,17 +1748,15 @@ def set_custom_schedule_date():
         return
 
     # ------------------------------------------------------------------ #
-    # 5. CONTINUE FROM LAST DATE
+    # 6. CONTINUE FROM LAST DATE
     # ------------------------------------------------------------------ #
-    if schedule_raw == "continuefromlastdate":
+    if schedule_raw.lower() == "continuefromlastdate":
         print("[schedule] continuefromlastdate")
 
-        # clear current schedules
         os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
         with open(schedules_path, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=4)
 
-        # read records
         recs = []
         if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path):
             try:
@@ -1726,18 +1772,20 @@ def set_custom_schedule_date():
             cfg["schedule_date"] = "none"
             with open(cfg_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=4)
-            update_calendar_free()
+            try:
+                update_calendar_free()
+            except NameError:
+                pass
             return
 
-        # pick most recent by next_schedule date
         latest = None
         latest_dt = None
         for r in recs:
             ns = r.get("next_schedule", {})
-            if not ns or "date" not in ns:
+            if not ns or "date" not in ns or "time_24hour" not in ns:
                 continue
             try:
-                dt = datetime.strptime(ns["date"], "%d/%m/%Y")
+                dt = datetime.strptime(f"{ns['date']} {ns['time_24hour']}", "%d/%m/%Y %H:%M")
                 if latest_dt is None or dt > latest_dt:
                     latest_dt = dt
                     latest = r
@@ -1747,7 +1795,8 @@ def set_custom_schedule_date():
         if latest:
             with open(schedules_path, "w", encoding="utf-8") as f:
                 json.dump(latest, f, indent=4)
-            print(f"[schedule] restored latest schedule: {latest.get('next_schedule')}")
+            ns = latest.get('next_schedule', {})
+            print(f"[schedule] restored latest schedule: {ns.get('date')} {ns.get('time_24hour')}")
         else:
             print("[schedule] no valid next_schedule in records")
 
@@ -1757,10 +1806,13 @@ def set_custom_schedule_date():
         return
 
     # ------------------------------------------------------------------ #
-    # 6. NONE / default
+    # 7. NONE / INVALID
     # ------------------------------------------------------------------ #
-    print("[schedule] schedule_date = 'none' – nothing to do")
-    
+    if schedule_raw.lower() != "none":
+        print(f"[schedule] invalid schedule_date: '{schedule_raw}' – use 'dd/mm/yyyy hh:mm', 'hh:mm AM/PM', 'resumetocurrentdate', 'continuefromlastdate', or 'none'")
+    else:
+        print("[schedule] schedule_date = 'none' – nothing to do")  
+        
 def update_calendar():
     """Update the calendar and write to JSON, conditional on driverprogress.json status."""
     check_schedule_time()
@@ -3735,7 +3787,7 @@ def main():
 
 
 if __name__ == "__main__":
-   main()
+   update_timeschedule()
    
 
 
