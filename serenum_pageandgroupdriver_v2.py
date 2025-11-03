@@ -42,15 +42,6 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\serenum\pytesseract\tessdata"
 
 
-import os
-import time
-import psutil
-import shutil
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-
 def initialize_driver(mode="headed"):
     """Initialize Chrome WebDriver using a specific local profile (safe copy, offline)."""
     global driver, wait
@@ -2036,9 +2027,76 @@ def update_calendar():
     
     # Call schedule_time
     update_timeschedule()
-def update_timeschedule():
+def randomize_next_schedule_minutes():
+    """Set next_schedule minutes to a random value between 02 and 50 (same hour)."""
     
+    # === 1. Get author, type, group from pageandgroupauthors.json ===
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    try:
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+    except Exception as e:
+        print(f"Error: Could not read pageandgroupauthors.json → {e}")
+        return
+
+    author = pageauthors['author']
+    type_value = pageauthors['type']
+    group_types = pageauthors['group_types']
+
+    # === 2. Build path to schedules.json ===
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    
+    if not os.path.exists(schedules_path):
+        print(f"Error: schedules.json not found at {schedules_path}")
+        return
+
+    # === 3. Read current schedules.json ===
+    try:
+        with open(schedules_path, 'r') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Error reading schedules.json: {e}")
+        return
+
+    if 'next_schedule' not in data:
+        print("No 'next_schedule' found in file.")
+        return
+
+    next_sched = data['next_schedule']
+    old_time = next_sched['time_24hour']
+    
+    try:
+        hour = int(old_time.split(':')[0])
+        # Generate random minute: 02 to 50
+        new_minute = random.randint(2, 50)
+        new_minute_str = f"{new_minute:02d}"
+        
+        new_time_24 = f"{hour:02d}:{new_minute_str}"
+        new_time_12 = datetime.strptime(new_time_24, "%H:%M").strftime("%I:%M %p").lower()
+        
+    except Exception as e:
+        print(f"Invalid time format: {old_time} → {e}")
+        return
+
+    # === 4. Update next_schedule ===
+    data['next_schedule'].update({
+        "time_24hour": new_time_24,
+        "time_12hour": new_time_12
+    })
+
+    # === 5. Write back to file ===
+    try:
+        with open(schedules_path, 'w') as f:
+            json.dump(data, f, indent=4)
+        print("Minutes randomized (02–50)!")
+        print(f"   Old: {old_time}")
+        print(f"   New: {new_time_24} ({new_time_12})")
+        print(f"   File: {schedules_path}")
+    except Exception as e:
+        print(f"Failed to save: {e}")
+def update_timeschedule():
     """Determine the next schedule time and write to schedules.json."""
+    
     # Get current date and time
     now = datetime.now()
     current_year = now.year
@@ -2272,6 +2330,8 @@ def update_timeschedule():
     with open(output_path, 'w') as f:
         json.dump(output_data, f, indent=4)
     print(f"Successfully wrote previous and current slots to {output_path}")
+    randomize_next_schedule_minutes()
+
 def check_schedule_time():
     """Check if the next schedule in schedules.json is behind the current time."""
     # Get current date and time
@@ -3720,3 +3780,4 @@ def main():
 if __name__ == "__main__":
    main()
    
+
