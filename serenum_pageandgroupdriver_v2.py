@@ -160,69 +160,64 @@ def launch_profile():
                 break
             else:
                 print(f"Current URL ({current_url}) is not the upload post URL.")
-                # Reset trackers on initial navigation failure (possible page reload or redirect)
                 reset_trackers()
                 try:
-                    # Check for overlay
                     overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
                     if overlay:
-                        print("Detected overlay blocking interaction. Reloading page...")
+                        print("Detected overlay. Reloading page...")
                         driver.refresh()
                         time.sleep(2)
                         continue
-                    # Attempt to find a URL input field and fill it
+
                     url_input = wait.until(
                         EC.presence_of_element_located((By.XPATH, "//input[@type='url'] | //input[@placeholder*='URL'] | //input[@name='url']"))
                     )
                     url_input.clear()
                     url_input.send_keys(uploadpost_url)
                     print(f"Filled URL input with: {uploadpost_url}")
-                    # Attempt to submit or navigate
+
                     try:
                         submit_button = wait.until(
                             EC.element_to_be_clickable((By.XPATH, "//button[@type='submit'] | //button[contains(text(), 'Go')] | //button[contains(text(), 'Navigate')]"))
                         )
                         submit_button.click()
                     except:
-                        print("No submit button found, attempting direct navigation.")
+                        print("No submit button found. Navigating directly...")
                         driver.get(uploadpost_url)
                 except:
-                    print(f"No URL input field found, navigating directly to {uploadpost_url}.")
+                    print(f"No URL input field. Navigating directly to {uploadpost_url}.")
                     driver.get(uploadpost_url)
                 
                 print("Waiting 2 seconds before rechecking URL...")
                 time.sleep(2)
-        
-        # Continuous URL rechecking, caption writing, schedule toggling, media interaction, and file selection
-        last_url = driver.current_url  # Track last URL to detect changes
+
+        # Continuous rechecking loop
+        last_url = driver.current_url
         while True:
             try:
-                print("Checking if the URL is the specified")
                 current_url = driver.current_url
+                print("Checking if URL is correct...")
+
                 if uploadpost_url in current_url:
                     if current_url != last_url:
-                        print(f"URL changed from {last_url} to {current_url}. Resetting trackers due to possible page reload.")
+                        print(f"URL changed: {last_url} → {current_url}. Resetting trackers.")
                         reset_trackers()
                         last_url = current_url
-                    # Write to driverprogress.json before proceeding with operations
+
+                    # Update progress JSON
                     driver_progress_path = r"C:\xampp\htdocs\serenum\driverprogress.json"
-                    progress_data = {
-                        "driver": "started",
-                        "scheduled": "waiting"
-                    }
+                    progress_data = {"driver": "started", "scheduled": "waiting"}
                     try:
                         with open(driver_progress_path, 'w') as f:
                             json.dump(progress_data, f, indent=4)
-                        print(f"Updated {driver_progress_path} with driver: started, scheduled: waiting")
+                        print(f"Updated {driver_progress_path}")
                     except Exception as e:
-                        print(f"Failed to write to {driver_progress_path}: {str(e)}")
+                        print(f"Failed to write progress: {e}")
 
-                    print(f"Recheck confirmed: URL is {uploadpost_url}. Proceeding to write caption, toggle schedule, interact with media, and select file.")
-                    print("checking add photo")
+                    print(f"URL correct. Proceeding with post actions...")
                     markjpgs()
                     set_custom_schedule_date()
                     update_calendar()
-                    manage_group_switch()
                     resetgroupswitchandscheduledate()
                     selectgroups()
                     toggleaddphoto()
@@ -230,46 +225,63 @@ def launch_profile():
                     toggleschedule()
                     set_webschedule_v2()
                     uploadedjpgs()
+
                 else:
-                    print(f"Recheck failed: Current URL ({current_url}) does not match {uploadpost_url}. Reloading page and resetting trackers...")
-                    reset_trackers()  # Reset trackers on URL mismatch
+                    print(f"URL MISMATCH: {current_url} ≠ {uploadpost_url}")
+                    print("Forcing navigation to correct URL...")
+                    reset_trackers()
                     last_url = current_url
-                    driver.refresh()  # Reload page
-                    wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
-                    )
-                    print("Navigated to upload post page after reload.")
+
+                    # CRITICAL FIX: Use driver.get() instead of refresh()
+                    driver.get(uploadpost_url)
+                    print(f"Navigated to: {uploadpost_url}")
+
+                    # Wait for composer to load
+                    try:
+                        wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+                        )
+                        print("Upload composer loaded after forced navigation.")
+                    except Exception as e:
+                        print(f"Composer not ready after navigation: {e}. Will retry...")
+
                 time.sleep(2)
+
             except KeyboardInterrupt:
-                print("Script interrupted by user. Closing browser...")
+                print("Script interrupted. Closing browser...")
                 raise
             except Exception as e:
-                print(f"Error during URL recheck or operations: {str(e)}")
-                # Check for overlay
+                print(f"Error in recheck loop: {str(e)}")
                 overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
                 if overlay:
-                    print("Detected overlay blocking interaction. Reloading page and resetting trackers...")
+                    print("Overlay detected. Refreshing...")
                     reset_trackers()
                     driver.refresh()
                     time.sleep(2)
                     continue
-                # Check if URL changed during error
+
                 current_url = driver.current_url
                 if current_url != last_url:
-                    print(f"URL changed from {last_url} to {current_url} during error. Resetting trackers and reloading.")
+                    print(f"URL changed during error: {last_url} → {current_url}. Resetting...")
                     reset_trackers()
                     last_url = current_url
-                    driver.refresh()
-                    time.sleep(2)
-                time.sleep(2)  # Continue looping even if an error occurs
-                
+
+                # If still wrong, force correct URL
+                if uploadpost_url not in current_url:
+                    print("Still on wrong URL. Forcing correct one...")
+                    driver.get(uploadpost_url)
+
+                time.sleep(2)
+
     except Exception as e:
         if isinstance(e, KeyboardInterrupt):
-            raise  # Re-raise KeyboardInterrupt to handle in main
-        print(f"An error occurred: {str(e)}")
-        print("Browser will remain open for inspection.")
+            raise
+        print(f"Fatal error in launch_profile: {str(e)}")
+        print("Browser remains open for debugging.")
+        input("Press Enter to close...")  # Optional: pause before crash
         raise
-
+ 
+ 
 def reset_trackers():
     """Reset all function trackers to their initial state, excluding update_calendar."""
     # ---- Caption writers ----
@@ -3788,4 +3800,5 @@ def main():
 if __name__ == "__main__":
    main()
    
+
 
