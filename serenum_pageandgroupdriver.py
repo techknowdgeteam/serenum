@@ -42,14 +42,24 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\serenum\pytesseract\tessdata"
 
 
+import os
+import shutil
+import time
+import psutil
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+
 def initialize_driver(mode="headed"):
-    """Initialize the Chrome WebDriver."""
+    """Initialize Chrome WebDriver using a specific local profile (safe copy, offline)."""
     global driver, wait
     print("Closing existing Chrome instances...")
     closed_any = False
     for proc in psutil.process_iter(['name']):
         try:
-            if proc.info['name'].lower() in ['chrome', 'chrome.exe', 'chromedriver', 'chromedriver.exe']:
+            name = proc.info['name']
+            if name and name.lower() in ['chrome.exe', 'chromedriver.exe']:
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)
@@ -58,32 +68,51 @@ def initialize_driver(mode="headed"):
                 closed_any = True
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    
+
     if closed_any:
-        print("Closed Chrome process(es)")
+        print("Closed Chrome process(es).")
     time.sleep(1)
 
-    user_data_dir = os.path.expanduser("~/.chrome-user-data")
-    profile_directory = "Default"
+    # --- Local Chrome & Driver paths ---
+    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    driver_path = r"C:\Users\PC\.wdm\drivers\chromedriver\win64\141.0.7390.122\chromedriver-win32\chromedriver.exe"
 
+    if not os.path.exists(chrome_path):
+        raise FileNotFoundError(f"Chrome not found at: {chrome_path}")
+    if not os.path.exists(driver_path):
+        raise FileNotFoundError(f"ChromeDriver not found at: {driver_path}")
+
+    # --- Profile setup ---
+    real_user_data = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+    source_profile = os.path.join(real_user_data, "Profile 1")  # Change if using "Default"
+    selenium_profile = os.path.expanduser(r"~\.chrome_selenium_profile")
+
+    if not os.path.exists(selenium_profile):
+        print("Creating Selenium Chrome profile copy...")
+        shutil.copytree(source_profile, selenium_profile, dirs_exist_ok=True)
+    else:
+        print("Using existing Selenium profile...")
+
+    # --- Chrome Options ---
     chrome_options = Options()
+    chrome_options.binary_location = chrome_path
+    chrome_options.add_argument(f"--user-data-dir={selenium_profile}")
+    chrome_options.add_argument("--profile-directory=Default")
+
     if mode == "headless":
-        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
     else:
         chrome_options.add_argument("--start-maximized")
-    
-    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-    chrome_options.add_argument(f"--profile-directory={profile_directory}")
+
     chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=chrome_options
-    )
-    
+    # --- Start WebDriver ---
+    service = Service(driver_path)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     wait = WebDriverWait(driver, 15)
+    print("ChromeDriver initialized successfully with Profile 1 (offline mode).")
     return driver, wait
 
 
@@ -130,117 +159,127 @@ def launch_profile():
                 break
             else:
                 print(f"Current URL ({current_url}) is not the upload post URL.")
-                # Reset trackers on initial navigation failure (possible page reload or redirect)
                 reset_trackers()
                 try:
-                    # Check for overlay
                     overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
                     if overlay:
-                        print("Detected overlay blocking interaction. Reloading page...")
+                        print("Detected overlay. Reloading page...")
                         driver.refresh()
                         time.sleep(2)
                         continue
-                    # Attempt to find a URL input field and fill it
+
                     url_input = wait.until(
                         EC.presence_of_element_located((By.XPATH, "//input[@type='url'] | //input[@placeholder*='URL'] | //input[@name='url']"))
                     )
                     url_input.clear()
                     url_input.send_keys(uploadpost_url)
                     print(f"Filled URL input with: {uploadpost_url}")
-                    # Attempt to submit or navigate
+
                     try:
                         submit_button = wait.until(
                             EC.element_to_be_clickable((By.XPATH, "//button[@type='submit'] | //button[contains(text(), 'Go')] | //button[contains(text(), 'Navigate')]"))
                         )
                         submit_button.click()
                     except:
-                        print("No submit button found, attempting direct navigation.")
+                        print("No submit button found. Navigating directly...")
                         driver.get(uploadpost_url)
                 except:
-                    print(f"No URL input field found, navigating directly to {uploadpost_url}.")
+                    print(f"No URL input field. Navigating directly to {uploadpost_url}.")
                     driver.get(uploadpost_url)
                 
                 print("Waiting 2 seconds before rechecking URL...")
                 time.sleep(2)
-        
-        # Continuous URL rechecking, caption writing, schedule toggling, media interaction, and file selection
-        last_url = driver.current_url  # Track last URL to detect changes
+
+        # Continuous rechecking loop
+        last_url = driver.current_url
         while True:
             try:
-                print("Checking if the URL is the specified")
                 current_url = driver.current_url
+                print("Checking if URL is correct...")
+
                 if uploadpost_url in current_url:
                     if current_url != last_url:
-                        print(f"URL changed from {last_url} to {current_url}. Resetting trackers due to possible page reload.")
+                        print(f"URL changed: {last_url} → {current_url}. Resetting trackers.")
                         reset_trackers()
                         last_url = current_url
-                    # Write to driverprogress.json before proceeding with operations
+
+                    # Update progress JSON
                     driver_progress_path = r"C:\xampp\htdocs\serenum\driverprogress.json"
-                    progress_data = {
-                        "driver": "started",
-                        "scheduled": "waiting"
-                    }
+                    progress_data = {"driver": "started", "scheduled": "waiting"}
                     try:
                         with open(driver_progress_path, 'w') as f:
                             json.dump(progress_data, f, indent=4)
-                        print(f"Updated {driver_progress_path} with driver: started, scheduled: waiting")
+                        print(f"Updated {driver_progress_path}")
                     except Exception as e:
-                        print(f"Failed to write to {driver_progress_path}: {str(e)}")
+                        print(f"Failed to write progress: {e}")
 
-                    print(f"Recheck confirmed: URL is {uploadpost_url}. Proceeding to write caption, toggle schedule, interact with media, and select file.")
-                    print("checking add photo")
+                    print(f"URL correct. Proceeding with post actions...")
                     markjpgs()
                     set_custom_schedule_date()
                     update_calendar()
-                    #manage_group_switch()
                     resetgroupswitchandscheduledate()
                     selectgroups()
                     toggleaddphoto()
                     writecaption_element()
                     toggleschedule()
                     set_webschedule()
-                    
                     uploadedjpgs()
+
                 else:
-                    print(f"Recheck failed: Current URL ({current_url}) does not match {uploadpost_url}. Reloading page and resetting trackers...")
-                    reset_trackers()  # Reset trackers on URL mismatch
+                    print(f"URL MISMATCH: {current_url} ≠ {uploadpost_url}")
+                    print("Forcing navigation to correct URL...")
+                    reset_trackers()
                     last_url = current_url
-                    driver.refresh()  # Reload page
-                    wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
-                    )
-                    print("Navigated to upload post page after reload.")
+
+                    # CRITICAL FIX: Use driver.get() instead of refresh()
+                    driver.get(uploadpost_url)
+                    print(f"Navigated to: {uploadpost_url}")
+
+                    # Wait for composer to load
+                    try:
+                        wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
+                        )
+                        print("Upload composer loaded after forced navigation.")
+                    except Exception as e:
+                        print(f"Composer not ready after navigation: {e}. Will retry...")
+
                 time.sleep(2)
+
             except KeyboardInterrupt:
-                print("Script interrupted by user. Closing browser...")
+                print("Script interrupted. Closing browser...")
                 raise
             except Exception as e:
-                print(f"Error during URL recheck or operations: {str(e)}")
-                # Check for overlay
+                print(f"Error in recheck loop: {str(e)}")
                 overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
                 if overlay:
-                    print("Detected overlay blocking interaction. Reloading page and resetting trackers...")
+                    print("Overlay detected. Refreshing...")
                     reset_trackers()
                     driver.refresh()
                     time.sleep(2)
                     continue
-                # Check if URL changed during error
+
                 current_url = driver.current_url
                 if current_url != last_url:
-                    print(f"URL changed from {last_url} to {current_url} during error. Resetting trackers and reloading.")
+                    print(f"URL changed during error: {last_url} → {current_url}. Resetting...")
                     reset_trackers()
                     last_url = current_url
-                    driver.refresh()
-                    time.sleep(2)
-                time.sleep(2)  # Continue looping even if an error occurs
-                
+
+                # If still wrong, force correct URL
+                if uploadpost_url not in current_url:
+                    print("Still on wrong URL. Forcing correct one...")
+                    driver.get(uploadpost_url)
+
+                time.sleep(2)
+
     except Exception as e:
         if isinstance(e, KeyboardInterrupt):
-            raise  # Re-raise KeyboardInterrupt to handle in main
-        print(f"An error occurred: {str(e)}")
-        print("Browser will remain open for inspection.")
+            raise
+        print(f"Fatal error in launch_profile: {str(e)}")
+        print("Browser remains open for debugging.")
+        input("Press Enter to close...")  # Optional: pause before crash
         raise
-
+        
 def reset_trackers():
     """Reset all function trackers to their initial state, excluding update_calendar."""
     # ---- Caption writers ----
@@ -1392,7 +1431,6 @@ def selectgroups():
         return False
 
 
-
 def update_calendar_free():
     """Update the calendar and write to JSON, unconditionally."""
 
@@ -2005,9 +2043,76 @@ def update_calendar():
     
     # Call schedule_time
     update_timeschedule()
+def randomize_next_schedule_minutes():
+    """Set next_schedule minutes to a random value between 02 and 50 (same hour)."""
+    
+    # === 1. Get author, type, group from pageandgroupauthors.json ===
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    try:
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+    except Exception as e:
+        print(f"Error: Could not read pageandgroupauthors.json → {e}")
+        return
+
+    author = pageauthors['author']
+    type_value = pageauthors['type']
+    group_types = pageauthors['group_types']
+
+    # === 2. Build path to schedules.json ===
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    
+    if not os.path.exists(schedules_path):
+        print(f"Error: schedules.json not found at {schedules_path}")
+        return
+
+    # === 3. Read current schedules.json ===
+    try:
+        with open(schedules_path, 'r') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Error reading schedules.json: {e}")
+        return
+
+    if 'next_schedule' not in data:
+        print("No 'next_schedule' found in file.")
+        return
+
+    next_sched = data['next_schedule']
+    old_time = next_sched['time_24hour']
+    
+    try:
+        hour = int(old_time.split(':')[0])
+        # Generate random minute: 02 to 50
+        new_minute = random.randint(2, 50)
+        new_minute_str = f"{new_minute:02d}"
+        
+        new_time_24 = f"{hour:02d}:{new_minute_str}"
+        new_time_12 = datetime.strptime(new_time_24, "%H:%M").strftime("%I:%M %p").lower()
+        
+    except Exception as e:
+        print(f"Invalid time format: {old_time} → {e}")
+        return
+
+    # === 4. Update next_schedule ===
+    data['next_schedule'].update({
+        "time_24hour": new_time_24,
+        "time_12hour": new_time_12
+    })
+
+    # === 5. Write back to file ===
+    try:
+        with open(schedules_path, 'w') as f:
+            json.dump(data, f, indent=4)
+        print("Minutes randomized (02–50)!")
+        print(f"   Old: {old_time}")
+        print(f"   New: {new_time_24} ({new_time_12})")
+        print(f"   File: {schedules_path}")
+    except Exception as e:
+        print(f"Failed to save: {e}")
 def update_timeschedule():
-   
     """Determine the next schedule time and write to schedules.json."""
+    
     # Get current date and time
     now = datetime.now()
     current_year = now.year
@@ -2241,6 +2346,8 @@ def update_timeschedule():
     with open(output_path, 'w') as f:
         json.dump(output_data, f, indent=4)
     print(f"Successfully wrote previous and current slots to {output_path}")
+    randomize_next_schedule_minutes()
+
 def check_schedule_time():
     """Check if the next schedule in schedules.json is behind the current time."""
     # Get current date and time
@@ -2310,6 +2417,8 @@ def check_schedule_time():
         update_timeschedule()
     else:
         print(f"Next schedule is valid: {next_schedule_date} {next_schedule_time} is not behind {current_date} {current_time_24hour}")
+
+
 
 
 
@@ -3773,5 +3882,7 @@ def main():
 if __name__ == "__main__":
    main()
    
+
+
 
 
