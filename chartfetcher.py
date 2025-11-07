@@ -72,43 +72,6 @@ TIMEFRAME_MAP = {
 }
 ERROR_JSON_PATH = os.path.join(BASE_ERROR_FOLDER, "chart_errors.json")
            
-def clear_chart_folder(base_folder):
-    """Clear all contents of the chart folder to ensure fresh data is saved."""
-    error_log = []
-    try:
-        if not os.path.exists(base_folder):
-            log_and_print(f"Chart folder {base_folder} does not exist, no need to clear.", "INFO")
-            return True, error_log
-
-        for item in os.listdir(base_folder):
-            item_path = os.path.join(base_folder, item)
-            try:
-                if os.path.isfile(item_path):
-                    os.remove(item_path)
-                elif os.path.isdir(item_path):
-                    import shutil
-                    shutil.rmtree(item_path)
-                log_and_print(f"Deleted {item_path}", "INFO")
-            except Exception as e:
-                error_log.append({
-                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
-                    "error": f"Failed to delete {item_path}: {str(e)}",
-                    "broker": base_folder
-                })
-                log_and_print(f"Failed to delete {item_path}: {str(e)}", "ERROR")
-
-        log_and_print(f"Chart folder {base_folder} cleared successfully", "SUCCESS")
-        return True, error_log
-    except Exception as e:
-        error_log.append({
-            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
-            "error": f"Failed to clear chart folder {base_folder}: {str(e)}",
-            "broker": base_folder
-        })
-        save_errors(error_log)
-        log_and_print(f"Failed to clear chart folder {base_folder}: {str(e)}", "ERROR")
-        return False, error_log
-
 def log_and_print(message, level="INFO"):
     """Log and print messages in a structured format."""
     timestamp = datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S')
@@ -280,44 +243,170 @@ def identifyparenthighsandlows(df, neighborcandles_left, neighborcandles_right):
         log_and_print(f"Failed to identify PH/PL: {str(e)}", "ERROR")
         return [], [], error_log
 
-def save_candle_data(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels):
-    """Save all candle data with numbering and PH/PL labels."""
-    error_log = []
-    candle_json_path = os.path.join(timeframe_folder, "all_candles.json")
-    try:
-        if len(df) >= 2:
-            candles = []
-            ph_dict = {t: label for label, _, t in ph_labels}
-            pl_dict = {t: label for label, _, t in pl_labels}
 
-            for i, (index, row) in enumerate(df[::-1].iterrows()):
-                candle = row.to_dict()
-                candle["time"] = index.strftime('%Y-%m-%d %H:%M:%S')
-                candle["candle_number"] = i
-                candle["symbol"] = symbol
-                candle["timeframe"] = timeframe_str
-                candle["is_ph"] = ph_dict.get(index, None) == 'PH'
-                candle["is_pl"] = pl_dict.get(index, None) == 'PL'
-                candles.append(candle)
-            with open(candle_json_path, 'w') as f:
-                json.dump(candles, f, indent=4)
-            log_and_print(f"Candle data saved for {symbol} ({timeframe_str})", "SUCCESS")
-        else:
+def save_candle_data(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels):
+    """
+    Save all candles + highlight the SECOND-MOST-RECENT candle (candle_number = 1)
+    as 'x' in previouslatestcandle.json with age in days/hours.
+    """
+    error_log = []
+    all_json_path = os.path.join(timeframe_folder, "all_candles.json")
+    latest_json_path = os.path.join(timeframe_folder, "previouslatestcandle.json")
+    
+    # Use Lagos timezone consistently
+    lagos_tz = pytz.timezone('Africa/Lagos')
+    now = datetime.now(lagos_tz)
+
+    try:
+        if len(df) < 2:
+            error_msg = f"Not enough data for {symbol} ({timeframe_str})"
+            log_and_print(error_msg, "ERROR")
             error_log.append({
-                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
-                "error": f"Not enough data to save candles for {symbol} ({timeframe_str})",
-                "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+                "error": error_msg,
+                "timestamp": now.isoformat()
             })
             save_errors(error_log)
-            log_and_print(f"Not enough data to save candles for {symbol} ({timeframe_str})", "ERROR")
+            return error_log
+
+        # === 1. Prepare PH/PL lookup ===
+        ph_dict = {t: label for label, _, t in ph_labels}
+        pl_dict = {t: label for label, _, t in pl_labels}
+
+        # === 2. Save ALL candles (oldest = 0) ===
+        all_candles = []
+        for i, (ts, row) in enumerate(df[::-1].iterrows()):  # newest first → reverse → oldest first
+            candle = row.to_dict()
+            candle.update({
+                "time": ts.strftime('%Y-%m-%d %H:%M:%S'),
+                "candle_number": i,  # 0 = oldest, 1 = second-most-recent, ..., N-1 = most recent
+                "symbol": symbol,
+                "timeframe": timeframe_str,
+                "is_ph": ph_dict.get(ts, None) == 'PH',
+                "is_pl": pl_dict.get(ts, None) == 'PL'
+            })
+            all_candles.append(candle)
+
+        # Write all candles
+        with open(all_json_path, 'w', encoding='utf-8') as f:
+            json.dump(all_candles, f, indent=4)
+
+        # === 3. Save CANDLE #1 (second-most-recent) as id: "x" with age ===
+        if len(all_candles) < 2:
+            raise ValueError("Expected at least 2 candles to extract candle_number 1")
+
+        previous_latest_candle = all_candles[1].copy()  # candle_number == 1
+        candle_time_str = previous_latest_candle["time"]
+        candle_time = datetime.strptime(candle_time_str, '%Y-%m-%d %H:%M:%S')
+        candle_time = lagos_tz.localize(candle_time)  # Make timezone-aware
+
+        # Calculate age
+        delta = now - candle_time
+        total_hours = delta.total_seconds() / 3600
+
+        if total_hours <= 24:
+            age_str = f"{int(total_hours)} hour{'s' if int(total_hours) != 1 else ''} old"
+        else:
+            days = int(total_hours // 24)
+            age_str = f"{days} day{'s' if days != 1 else ''} old"
+
+        # Add age field
+        previous_latest_candle["age"] = age_str
+        previous_latest_candle["id"] = "x"
+
+        # Remove candle_number as per original logic
+        if "candle_number" in previous_latest_candle:
+            del previous_latest_candle["candle_number"]
+
+        # Write the highlighted candle
+        with open(latest_json_path, 'w', encoding='utf-8') as f:
+            json.dump(previous_latest_candle, f, indent=4)
+
+        # === 4. LOG SUCCESS ===
+        log_and_print(
+            f"SAVED {symbol} {timeframe_str}: "
+            f"all_candles.json ({len(all_candles)} candles) + "
+            f"previouslatestcandle.json (candle_number=1 → id='x', {age_str})",
+            "SUCCESS"
+        )
+
     except Exception as e:
+        err = f"save_candle_data failed: {str(e)}"
+        log_and_print(err, "ERROR")
         error_log.append({
-            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S.%f+01:00'),
-            "error": f"Failed to save candles for {symbol} ({timeframe_str}): {str(e)}",
-            "broker": mt5.terminal_info().name if mt5.terminal_info() else "unknown"
+            "error": err,
+            "timestamp": now.isoformat()
         })
         save_errors(error_log)
-        log_and_print(f"Failed to save candles for {symbol} ({timeframe_str}): {str(e)}", "ERROR")
+
+    return error_log
+
+def save_next_candles(df, symbol, timeframe_str, timeframe_folder, ph_labels, pl_labels):
+    """
+    Save candles that appear **after** the previous-latest candle (the one saved as 'x')
+    i.e. candles with timestamp > timestamp of 'x' candle
+    into <timeframe_folder>/nextcandles.json
+    """
+    error_log = []
+    next_json_path = os.path.join(timeframe_folder, "nextcandles.json")
+
+    try:
+        if len(df) < 3:
+            return error_log  # need at least: old, previous-latest, and one new
+
+        # === 1. Build full ordered list: oldest → newest (candle_number 0 = oldest) ===
+        ph_dict = {t: label for label, _, t in ph_labels}
+        pl_dict = {t: label for label, _, t in pl_labels}
+
+        ordered_candles = []
+        for i, (ts, row) in enumerate(df[::-1].iterrows()):  # newest first → reverse → oldest first
+            candle = row.to_dict()
+            candle.update({
+                "time": ts.strftime('%Y-%m-%d %H:%M:%S'),
+                "candle_number": i,  # 0 = oldest, 1 = second-most-recent (x), ..., N-1 = newest
+                "symbol": symbol,
+                "timeframe": timeframe_str,
+                "is_ph": ph_dict.get(ts, None) == 'PH',
+                "is_pl": pl_dict.get(ts, None) == 'PL'
+            })
+            ordered_candles.append(candle)
+
+        # === 2. Find the timestamp of the 'x' candle (candle_number == 1) ===
+        if len(ordered_candles) < 2:
+            return error_log
+
+        x_candle_time_str = ordered_candles[1]["time"]  # candle_number 1
+        x_time = datetime.strptime(x_candle_time_str, '%Y-%m-%d %H:%M:%S')
+
+        # === 3. Collect all candles with timestamp > x_time ===
+        next_candles = []
+        for candle in ordered_candles:
+            candle_time = datetime.strptime(candle["time"], '%Y-%m-%d %H:%M:%S')
+            if candle_time > x_time:
+                # Keep original candle_number (from full history context)
+                next_candles.append(candle)
+
+        if not next_candles:
+            return error_log  # No newer candles
+
+        # === 4. Write ===
+        with open(next_json_path, 'w', encoding='utf-8') as f:
+            json.dump(next_candles, f, indent=4)
+
+        log_and_print(
+            f"SAVED {symbol} {timeframe_str}: nextcandles.json "
+            f"({len(next_candles)} candles after {x_candle_time_str})",
+            "SUCCESS"
+        )
+
+    except Exception as e:
+        err = f"save_next_candles failed: {str(e)}"
+        log_and_print(err, "ERROR")
+        error_log.append({
+            "error": err,
+            "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
+        })
+        save_errors(error_log)
+
     return error_log
 
 def generate_and_save_chart(df, symbol, timeframe_str, timeframe_folder, neighborcandles_left, neighborcandles_right):
@@ -1965,45 +2054,44 @@ def consolidate_all_calculated_prices():
     """
     FINAL @teamxtech APPROVED
     → Converts flat calculated prices → YOUR EXACT limitorders.json format
-    → Saves to: <BASE_FOLDER>/allmarkets_limitorderscalculatedprices.json
+    → Saves TWO files:
+        1. <BASE_FOLDER>/allmarkets_limitorderscalculatedprices.json → ALL markets combined
+        2. <BASE_FOLDER>/<market>/<timeframe>/limitorderscalculatedprices.json → Per-market/timeframe
     → Structure: markets_limitorders + limitorders[market][timeframe][team1]
     → Call once at the end
     """
     global brokersdictionary
-
     CALCULATED_ROOT = Path(r"C:\xampp\htdocs\chronedge\chart\symbols_calculated_prices")
     RISK_FOLDERS = {
         0.5: "risk_0_50cent_usd", 1.0: "risk_1_usd", 2.0: "risk_2_usd",
         3.0: "risk_3_usd", 4.0: "risk_4_usd", 8.0: "risk_8_usd", 16.0: "risk_16_usd"
     }
     TIMEFRAMES = ["5m", "15m", "30m", "1h", "4h"]
-
     error_log = []
-
     print("\n" + "═" * 95)
-    print(" CONSOLIDATING → allmarkets_limitorderscalculatedprices.json ".center(95))
+    print(" CONSOLIDATING → allmarkets_limitorderscalculatedprices.json + PER-MARKET/TF JSONS ".center(95))
     print(" STRUCTURE: markets_limitorders + limitorders[market][tf][team1] ".center(95))
     print("═" * 95 + "\n")
+
+    # Per-market/timeframe storage
+    per_market_tf_data = {}  # {market: {tf: [team1, ...]}}
 
     for broker_name, config in brokersdictionary.items():
         BASE_FOLDER = config.get("BASE_FOLDER")
         if not BASE_FOLDER:
             log_and_print(f"BASE_FOLDER missing for {broker_name}", "ERROR")
             continue
-
         base_path = Path(BASE_FOLDER)
         if not base_path.exists():
             log_and_print(f"BASE_FOLDER not found: {BASE_FOLDER}", "WARNING")
             continue
-
         broker_calc_dir = CALCULATED_ROOT / broker_name
         if not broker_calc_dir.is_dir():
             log_and_print(f"No data for {broker_name}", "INFO")
             continue
-
         print(f"[{broker_name.upper()}] → {BASE_FOLDER}")
 
-        # Master structure
+        # Master structure for all markets
         limitorders = {}
         markets_with_orders = set()
 
@@ -2012,13 +2100,11 @@ def consolidate_all_calculated_prices():
             risk_dir = broker_calc_dir / folder
             if not risk_dir.is_dir():
                 continue
-
             for calc_file in risk_dir.glob("*calculatedprices.json"):
                 try:
                     with open(calc_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                     entries = data if isinstance(data, list) else sum(data.values(), [])
-
                     for entry in entries:
                         market = entry.get("market")
                         tf = entry.get("timeframe", "30m")
@@ -2042,14 +2128,20 @@ def consolidate_all_calculated_prices():
                             "broker": broker_name
                         }
 
-                        # Init market → tf → list
+                        # === 1. Add to ALL-MARKETS structure ===
                         if market not in limitorders:
                             limitorders[market] = {tf: [] for tf in TIMEFRAMES}
                         if tf not in limitorders[market]:
                             limitorders[market][tf] = []
-
                         limitorders[market][tf].append({"team1": team1})
                         markets_with_orders.add(market)
+
+                        # === 2. Add to PER-MARKET/TF structure ===
+                        if market not in per_market_tf_data:
+                            per_market_tf_data[market] = {tf: [] for tf in TIMEFRAMES}
+                        if tf not in per_market_tf_data[market]:
+                            per_market_tf_data[market][tf] = []
+                        per_market_tf_data[market][tf].append(team1)  # Only team1 dict, no wrapper
 
                 except Exception as e:
                     ts = datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S')
@@ -2060,41 +2152,462 @@ def consolidate_all_calculated_prices():
                         "broker": broker_name
                     })
 
-        # Final JSON
+        # === SAVE 1: ALL MARKETS COMBINED ===
         final_data = {
             "markets_limitorders": len(markets_with_orders),
             "limitorders": limitorders
         }
-
-        # Save to broker's BASE_FOLDER
         output_file = base_path / "allmarkets_limitorderscalculatedprices.json"
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(final_data, f, indent=4)
-            print(f"   SUCCESS: {len(markets_with_orders)} markets → {output_file.name}")
+            print(f" SUCCESS: {len(markets_with_orders)} markets → {output_file.name}")
         except Exception as e:
             error_log.append({
                 "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "error": f"Write failed: {output_file}",
                 "details": str(e)
             })
-            print(f"   FAILED: {e}")
+            print(f" FAILED: {e}")
 
+        # === SAVE 2: PER MARKET/TIMEFRAME JSONS ===
+        saved_count = 0
+        for market, tf_dict in per_market_tf_data.items():
+            market_clean = market.replace(" ", "_").replace("/", "_")
+            market_folder = base_path / market_clean
+            market_folder.mkdir(exist_ok=True)
+            for tf, team1_list in tf_dict.items():
+                if not team1_list:
+                    continue
+                tf_folder = market_folder / tf
+                tf_folder.mkdir(exist_ok=True)
+                per_tf_data = {
+                    "market": market,
+                    "timeframe": tf,
+                    "broker": broker_name,
+                    "orders": team1_list  # List of team1 dicts
+                }
+                per_tf_file = tf_folder / "limitorderscalculatedprices.json"
+                try:
+                    with open(per_tf_file, 'w', encoding='utf-8') as f:
+                        json.dump(per_tf_data, f, indent=4)
+                    saved_count += 1
+                except Exception as e:
+                    error_log.append({
+                        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        "error": f"Per-TF write failed: {per_tf_file}",
+                        "details": str(e)
+                    })
+        print(f" SUCCESS: {saved_count} per-market/timeframe JSONs saved under broker folder")
         print()
 
     # Final Report
     print("═" * 95)
     print(" CONSOLIDATION COMPLETE ")
-    print(" Each broker has: allmarkets_limitorderscalculatedprices.json ")
-    print(" Structure: markets_limitorders + limitorders[market][tf][team1] ")
+    print(" 1. allmarkets_limitorderscalculatedprices.json → All markets ")
+    print(" 2. <market>/<tf>/limitorderscalculatedprices.json → Per market/timeframe ")
     print(" Ready for your dashboard ")
     print("═" * 95 + "\n")
 
     if error_log:
         save_errors(error_log)
-
     return error_log
- 
+
+def redraw_contours_from_json(
+    chart_path,
+    symbol,
+    timeframe_str,
+    timeframe_folder,
+    candleafterintersector=2,
+    minbreakoutcandleposition=5,
+    startOBsearchFrom=0,
+    minOBleftneighbor=1,
+    minOBrightneighbor=1,
+    reversal_leftcandle=0,
+    reversal_rightcandle=0
+):
+    error_log = []
+    lagos_tz = pytz.timezone('Africa/Lagos')
+    now = datetime.now(lagos_tz)
+
+    # === PATHS ===
+    candle_json_path         = os.path.join(timeframe_folder, "all_candles.json")
+    contour_json_path        = os.path.join(timeframe_folder, "chart_contours.json")
+    ob_none_oi_json_path     = os.path.join(timeframe_folder, "ob_none_oi_data.json")
+    limitorders_json_path    = os.path.join(timeframe_folder, "limitorderscalculatedprices.json")
+    next_candles_path        = os.path.join(timeframe_folder, "nextcandles.json")
+    previouslatest_path      = os.path.join(timeframe_folder, "previouslatestcandle.json")
+    output_image_path        = os.path.join(timeframe_folder, "chart_with_contours_redrawn.png")
+    output_redraw_json_path  = os.path.join(timeframe_folder, "redrawn oi ob data.json")
+    all_timeframes_json_path = os.path.join(os.path.dirname(timeframe_folder), "alltimeframeslimitorders.json")
+
+    # === LOAD REQUIRED DATA ===
+    try:
+        with open(candle_json_path, 'r') as f:
+            candle_data = json.load(f)
+        with open(contour_json_path, 'r') as f:
+            contour_data = json.load(f)
+    except Exception as e:
+        error_msg = f"Missing JSON files: {e}"
+        error_log.append({"error": error_msg, "timestamp": now.isoformat()})
+        save_errors(error_log)
+        return error_log
+
+    # === LOAD nextcandles.json ===
+    next_candles = []
+    if os.path.exists(next_candles_path):
+        try:
+            with open(next_candles_path, 'r', encoding='utf-8') as f:
+                next_candles = json.load(f)
+            log_and_print(f"Loaded {len(next_candles)} next candles", "INFO")
+        except Exception as e:
+            log_and_print(f"Failed to load nextcandles.json: {e}", "WARNING")
+    else:
+        log_and_print(f"nextcandles.json not found", "INFO")
+
+    # === LOAD SL/TP ===
+    calculated_orders = {}
+    if os.path.exists(limitorders_json_path):
+        try:
+            with open(limitorders_json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            for order in data.get("orders", []):
+                entry = order.get("entry_price")
+                if entry is not None:
+                    calculated_orders[entry] = {
+                        "sl_price": order.get("sl_price"),
+                        "tp_price": order.get("tp_price")
+                    }
+        except Exception as e:
+            log_and_print(f"Failed to load limitorderscalculatedprices.json: {e}", "WARNING")
+
+    # === LOAD OB-None-OI entries ===
+    ob_none_oi_entries = []
+    try:
+        if os.path.exists(ob_none_oi_json_path):
+            with open(ob_none_oi_json_path, 'r') as f:
+                raw_data = json.load(f)
+            for item in raw_data:
+                for team_key, team_data in item.items():
+                    limit_order = ""
+                    entry_price = 0.0
+                    if team_data["team_type"] == "PH-to-PH":
+                        limit_order = "buy_limit"
+                        entry_price = team_data["none_oi_x_OB_high_price"]
+                    elif team_data["team_type"] == "PL-to-PL":
+                        limit_order = "sell_limit"
+                        entry_price = team_data["none_oi_x_OB_low_price"]
+                    else:
+                        continue
+                    ob_none_oi_entries.append({
+                        "limit_order": limit_order,
+                        "entry_price": entry_price,
+                        "team_type": team_data["team_type"]
+                    })
+        else:
+            log_and_print(f"ob_none_oi_data.json not found", "WARNING")
+    except Exception as e:
+        error_log.append({"error": f"Failed to load ob_none_oi_data.json: {str(e)}", "timestamp": now.isoformat()})
+
+    img = cv2.imread(chart_path)
+    if img is None:
+        error_log.append({"error": "Failed to load chart image", "timestamp": now.isoformat()})
+        save_errors(error_log)
+        return error_log
+
+    # === HELPERS ===
+    def draw_right_arrow(img, x, y, oi_x=None):
+        end_x = oi_x if oi_x else img.shape[1] - 5
+        color = (255, 0, 0) if oi_x else (0, 255, 0)
+        cv2.line(img, (x, y), (end_x, y), color, 1)
+        cv2.line(img, (end_x-4, y-4), (end_x, y), color, 1)
+        cv2.line(img, (end_x-4, y+4), (end_x, y), color, 1)
+
+    def draw_oi_marker(img, x, y):
+        cv2.circle(img, (x, y), 7, (0, 255, 0), 1)
+
+    # === BUILD CANDLE BOUNDS & PRICE MAPPING ===
+    candle_bounds = {}
+    all_prices = []
+    for c in contour_data["candle_contours"]:
+        i = c["candle_number"]
+        cd = candle_data[i]
+        high = float(cd["high"])
+        low = float(cd["low"])
+        all_prices.extend([high, low])
+        x = c["x"] - c["width"]//2
+        y = c["y"]
+        w = c["width"]
+        h = c["height"]
+        candle_bounds[i] = {
+            "high_y": y,
+            "low_y": y + h,
+            "x_left": x,
+            "x_right": x + w,
+            "high": high,
+            "low": low,
+            "center_x": x + w // 2
+        }
+
+    if not all_prices:
+        return error_log
+
+    global_high = max(all_prices)
+    global_low = min(all_prices)
+
+    # Find chart area bounds
+    xs = [b["x_left"] for b in candle_bounds.values()]
+    ys = [b["high_y"] for b in candle_bounds.values()] + [b["low_y"] for b in candle_bounds.values()]
+    chart_left = min(xs)
+    chart_right = max(b["x_right"] for b in candle_bounds.values())
+    chart_top = min(ys)
+    chart_bottom = max(ys)
+    chart_height = chart_bottom - chart_top
+
+    # === PRICE → Y-PIXEL ===
+    def price_to_y(price):
+        if global_high == global_low:
+            return chart_top + chart_height // 2
+        ratio = (global_high - price) / (global_high - global_low)
+        return int(chart_top + ratio * chart_height)
+
+    # === FIND FIRST NEXT CANDLE X-POSITION ===
+    first_next_x_right = None
+    if next_candles:
+        next_times = {c["time"] for c in next_candles}
+        for i, cd in enumerate(candle_data):
+            if cd["time"] in next_times:
+                if i in candle_bounds:
+                    first_next_x_right = candle_bounds[i]["x_right"]
+                    break
+
+    # === 1. PH/PL TRIANGLES ===
+    for c in contour_data["candle_contours"]:
+        cx, cy, h = c["x"], c["y"], c["height"]
+        if c["is_ph"]:
+            cv2.fillPoly(img, [np.array([[cx, cy-10], [cx-10, cy+5], [cx+10, cy+5]])], (255, 0, 0))
+        if c["is_pl"]:
+            cv2.fillPoly(img, [np.array([[cx, cy+h+10], [cx-10, cy+h-5], [cx+10, cy+h-5]])], (128, 0, 128))
+
+    # === 2. TRENDLINES ===
+    for team in contour_data.get("ph_teams", []):
+        s = team["sender"]
+        for tl in team["trendlines"]:
+            cv2.line(img, (s["x"], s["y"]), (tl["x"], tl["y"]), (255, 0, 0), 1)
+            if tl.get("is_first"):
+                star = np.array([[tl["x"], tl["y"]-15], [tl["x"]+4, tl["y"]-5], [tl["x"]+14, tl["y"]-5],
+                                [tl["x"]+5, tl["y"]+2], [tl["x"]+10, tl["y"]+12], [tl["x"], tl["y"]+7],
+                                [tl["x"]-10, tl["y"]+12], [tl["x"]-5, tl["y"]+2], [tl["x"]-14, tl["y"]-5],
+                                [tl["x"]-4, tl["y"]-5]], np.int32)
+                cv2.fillPoly(img, [star], (255, 0, 0))
+            else:
+                cv2.circle(img, (tl["x"], tl["y"]), 5, (255, 0, 0), -1)
+
+    for team in contour_data.get("pl_teams", []):
+        s = team["sender"]
+        for tl in team["trendlines"]:
+            cv2.line(img, (s["x"], s["y"]), (tl["x"], tl["y"]), (0, 255, 255), 1)
+            if tl.get("is_first"):
+                star = np.array([[tl["x"], tl["y"]-15], [tl["x"]+4, tl["y"]-5], [tl["x"]+14, tl["y"]-5],
+                                [tl["x"]+5, tl["y"]+2], [tl["x"]+10, tl["y"]+12], [tl["x"], tl["y"]+7],
+                                [tl["x"]-10, tl["y"]+12], [tl["x"]-5, tl["y"]+2], [tl["x"]-14, tl["y"]-5],
+                                [tl["x"]-4, tl["y"]-5]], np.int32)
+                cv2.fillPoly(img, [star], (0, 255, 255))
+            else:
+                cv2.circle(img, (tl["x"], tl["y"]), 5, (0, 255, 255), -1)
+
+    # === 3. PROCESS ORDERS + HIT DETECTION + BOX DRAWING ===
+    redrawn_data = {"marketname": symbol, "timeframe": timeframe_str, "orders": []}
+    overlay = img.copy()
+
+    for entry in ob_none_oi_entries:
+        target_price = entry["entry_price"]
+        order_type = entry["limit_order"]
+        sl_price = calculated_orders.get(target_price, {}).get("sl_price")
+        tp_price = calculated_orders.get(target_price, {}).get("tp_price")
+
+        # Find OB candle position
+        found = False
+        cx, cy = 0, 0
+        ob_candle_x_right = 0
+        for i, cd in enumerate(candle_data):
+            high = float(cd["high"])
+            low = float(cd["low"])
+            if abs(high - target_price) < 1e-6 or abs(low - target_price) < 1e-6:
+                b = candle_bounds[i]
+                cx = b["center_x"]
+                cy = b["high_y"] if order_type == "buy_limit" else b["low_y"]
+                ob_candle_x_right = b["x_right"]
+                found = True
+                break
+        if not found:
+            continue
+
+        # === HIT DETECTION ===
+        hit_info = {
+            "entry_hit": False, "entry_hit_candle_highprice": None, "entry_hit_candle_lowprice": None,
+            "sl_hit": False, "sl_hit_candle_highprice": None, "sl_hit_candle_lowprice": None,
+            "tp_hit": False, "tp_hit_candle_highprice": None, "tp_hit_candle_lowprice": None
+        }
+
+        if next_candles and sl_price is not None and tp_price is not None:
+            if order_type == "buy_limit":
+                for c in next_candles:
+                    low = float(c["low"])
+                    high = float(c["high"])
+                    if low <= target_price and not hit_info["entry_hit"]:
+                        hit_info["entry_hit"] = True
+                        hit_info["entry_hit_candle_lowprice"] = low
+                        hit_info["entry_hit_candle_highprice"] = high
+                if hit_info["entry_hit"]:
+                    for c in next_candles:
+                        low = float(c["low"])
+                        high = float(c["high"])
+                        if low <= target_price:
+                            if low <= sl_price and not hit_info["sl_hit"] and not hit_info["tp_hit"]:
+                                hit_info["sl_hit"] = True
+                                hit_info["sl_hit_candle_lowprice"] = low
+                                hit_info["sl_hit_candle_highprice"] = high
+                            if high >= tp_price and not hit_info["tp_hit"] and not hit_info["sl_hit"]:
+                                hit_info["tp_hit"] = True
+                                hit_info["tp_hit_candle_highprice"] = high
+                                hit_info["tp_hit_candle_lowprice"] = low
+            elif order_type == "sell_limit":
+                for c in next_candles:
+                    high = float(c["high"])
+                    low = float(c["low"])
+                    if high >= target_price and not hit_info["entry_hit"]:
+                        hit_info["entry_hit"] = True
+                        hit_info["entry_hit_candle_highprice"] = high
+                        hit_info["entry_hit_candle_lowprice"] = low
+                if hit_info["entry_hit"]:
+                    for c in next_candles:
+                        high = float(c["high"])
+                        low = float(c["low"])
+                        if high >= target_price:
+                            if high >= sl_price and not hit_info["sl_hit"] and not hit_info["tp_hit"]:
+                                hit_info["sl_hit"] = True
+                                hit_info["sl_hit_candle_highprice"] = high
+                                hit_info["sl_hit_candle_lowprice"] = low
+                            if low <= tp_price and not hit_info["tp_hit"] and not hit_info["sl_hit"]:
+                                hit_info["tp_hit"] = True
+                                hit_info["tp_hit_candle_highprice"] = high
+                                hit_info["tp_hit_candle_lowprice"] = low
+
+        # === DRAW ARROW + MARKER ===
+        draw_right_arrow(img, cx, cy)
+        draw_oi_marker(img, cx, cy)
+
+        # === DRAW TP/SL BOXES ===
+        if sl_price is not None and tp_price is not None and first_next_x_right is not None:
+            entry_y = price_to_y(target_price)
+            sl_y = price_to_y(sl_price)
+            tp_y = price_to_y(tp_price)
+            box_left = first_next_x_right
+            box_right = img.shape[1]
+
+            if order_type == "buy_limit":
+                if tp_y < entry_y:
+                    cv2.rectangle(overlay, (box_left, tp_y), (box_right, entry_y), (0, 255, 0), -1)
+                if sl_y > entry_y:
+                    cv2.rectangle(overlay, (box_left, entry_y), (box_right, sl_y), (0, 0, 255), -1)
+            elif order_type == "sell_limit":
+                if tp_y > entry_y:
+                    cv2.rectangle(overlay, (box_left, entry_y), (box_right, tp_y), (0, 255, 0), -1)
+                if sl_y < entry_y:
+                    cv2.rectangle(overlay, (box_left, sl_y), (box_right, entry_y), (0, 0, 255), -1)
+
+        # === APPEND TO DATA ===
+        redrawn_data["orders"].append({
+            "ordertype": order_type,
+            "entry_price": round(target_price, 6),
+            "sl_price": round(sl_price, 6) if sl_price is not None else None,
+            "tp_price": round(tp_price, 6) if tp_price is not None else None,
+            **hit_info
+        })
+
+    # === APPLY TRANSPARENCY ===
+    cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+
+    # === 4. SAVE IMAGE ===
+    cv2.imwrite(output_image_path, img)
+    log_and_print(f"REDRAWN chart with correct TP/SL boxes → {output_image_path}", "SUCCESS")
+
+    # === 5. SAVE PER-TIMEFRAME JSON ===
+    try:
+        with open(output_redraw_json_path, 'w', encoding='utf-8') as f:
+            json.dump(redrawn_data, f, indent=4)
+        log_and_print(f"SAVED per-timeframe JSON", "SUCCESS")
+    except Exception as e:
+        error_log.append({"error": f"Save JSON failed: {str(e)}", "timestamp": now.isoformat()})
+
+    # === 6. SCAN ALL TIMEFRAMES FOR OLDEST previouslatestcandle.json ===
+    oldest_age_str = ""
+    oldest_hours = -1
+
+    base_dir = os.path.dirname(timeframe_folder)
+    timeframes = ["5m", "15m", "30m", "1h", "4h"]
+
+    for tf in timeframes:
+        tf_folder = os.path.join(base_dir, tf)
+        plc_path = os.path.join(tf_folder, "previouslatestcandle.json")
+        if not os.path.exists(plc_path):
+            continue
+        try:
+            with open(plc_path, 'r') as f:
+                plc = json.load(f)
+            age = plc.get("age", "")
+            if not age:
+                continue
+            # Extract numeric hours
+            if "hour" in age:
+                hours = int(age.split()[0])
+            elif "day" in age:
+                days = int(age.split()[0])
+                hours = days * 24
+            else:
+                continue
+            if hours > oldest_hours:
+                oldest_hours = hours
+                oldest_age_str = age
+        except Exception as e:
+            log_and_print(f"Failed to read {plc_path}: {e}", "WARNING")
+
+    # === 7. UPDATE ALLTIMEFRAMES with oldest age ===
+    all_timeframes_data = {
+        "oldestage_acrosstimeframe": oldest_age_str,
+        "market": symbol,
+        "timeframes": {tf: [] for tf in timeframes}
+    }
+
+    if os.path.exists(all_timeframes_json_path):
+        try:
+            with open(all_timeframes_json_path, 'r') as f:
+                loaded = json.load(f)
+            if loaded.get("market") == symbol:
+                # Preserve existing data
+                all_timeframes_data["oldestage_acrosstimeframe"] = oldest_age_str
+                all_timeframes_data["timeframes"] = loaded.get("timeframes", all_timeframes_data["timeframes"])
+        except Exception as e:
+            log_and_print(f"Load alltimeframes failed: {e}", "WARNING")
+
+    # Update current timeframe
+    all_timeframes_data["timeframes"][timeframe_str] = [
+        {k: o[k] for k in o if k not in ["team_type"]} for o in redrawn_data["orders"]
+    ]
+
+    try:
+        with open(all_timeframes_json_path, 'w', encoding='utf-8') as f:
+            json.dump(all_timeframes_data, f, indent=4)
+        log_and_print(f"UPDATED alltimeframeslimitorders.json (oldest: {oldest_age_str})", "SUCCESS")
+    except Exception as e:
+        error_log.append({"error": f"Save alltimeframes failed: {str(e)}", "timestamp": now.isoformat()})
+
+    if error_log:
+        save_errors(error_log)
+
+    return error_log   
+
 def delete_all_category_jsons():
     """
     Delete (empty) every market-type JSON file that collect_ob_none_oi_data writes to.
@@ -2174,10 +2687,10 @@ def crop_chart(chart_path, symbol, timeframe_str, timeframe_folder):
     try:
         # Crop chart.png
         with Image.open(chart_path) as img:
-            right = 8
-            left = 80
-            top = 80
-            bottom = 70
+            right = 20
+            left = 130
+            top = 150
+            bottom = 200
             crop_box = (left, top, img.width - right, img.height - bottom)
             cropped_img = img.crop(crop_box)
             cropped_img.save(chart_path, "PNG")
@@ -7333,7 +7846,6 @@ def _20_100_orders():
     _4usd_history_and_deduplication()
     _4usd_ratio_levels()
 
-
     
 def deduplicate_pending_orders():
     r"""
@@ -8128,44 +8640,98 @@ def calc_and_placeorders():
     deduplicate_pending_orders()
     martingale_enforcement()
 
+def clear_chart_folder(base_folder: str):
+    """Delete ONLY symbols that have NO valid OB-none-OI record on 15m-4h."""
+    error_log = []
+    IMPORTANT_TFS = {"15m", "30m", "1h", "4h"}
+
+    if not os.path.exists(base_folder):
+        log_and_print(f"Chart folder {base_folder} does not exist – nothing to clear.", "INFO")
+        return True, error_log
+
+    deleted = 0
+    kept    = 0
+
+    for item in os.listdir(base_folder):
+        item_path = os.path.join(base_folder, item)
+        if not os.path.isdir(item_path):
+            continue                                 # skip stray files
+
+        # --------------------------------------------------
+        # Look for ob_none_oi_data.json inside any timeframe folder
+        # --------------------------------------------------
+        keep_symbol = False
+        for tf in IMPORTANT_TFS:
+            json_path = os.path.join(item_path, tf, "ob_none_oi_data.json")
+            if not os.path.exists(json_path):
+                continue
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # file exists → assume it contains at least one team entry
+                keep_symbol = True
+                break
+            except Exception:
+                pass                                 # corrupted → treat as “missing”
+
+        # --------------------------------------------------
+        # Delete or keep
+        # --------------------------------------------------
+        try:
+            if keep_symbol:
+                kept += 1
+                log_and_print(f"KEEP   {item_path} (has 15m-4h OB-none-OI)", "INFO")
+            else:
+                shutil.rmtree(item_path)
+                deleted += 1
+                log_and_print(f"DELETE {item_path} (no 15m-4h record)", "INFO")
+        except Exception as e:
+            error_log.append({
+                "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).strftime(
+                    '%Y-%m-%d %H:%M:%S.%f+01:00'),
+                "error": f"Failed to handle {item_path}: {str(e)}",
+                "broker": base_folder
+            })
+            log_and_print(f"Failed to handle {item_path}: {str(e)}", "ERROR")
+
+    log_and_print(
+        f"Smart clean finished → {deleted} folders deleted, {kept} folders kept.",
+        "SUCCESS")
+    return True, error_log
+
+
 def fetch_charts_all_brokers(
     bars,
     neighborcandles_left,
     neighborcandles_right
 ):
-    delete_all_category_jsons()
-    delete_issue_jsons()
-    delete_all_calculated_risk_jsons()
     # ------------------------------------------------------------------
     # PATHS
     # ------------------------------------------------------------------
     required_allowed_path = r"C:\xampp\htdocs\chronedge\chart\symbols_volumes_points\symbols\allowedmarkets.json"
     fallback_allowed_path = r"C:\xampp\htdocs\chronedge\chart\symbols_volumes_points\allowedmarkets\allowedmarkets.json"
-    allsymbols_path = r"C:\xampp\htdocs\chronedge\chart\symbols_volumes_points\allowedmarkets\allsymbolsvolumesandrisk.json"
-    match_path      = r"C:\xampp\htdocs\chronedge\chart\symbols_volumes_points\allowedmarkets\symbolsmatch.json"
+    allsymbols_path       = r"C:\xampp\htdocs\chronedge\chart\symbols_volumes_points\allowedmarkets\allsymbolsvolumesandrisk.json"
+    match_path            = r"C:\xampp\htdocs\chronedge\chart\symbols_volumes_points\allowedmarkets\symbolsmatch.json"
 
     # ------------------------------------------------------------------
-    # AUTO-COPY allowedmarkets.json
+    # HELPERS
     # ------------------------------------------------------------------
-    if not os.path.exists(required_allowed_path):
-        if os.path.exists(fallback_allowed_path):
-            os.makedirs(os.path.dirname(required_allowed_path), exist_ok=True)
-            shutil.copy2(fallback_allowed_path, required_allowed_path)
-            log_and_print(f"AUTO-COPIED allowedmarkets.json", "INFO")
-        else:
-            log_and_print("CRITICAL: allowedmarkets.json missing!", "CRITICAL")
-            time.sleep(600)
-            return
+    IMPORTANT_TFS = {"15m", "30m", "1h", "4h"}
 
-    # ------------------------------------------------------------------
-    # NORMALISATION
-    # ------------------------------------------------------------------
     def normalize_symbol(s: str) -> str:
         return re.sub(r'[\/\s\-_]+', '', s.strip()).upper() if s else ""
 
-    # ------------------------------------------------------------------
-    # BREAKEVEN THREAD (every 10s)
-    # ------------------------------------------------------------------
+    def clear_chart_folder(base_folder: str):
+        if not os.path.exists(base_folder):
+            log_and_print(f"FOLDER {base_folder} does not exist – nothing to clean.", "INFO")
+            return
+        kept = len([i for i in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, i))])
+        log_and_print(f"PROTECTED {kept} symbol folders in {base_folder}", "SUCCESS")
+
+    def symbol_needs_processing(symbol: str, base_folder: str) -> bool:
+        log_and_print(f"QUEUED {symbol} → will be processed (no skip)", "INFO")
+        return True
+
     def breakeven_worker():
         while True:
             try:
@@ -8175,44 +8741,47 @@ def fetch_charts_all_brokers(
             time.sleep(10)
 
     threading.Thread(target=breakeven_worker, daemon=True).start()
-    log_and_print("Breakeven thread ON", "SUCCESS")
+    log_and_print("Breakeven thread started", "SUCCESS")
 
     # ------------------------------------------------------------------
-    # MAIN LOOP – RUNS EVERY 30 MINUTES
+    # MAIN LOOP
     # ------------------------------------------------------------------
     while True:
         error_log = []
-        log_and_print("=== STARTING FULL CYCLE ===", "INFO")
+        log_and_print("\n=== NEW FULL CYCLE STARTED ===", "INFO")
 
         try:
             # 1. Load allowed markets
-            try:
-                with open(required_allowed_path, "r", encoding="utf-8") as f:
-                    allowed_config = json.load(f)
-            except Exception as e:
-                log_and_print(f"allowedmarkets.json fail: {e}", "CRITICAL")
-                time.sleep(600); continue
+            if not os.path.exists(required_allowed_path):
+                if os.path.exists(fallback_allowed_path):
+                    os.makedirs(os.path.dirname(required_allowed_path), exist_ok=True)
+                    shutil.copy2(fallback_allowed_path, required_allowed_path)
+                    log_and_print("AUTO-COPIED allowedmarkets.json", "INFO")
+                else:
+                    log_and_print("CRITICAL: allowedmarkets.json missing!", "CRITICAL")
+                    time.sleep(600); continue
 
-            normalized_allowed = {cat: {normalize_symbol(s) for s in cfg.get("allowed", [])} 
-                                for cat, cfg in allowed_config.items()}
+            with open(required_allowed_path, "r", encoding="utf-8") as f:
+                allowed_config = json.load(f)
 
-            # 2. Load symbol → category
+            normalized_allowed = {
+                cat: {normalize_symbol(s) for s in cfg.get("allowed", [])}
+                for cat, cfg in allowed_config.items()
+            }
+
+            # 2. Symbol → category map
             if not os.path.exists(allsymbols_path):
                 log_and_print(f"Missing {allsymbols_path}", "CRITICAL")
                 time.sleep(600); continue
 
             symbol_to_category = {}
-            try:
-                with open(allsymbols_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for markets in data.values():
-                    for cat in markets:
-                        for item in markets.get(cat, []):
-                            if sym := item.get("symbol"):
-                                symbol_to_category[sym] = cat
-            except Exception as e:
-                log_and_print(f"Parse error: {e}", "CRITICAL")
-                time.sleep(600); continue
+            with open(allsymbols_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for markets in data.values():
+                for cat in markets:
+                    for item in markets.get(cat, []):
+                        if sym := item.get("symbol"):
+                            symbol_to_category[sym] = cat
 
             # 3. Load symbolsmatch
             if not os.path.exists(match_path):
@@ -8221,25 +8790,25 @@ def fetch_charts_all_brokers(
             with open(match_path, "r", encoding="utf-8") as f:
                 symbolsmatch_data = json.load(f)
 
-            # 4. Build broker → cat → symbols
-            broker_name_mapping = {"deriv": "deriv", "deriv1": "deriv", "deriv2": "deriv", 
-                                 "bybit1": "bybit", "exness1": "exness"}
-            all_cats = ["stocks","forex","crypto","synthetics","indices","commodities",
-                        "equities","energies","etfs","basket_indices","metals"]
+            # 4. PROTECT ALL FOLDERS
+            for bn, cfg in brokersdictionary.items():
+                clear_chart_folder(cfg["BASE_FOLDER"])
 
-            broker_category_symbols = {}
-            remaining_symbols = {}
-            indices_tracker = {}
-            total_allowed = 0
+            # 5. Build candidate list
+            broker_name_mapping = {
+                "deriv": "deriv", "deriv1": "deriv", "deriv2": "deriv",
+                "bybit1": "bybit", "exness1": "exness"
+            }
+            all_cats = ["stocks","forex","crypto","synthetics","indices","commodities","equities","energies","etfs","basket_indices","metals"]
+
+            candidates = {}
+            total_to_do = 0
 
             for broker_name, cfg in brokersdictionary.items():
                 mapped = broker_name_mapping.get(broker_name, broker_name)
-                broker_category_symbols[broker_name] = {c: [] for c in all_cats}
-                remaining_symbols[broker_name] = {c: [] for c in all_cats}
-                indices_tracker[broker_name] = {c: 0 for c in all_cats}
+                candidates[broker_name] = {c: [] for c in all_cats}
 
-                ok, errs = initialize_mt5(cfg["TERMINAL_PATH"], cfg["LOGIN_ID"], 
-                                        cfg["PASSWORD"], cfg["SERVER"])
+                ok, errs = initialize_mt5(cfg["TERMINAL_PATH"], cfg["LOGIN_ID"], cfg["PASSWORD"], cfg["SERVER"])
                 error_log.extend(errs)
                 if not ok:
                     mt5.shutdown(); continue
@@ -8254,91 +8823,129 @@ def fetch_charts_all_brokers(
                         if allowed_config.get(cat, {}).get("limited", False):
                             if normalize_symbol(sym) not in normalized_allowed.get(cat, set()):
                                 continue
-                        broker_category_symbols[broker_name][cat].append(sym)
+                        if symbol_needs_processing(sym, cfg["BASE_FOLDER"]):
+                            candidates[broker_name][cat].append(sym)
 
                 for cat in all_cats:
-                    cnt = len(broker_category_symbols[broker_name][cat])
+                    cnt = len(candidates[broker_name][cat])
                     if cnt:
-                        log_and_print(f"{broker_name} → {cat}: {cnt}", "INFO")
-                        total_allowed += cnt
+                        log_and_print(f"{broker_name.upper()} → {cat.upper():10} : {cnt:3} symbols queued", "INFO")
+                        total_to_do += cnt
 
-            if total_allowed == 0:
-                log_and_print("No symbols allowed → skip", "WARNING")
-                time.sleep(600); continue
+            if total_to_do == 0:
+                log_and_print("No symbols available – sleeping 30 min", "WARNING")
+                time.sleep(1800)
+                continue
 
-            # 5. Clear old charts
-            for bn, cfg in brokersdictionary.items():
-                clear_chart_folder(cfg["BASE_FOLDER"])
+            log_and_print(f"TOTAL SYMBOLS TO PROCESS THIS CYCLE: {total_to_do}", "SUCCESS")
 
-            # 6. ROUND-ROBIN
-            for bn in broker_category_symbols:
-                for cat in all_cats:
-                    remaining_symbols[bn][cat] = broker_category_symbols[bn][cat][:]
+            # 6. ROUND-ROBIN PROCESSING
+            remaining = {b: {c: candidates[b][c][:] for c in all_cats} for b in brokersdictionary}
+            indices   = {b: {c: 0 for c in all_cats} for b in brokersdictionary}
 
             round_no = 1
-            while any(any(remaining_symbols[b][c]) for b in broker_category_symbols for c in all_cats):
-                log_and_print(f"--- ROUND {round_no} ---", "INFO")
+            while any(any(remaining[b][c]) for b in brokersdictionary for c in all_cats):
+                log_and_print(f"\n--- ROUND {round_no} ---", "INFO")
+
                 for cat in all_cats:
                     for bn, cfg in brokersdictionary.items():
-                        if not remaining_symbols[bn][cat]: continue
-                        idx = indices_tracker[bn][cat]
-                        if idx >= len(remaining_symbols[bn][cat]):
-                            remaining_symbols[bn][cat] = []
+                        if not remaining[bn][cat]:
                             continue
 
-                        symbol = remaining_symbols[bn][cat][idx]
-                        indices_tracker[bn][cat] += 1
+                        idx = indices[bn][cat]
+                        if idx >= len(remaining[bn][cat]):
+                            remaining[bn][cat] = []
+                            continue
 
-                        ok, errs = initialize_mt5(cfg["TERMINAL_PATH"], cfg["LOGIN_ID"], 
-                                                cfg["PASSWORD"], cfg["SERVER"])
+                        symbol = remaining[bn][cat][idx]
+                        indices[bn][cat] += 1
+
+                        ok, errs = initialize_mt5(cfg["TERMINAL_PATH"], cfg["LOGIN_ID"], cfg["PASSWORD"], cfg["SERVER"])
                         error_log.extend(errs)
                         if not ok:
-                            log_and_print(f"MT5 init failed: {bn}/{symbol}", "ERROR")
+                            log_and_print(f"MT5 INIT FAILED → {bn}/{symbol}", "ERROR")
                             mt5.shutdown(); continue
 
-                        log_and_print(f"→ {symbol} ({cat}) on {bn}", "INFO")
+                        log_and_print(f"PROCESSING {symbol} ({cat}) on {bn.upper()}", "INFO")
+
                         sym_folder = os.path.join(cfg["BASE_FOLDER"], symbol.replace(" ", "_"))
                         os.makedirs(sym_folder, exist_ok=True)
 
                         for tf_str, mt5_tf in TIMEFRAME_MAP.items():
                             tf_folder = os.path.join(sym_folder, tf_str)
                             os.makedirs(tf_folder, exist_ok=True)
+
                             df, errs = fetch_ohlcv_data(symbol, mt5_tf, bars)
                             error_log.extend(errs)
-                            if df is None: continue
-                            df["symbol"] = symbol
+                            if df is None:
+                                log_and_print(f"NO DATA for {symbol} {tf_str}", "WARNING")
+                                continue
 
+                            df["symbol"] = symbol
                             chart_path, ch_errs, ph, pl = generate_and_save_chart(
                                 df, symbol, tf_str, tf_folder,
                                 neighborcandles_left, neighborcandles_right
                             )
                             error_log.extend(ch_errs)
+
+                            # ---- ORIGINAL SAVE (all + previous-latest as "x") ----
                             save_candle_data(df, symbol, tf_str, tf_folder, ph, pl)
+
+                            # ---- NEW: SAVE CANDLES AFTER THE PREVIOUS-LATEST ----
+                            next_errs = save_next_candles(df, symbol, tf_str, tf_folder, ph, pl)
+                            error_log.extend(next_errs)
+
                             if chart_path:
                                 crop_chart(chart_path, symbol, tf_str, tf_folder)
 
-                        collect_ob_none_oi_data(symbol, sym_folder, bn, cfg["BASE_FOLDER"],
-                                              broker_category_symbols[bn][cat])
+                                # === 1. DETECT CONTOURS ===
+                                detect_errors = detect_candle_contours(
+                                    chart_path, symbol, tf_str, tf_folder,
+                                    candleafterintersector=2,
+                                    minbreakoutcandleposition=5,
+                                    startOBsearchFrom=0,
+                                    minOBleftneighbor=1,
+                                    minOBrightneighbor=1,
+                                    reversal_leftcandle=0,
+                                    reversal_rightcandle=0
+                                )
+                                error_log.extend(detect_errors)
 
-                        #calc_and_placeorders()
+                                # === 2. REDRAW FROM JSON (FULL) ===
+                                redraw_errors = redraw_contours_from_json(
+                                    chart_path, symbol, tf_str, tf_folder,
+                                    candleafterintersector=2,
+                                    minbreakoutcandleposition=5,
+                                    startOBsearchFrom=0,
+                                    minOBleftneighbor=1,
+                                    minOBrightneighbor=1,
+                                    reversal_leftcandle=0,
+                                    reversal_rightcandle=0
+                                )
+                                error_log.extend(redraw_errors)
+
+                                log_and_print(f"DETECTED + REDRAWN {tf_str} for {symbol}", "SUCCESS")
+
+                        collect_ob_none_oi_data(symbol, sym_folder, bn, cfg["BASE_FOLDER"], candidates[bn][cat])
+                        calculate_symbols_sl_tp_prices()
+                        consolidate_all_calculated_prices()
                         mt5.shutdown()
 
                 round_no += 1
 
             save_errors(error_log)
-            log_and_print("=== CYCLE 100% DONE ===", "SUCCESS")
-            #calc_and_placeorders()
-            
-
-            # NEXT CYCLE IN 30 MINUTES
-            log_and_print("Sleeping 30 minutes until next full cycle...", "INFO")
-            time.sleep(1800)  # 30 × 60 = 1800 seconds
+            consolidate_all_calculated_prices()
+            log_and_print("CYCLE 100% COMPLETED – All symbols refreshed!", "SUCCESS")
+            log_and_print("Sleeping 30 minutes until next full refresh...", "INFO")
+            time.sleep(1800)
 
         except Exception as e:
-            log_and_print(f"MAIN CRASH: {e}\n{traceback.format_exc()}", "CRITICAL")
-            time.sleep(600)        
+            log_and_print(f"MAIN LOOP CRASH: {e}\n{traceback.format_exc()}", "CRITICAL")
+            time.sleep(600)           
 
 if __name__ == "__main__":
+    delete_all_category_jsons()
+    delete_all_calculated_risk_jsons()
     success = fetch_charts_all_brokers(
         bars=201,
         neighborcandles_left=10,
