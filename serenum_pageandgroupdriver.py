@@ -13,9 +13,9 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 import random
 import pytz
+import re
 from PIL import Image
 import calendar
-import re
 import json
 import os
 import time
@@ -28,6 +28,28 @@ import cv2
 import pytesseract
 from PIL import ImageGrab
 import numpy as np
+import logging
+import random
+from PIL import Image
+import calendar
+import json
+import os
+import time
+from datetime import datetime, timedelta
+import shutil
+import pytz
+import csv
+import re
+import requests 
+from typing import Tuple, List
+import os
+import json
+import numpy as np
+from PIL import Image
+from pathlib import Path
+from PIL import ImageFilter
+import imghdr
+import traceback
 
 
 # Global driver and wait objects
@@ -42,14 +64,7 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\serenum\pytesseract\tessdata"
 
 
-import os
-import shutil
-import time
-import psutil
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
+
 
 def initialize_driver(mode="headed"):
     """Initialize Chrome WebDriver using a specific local profile (safe copy, offline)."""
@@ -214,17 +229,7 @@ def launch_profile():
                         print(f"Failed to write progress: {e}")
 
                     print(f"URL correct. Proceeding with post actions...")
-                    markjpgs()
-                    set_custom_schedule_date()
-                    update_calendar()
-                    resetgroupswitchandscheduledate()
-                    selectgroups()
-                    toggleaddphoto()
-                    writecaption_element()
-                    toggleschedule()
-                    set_webschedule()
-                    uploadedjpgs()
-
+                    secondbatch()
                 else:
                     print(f"URL MISMATCH: {current_url} ≠ {uploadpost_url}")
                     print("Forcing navigation to correct URL...")
@@ -386,6 +391,1601 @@ def manage_group_switch():
         print(f"[group] write error: {e}")
         return False
         
+
+
+def fetch_urls() -> list[str]:
+    """
+    Launch headless Chrome, fetch JPG URLs, save to JSON,
+    and PRINT status messages (hardcoded inside).
+    """
+    # ----- ALL HARDCODED PATHS & URL -----
+    TARGET_URL = "https://jpgsvault.rf.gd/loadimagesurl.php?i=1"
+    CHROME_BINARY = r"C:\xampp\htdocs\CIPHER\googlechrome\Google\Chrome\Application\chrome.exe"
+    OUTPUT_FILE = r"C:\xampp\htdocs\serenum\files\fetchedjpgsurl.json"
+    # -------------------------------------
+
+    print("Starting headless Chrome...")
+    print(f"Target URL: {TARGET_URL}")
+    print(f"Output file: {OUTPUT_FILE}")
+
+    options = Options()
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-autofill")
+    options.add_argument("--log-level=3")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--headless=new")
+    options.add_argument("--window-size=1920,1080")
+
+    if os.path.exists(CHROME_BINARY):
+        options.binary_location = CHROME_BINARY
+        print("Using custom Chrome binary.")
+    else:
+        print("Custom Chrome binary not found. Using system default.")
+
+    driver = None
+    try:
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager(driver_version="139.0.7258.128").install()),
+            options=options
+        )
+        driver.set_page_load_timeout(60)
+        print("Navigating to page...")
+        driver.get(TARGET_URL)
+        driver.implicitly_wait(5)
+
+        print("Extracting JPG URLs from <div class=\"url\">...")
+        html = driver.page_source
+        matches = re.findall(r'<div class="url">([^<]+)</div>', html)
+
+        jpg_urls = []
+        for url in matches:
+            url = url.strip().replace("\\", "/")
+            if url.lower().endswith(('.jpg', '.jpeg')) and url not in jpg_urls:
+                jpg_urls.append(url)
+
+        total = len(jpg_urls)
+        print(f"Extracted {total} unique JPG URL(s).")
+
+        # Save JSON
+        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+        payload = {
+            "source_url": TARGET_URL,
+            "fetched_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "total_jpgs": total,
+            "jpg_urls": jpg_urls
+        }
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+        return jpg_urls
+
+    except Exception as e:
+        print("FAILED: An error occurred.")
+        print(f"Error: {e}")
+        return []
+    finally:
+        if driver:
+            driver.quit()
+            print("Browser closed.")
+
+
+def corruptedjpgs():
+    """
+    Scans ALL .jpg, .jpeg, .png, .gif files in:
+      - files/jpgs/{author}/
+      - files/next jpg/{author}/
+      - files/uploaded jpgs/{author}/
+      - files/downloaded/{author}/        ← NEW: deletes corrupted ones
+
+    - Moves corrupted files from the first 3 → files/corruptedjpgs/{author}/
+    - Deletes corrupted files from 'downloaded' folder (they're temporary)
+    - Logs results in corrupted_jpgs.json
+    """
+    JSON_CONFIG_PATH = r'C:\xampp\htdocs\serenum\pageandgroupauthors.json'
+
+    # ------------------------------------------------------------------ #
+    # 1. Load author from config
+    # ------------------------------------------------------------------ #
+    try:
+        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as json_file:
+            config = json.load(json_file)
+        author = config.get('author', '').strip()
+        if not author:
+            print("Error: 'author' is missing or empty in config.")
+            return
+    except Exception as e:
+        print(f"Failed to load or parse {JSON_CONFIG_PATH}: {e}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 2. Define all directories to scan
+    # ------------------------------------------------------------------ #
+    base_root = r"C:\xampp\htdocs\serenum\files"
+    directories_to_check = [
+        os.path.join(base_root, "jpgs", author),
+        os.path.join(base_root, "next jpg", author),
+        os.path.join(base_root, "uploaded jpgs", author),
+        os.path.join(base_root, "downloaded", author)  # ← NEW
+    ]
+    corrupted_dir = os.path.join(base_root, "corruptedjpgs", author)
+
+    # ------------------------------------------------------------------ #
+    # 3. Validate input directories
+    # ------------------------------------------------------------------ #
+    valid_dirs = []
+    for dir_path in directories_to_check:
+        if os.path.exists(dir_path):
+            valid_dirs.append(dir_path)
+        else:
+            print(f"Directory not found (skipping): {dir_path}")
+
+    if not valid_dirs:
+        print("No valid directories found to scan.")
+        return
+
+    # Create corrupted directory (for moved files)
+    if not os.path.exists(corrupted_dir):
+        try:
+            os.makedirs(corrupted_dir)
+            print(f"Created corrupted directory: {corrupted_dir}")
+        except Exception as e:
+            print(f"Failed to create corrupted directory {corrupted_dir}: {e}")
+            return
+
+    # ------------------------------------------------------------------ #
+    # 4. Supported image extensions
+    # ------------------------------------------------------------------ #
+    IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif')
+    moved_files: List[Tuple[str, str, str]] = []  # (filename, source_dir, dest_path)
+    deleted_files: List[Tuple[str, str]] = []     # (filename, source_dir)
+
+    print(f"\nScanning {len(valid_dirs)} directories for corrupted images...\n")
+
+    # ------------------------------------------------------------------ #
+    # 5. Scan each directory
+    # ------------------------------------------------------------------ #
+    for directory in valid_dirs:
+        is_downloaded_folder = directory.endswith(os.path.join("downloaded", author))
+        action = "DELETE" if is_downloaded_folder else "MOVE"
+
+        print(f"Checking ({action}): {directory}")
+        try:
+            files = os.listdir(directory)
+        except Exception as e:
+            print(f"Could not read directory {directory}: {e}")
+            continue
+
+        image_files = [
+            f for f in files
+            if f.lower().endswith(IMAGE_EXTENSIONS)
+            and os.path.isfile(os.path.join(directory, f))
+        ]
+
+        for file in image_files:
+            file_path = os.path.join(directory, file)
+            is_corrupted = False
+            error_msg = ""
+
+            # ------------------- Pillow Double Check -------------------
+            try:
+                with Image.open(file_path) as img:
+                    img.verify()          # Structure check
+                with Image.open(file_path) as img:
+                    img.load()            # Full decode check
+            except Exception as e:
+                is_corrupted = True
+                error_msg = str(e)
+
+            # ------------------- Handle Corrupted -------------------
+            if is_corrupted:
+                print(f"  [CORRUPTED] {file} → {error_msg}")
+
+                if is_downloaded_folder:
+                    # DELETE from downloaded folder
+                    try:
+                        os.remove(file_path)
+                        print(f"  [DELETED] {file_path}")
+                        deleted_files.append((file, directory))
+                    except Exception as del_e:
+                        print(f"  [FAILED TO DELETE] {file}: {del_e}")
+                else:
+                    # MOVE to corrupted folder
+                    dest_path = os.path.join(corrupted_dir, file)
+                    base, ext = os.path.splitext(file)
+                    counter = 1
+                    while os.path.exists(dest_path):
+                        dest_path = os.path.join(corrupted_dir, f"{base}_{counter}{ext}")
+                        counter += 1
+
+                    try:
+                        shutil.move(file_path, dest_path)
+                        print(f"  [MOVED] → {dest_path}")
+                        moved_files.append((file, directory, dest_path))
+                    except Exception as move_e:
+                        print(f"  [FAILED TO MOVE] {file}: {move_e}")
+            else:
+                print(f"  [OK] {file}")
+
+    # ------------------------------------------------------------------ #
+    # 6. Write summary JSON (NO DATETIME!)
+    # ------------------------------------------------------------------ #
+    json_path = os.path.join(corrupted_dir, 'corrupted_jpgs.json')
+    try:
+        summary = {
+            "author": author,
+            "scanned_directories": valid_dirs,
+            "total_moved": len(moved_files),
+            "total_deleted": len(deleted_files),
+            "moved_files": [
+                {
+                    "filename": orig,
+                    "from_directory": src_dir,
+                    "moved_to": dest
+                }
+                for orig, src_dir, dest in moved_files
+            ],
+            "deleted_files": [
+                {
+                    "filename": orig,
+                    "from_directory": src_dir
+                }
+                for orig, src_dir in deleted_files
+            ],
+            "note": (
+                "Corrupted files in 'downloaded' folder are DELETED. "
+                "Others are MOVED to corruptedjpgs folder. "
+                "All .jpg/.jpeg/.png/.gif checked with Pillow verify() + load()."
+            )
+        }
+
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=4, ensure_ascii=False)
+
+        total_corrupted = len(moved_files) + len(deleted_files)
+
+        print("\n" + "="*80)
+        print(f"SUMMARY: {total_corrupted} corrupted file(s) found and cleaned.")
+        print(f"   • Moved: {len(moved_files)} → {corrupted_dir}")
+        print(f"   • Deleted: {len(deleted_files)} (from downloaded folder)")
+        print(f"Log saved: {json_path}")
+        print("="*80)
+
+        if moved_files:
+            print("\nMoved corrupted files (first 10):")
+            for orig, _, dest in moved_files[:10]:
+                print(f"   {orig} → {os.path.basename(dest)}")
+            if len(moved_files) > 10:
+                print(f"   ... and {len(moved_files) - 10} more.")
+
+        if deleted_files:
+            print("\nDeleted corrupted files from downloaded (first 10):")
+            for orig, _ in deleted_files[:10]:
+                print(f"   {orig}")
+            if len(deleted_files) > 10:
+                print(f"   ... and {len(deleted_files) - 10} more.")
+
+        if total_corrupted == 0:
+            print("\nNo corrupted files found. All images are valid!")
+
+    except Exception as e:
+        print(f"Failed to write summary JSON: {e}")
+def crop_and_moveto_jpgs():
+    """
+    Moves images from 'downloaded' to 'jpgfolders'.
+    If borders detected → crop them + fixed 10/40px top/bottom.
+    If no borders → move as-is.
+    Always MOVES (not copies) to save space.
+    Detailed logs.
+    """
+    # === CONFIGURATION ===
+    json_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    base_dir = r"C:\xampp\htdocs\serenum\files"
+    threshold = 40
+    crop_top = 10
+    crop_bottom = 40
+    # =====================
+
+    import os
+    import json
+    import numpy as np
+    from PIL import Image
+    import shutil
+
+    def process_image(src_path, dst_path, threshold):
+        try:
+            print(f"[OPEN] Loading: {os.path.basename(src_path)}")
+            img = Image.open(src_path).convert("RGB")
+            img_array = np.array(img)
+            h, w = img_array.shape[:2]
+            print(f"[INFO] Original size: {w}x{h}")
+
+            gray = np.mean(img_array, axis=2)
+            mask = (gray > threshold) & (gray < (255 - threshold))
+            coords = np.argwhere(mask)
+
+            # Case 1: No content at all
+            if coords.size == 0:
+                print(f"[CHECK] No content (all near black/white). Moving as-is.")
+                shutil.move(src_path, dst_path)
+                print(f"[MOVED] As-is → {os.path.basename(dst_path)}")
+                return True, "no_content"
+
+            y0, x0 = coords.min(axis=0)
+            y1, x1 = coords.max(axis=0)
+
+            # Case 2: Content fills entire image → no border
+            if x0 == 0 and y0 == 0 and x1 == w - 1 and y1 == h - 1:
+                print(f"[CHECK] No borders detected. Moving as-is.")
+                shutil.move(src_path, dst_path)
+                print(f"[MOVED] As-is → {os.path.basename(dst_path)}")
+                return True, "no_border"
+
+            # === BORDERS DETECTED ===
+            removed = {'L': x0, 'T': y0, 'R': w - 1 - x1, 'B': h - 1 - y1}
+            content_w = x1 - x0 + 1
+            content_h = y1 - y0 + 1
+            print(f"[BORDER] Removed: L={removed['L']}, T={removed['T']}, R={removed['R']}, B={removed['B']}")
+            print(f"[BORDER] Content: {content_w}x{content_h}")
+
+            cropped = img.crop((x0, y0, x1 + 1, y1 + 1))
+
+            # Apply fixed crop only if enough height
+            if content_h <= crop_top + crop_bottom:
+                print(f"[WARN] Too small for fixed crop. Saving border-cropped only.")
+                cropped.save(dst_path, quality=95)
+                os.remove(src_path)  # delete original
+                print(f"[SAVED] Border-only → {os.path.basename(dst_path)}")
+                return True, "border_only"
+
+            new_top = crop_top
+            new_bottom = content_h - crop_bottom
+            if new_bottom <= new_top:
+                print(f"[WARN] Fixed crop would remove all. Saving border-cropped only.")
+                cropped.save(dst_path, quality=95)
+                os.remove(src_path)
+                print(f"[SAVED] Border-only → {os.path.basename(dst_path)}")
+                return True, "border_only"
+
+            final_cropped = cropped.crop((0, new_top, content_w, new_bottom))
+            final_h = new_bottom - new_top
+            print(f"[FIXED] Cropped: {crop_top}px top, {crop_bottom}px bottom → {final_h}px tall")
+            final_cropped.save(dst_path, quality=95)
+            os.remove(src_path)
+            print(f"[SAVED] Fully cropped → {os.path.basename(dst_path)}")
+            return True, "full_crop"
+
+        except Exception as e:
+            print(f"[ERROR] Failed: {e}")
+            return False, "error"
+
+    # === MAIN ===
+    if not os.path.exists(json_path):
+        print(f"JSON not found: {json_path}")
+        return
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"JSON error: {e}")
+        return
+
+    author = data.get("author", "").strip()
+    if not author:
+        print("Missing 'author' in JSON")
+        return
+
+    source_dir = os.path.join(base_dir, "downloaded", author)
+    output_dir = os.path.join(base_dir, "jpgfolders", author)
+
+    if not os.path.exists(source_dir):
+        print(f"Source dir not found: {source_dir}")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')
+    image_files = [f for f in os.listdir(source_dir) if f.lower().endswith(image_extensions)]
+    image_files.sort()
+
+    if not image_files:
+        print(f"No images in {source_dir}")
+        return
+
+    print(f"Found {len(image_files)} image(s) in {source_dir}\n")
+
+    stats = {k: 0 for k in ["total", "saved", "no_border", "border_only", "full_crop", "no_content", "error"]}
+    stats["total"] = len(image_files)
+
+    for img_file in image_files:
+        src_path = os.path.join(source_dir, img_file)
+        dst_path = os.path.join(output_dir, img_file)
+
+        print(f"\n{'='*60}")
+        print(f"PROCESSING: {img_file}")
+        print(f"{'='*60}")
+
+        success, action = process_image(src_path, dst_path, threshold)
+        if success:
+            stats["saved"] += 1
+            stats[action] += 1
+        else:
+            stats["error"] += 1
+            print(f"[FAILED] Keeping original due to error.")
+
+    # === FINAL SUMMARY ===
+    print(f"\n{'='*60}")
+    print(f"FINAL SUMMARY - Author: {author}")
+    print(f"{'='*60}")
+    print(f"Total images: {stats['total']}")
+    print(f"Successfully processed: {stats['saved']}")
+    if stats['saved'] > 0:
+        print(f"  • Moved as-is (no crop):      {stats['no_border']}")
+        print(f"  • Border crop only:           {stats['border_only']}")
+        print(f"  • Full crop (border + fixed): {stats['full_crop']}")
+        print(f"  • No content (all border):    {stats['no_content']}")
+    print(f"Errors: {stats['error']}")
+    print(f"{'='*60}")
+
+def check_single_url(
+    url: str,
+    timeout: int = 30,
+    temp_dir: str | None = None,
+    final_dir: str | None = None,
+) -> Tuple[bool, str]:
+    """
+    1. GET the URL (streamed)
+    2. Save to *temp_dir* (unique name)
+    3. Open + verify + fully load with Pillow
+    4. If OK → move to *final_dir* (unique name) and return True
+    5. If corrupted → delete temp file and return False
+
+    Returns (is_valid: bool, debug_info: str)
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/91.0.4472.124 Safari/537.36"
+        )
+    }
+
+    # -------------------------------------------------- 1. GET
+    try:
+        resp = requests.get(
+            url, headers=headers, timeout=timeout,
+            allow_redirects=True, stream=True
+        )
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}"
+    except Exception as e:
+        return False, f"Request error: {e}"
+
+    # -------------------------------------------------- 2. Save to temp
+    if not temp_dir:
+        return False, "temp_dir required for integrity check"
+
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Build a safe filename
+    base_name = os.path.basename(url.split("?")[0])
+    if not base_name.lower().endswith((".jpg", ".jpeg")):
+        base_name += ".jpg"
+
+    temp_path = os.path.join(temp_dir, base_name)
+    root, ext = os.path.splitext(base_name)
+    counter = 1
+    while os.path.exists(temp_path):
+        temp_path = os.path.join(temp_dir, f"{root}_{counter}{ext}")
+        counter += 1
+
+    try:
+        with open(temp_path, "wb") as f:
+            resp.raw.decode_content = True
+            shutil.copyfileobj(resp.raw, f)
+    except Exception as e:
+        return False, f"Temp-save failed: {e}"
+
+    # -------------------------------------------------- 3. Pillow verify + full load
+    try:
+        # 1. Structural verification
+        with Image.open(temp_path) as img:
+            img.verify()                     # raises if header / structure broken
+
+        # 2. Force complete decode (catches truncated / partially corrupted files)
+        with Image.open(temp_path) as img:
+            img.load()                       # raises if pixel data is bad
+    except Exception as e:
+        # Corrupted → delete immediately
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        return False, f"Corrupted image: {e}"
+
+    # -------------------------------------------------- 4. Move to final folder (if requested)
+    final_path = temp_path  # default = keep in temp
+    if final_dir:
+        os.makedirs(final_dir, exist_ok=True)
+        dest_name = os.path.basename(temp_path)
+        final_path = os.path.join(final_dir, dest_name)
+        root, ext = os.path.splitext(dest_name)
+        counter = 1
+        while os.path.exists(final_path):
+            final_path = os.path.join(final_dir, f"{root}_{counter}{ext}")
+            counter += 1
+
+        try:
+            shutil.move(temp_path, final_path)
+        except Exception as e:
+            # If move fails, clean the temp file
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+            return False, f"Move failed: {e}"
+
+    # -------------------------------------------------- 5. Return
+    debug = (
+        f"Status: {resp.status_code}, "
+        f"Size: {os.path.getsize(final_path)} bytes → "
+        f"saved to {final_path} (Pillow OK)"
+    )
+    return True, debug
+def markjpgs():
+    # ------------------------------------------------------------------ #
+    # 1. Load configuration
+    # ------------------------------------------------------------------ #
+    JSON_CONFIG_PATH = r'C:\xampp\htdocs\serenum\pageandgroupauthors.json'
+    FETCHED_JSON_PATH = r'C:\xampp\htdocs\serenum\files\fetchedjpgsurl.json'
+
+    try:
+        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        author = config.get('author', '').strip()
+        processjpgfrom = config.get('processjpgfrom', 'freshjpgs').strip().lower()
+        if not author:
+            print("Error: 'author' is missing or empty in config.")
+            return
+
+        try:
+            cardamount = int(config.get('cardamount', 1))
+            cardamount = max(1, cardamount)
+        except (ValueError, TypeError):
+            print("Warning: 'cardamount' invalid. Using 1.")
+            cardamount = 1
+
+        if processjpgfrom not in ['freshjpgs', 'uploadedjpgs']:
+            print(f"Warning: Invalid 'processjpgfrom': '{processjpgfrom}'. Using 'freshjpgs'.")
+            processjpgfrom = 'freshjpgs'
+
+    except Exception as e:
+        print(f"Failed to load config: {e}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 2. Load fetched URLs from fetchedjpgsurl.json
+    # ------------------------------------------------------------------ #
+    if not os.path.exists(FETCHED_JSON_PATH):
+        print(f"Error: Fetched URLs file not found: {FETCHED_JSON_PATH}")
+        print("   Run fetch_urls() first to populate it.")
+        return
+
+    try:
+        with open(FETCHED_JSON_PATH, 'r', encoding='utf-8') as f:
+            fetched_data = json.load(f)
+            all_fetched_urls = fetched_data.get("jpg_urls", [])
+        print(f"Loaded {len(all_fetched_urls)} URLs from fetchedjpgsurl.json")
+    except Exception as e:
+        print(f"Failed to read fetchedjpgsurl.json: {e}")
+        return
+
+    if not all_fetched_urls:
+        print("No URLs found in fetchedjpgsurl.json. Nothing to process.")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 3. Determine base path
+    # ------------------------------------------------------------------ #
+    base_path = (
+        f"https://jpgsvault.rf.gd/jpgs/{author}_uploaded/"
+        if processjpgfrom == 'uploadedjpgs'
+        else f"https://jpgsvault.rf.gd/jpgs/{author}/"
+    )
+
+    candidate_urls = [
+        u for u in all_fetched_urls
+        if u.startswith(base_path) and u.lower().endswith(('.jpg', '.jpeg'))
+    ]
+    print(f"Found {len(candidate_urls)} candidate URL(s) matching base path: {base_path}")
+
+    if not candidate_urls:
+        print("No matching URLs found for the selected base path.")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 4. Load already-uploaded URLs (create empty if missing/broken)
+    # ------------------------------------------------------------------ #
+    uploaded_dir = fr'C:\xampp\htdocs\serenum\files\uploaded jpgs\{author}'
+    uploaded_json_path = os.path.join(uploaded_dir, 'uploadedjpgs.json')
+
+    already_uploaded = set()
+    if os.path.exists(uploaded_json_path):
+        try:
+            with open(uploaded_json_path, 'r', encoding='utf-8') as f:
+                uploaded_data = json.load(f)
+                already_uploaded = set(uploaded_data.get("uploaded_jpgs", []))
+            print(f"Loaded {len(already_uploaded)} previously uploaded JPGs (will skip duplicates)")
+        except Exception as e:
+            print(f"Warning: Could not read uploadedjpgs.json → {e}")
+            print("   → Creating empty uploadedjpgs.json and continuing...")
+            os.makedirs(uploaded_dir, exist_ok=True)
+            with open(uploaded_json_path, 'w', encoding='utf-8') as f:
+                json.dump({"uploaded_jpgs": []}, f, indent=4, ensure_ascii=False)
+    else:
+        print("No uploadedjpgs.json found → creating empty one")
+        os.makedirs(uploaded_dir, exist_ok=True)
+        with open(uploaded_json_path, 'w', encoding='utf-8') as f:
+            json.dump({"uploaded_jpgs": []}, f, indent=4, ensure_ascii=False)
+
+    # ------------------------------------------------------------------ #
+    # 5. Load *next_jpgcard.json* (create empty if missing/broken)
+    # ------------------------------------------------------------------ #
+    output_dir = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(output_dir, 'next_jpgcard.json')
+
+    already_in_next = set()
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                next_data = json.load(f)
+                already_in_next = set(next_data.get("next_jpgcard", []))
+            print(f"Loaded {len(already_in_next)} URL(s) from previous next_jpgcard.json (will skip re-processing)")
+        except Exception as e:
+            print(f"Warning: Could not read existing next_jpgcard.json → {e}")
+            print("   → Creating empty next_jpgcard.json and continuing...")
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump({"next_jpgcard": []}, f, indent=4, ensure_ascii=False)
+    else:
+        print("No previous next_jpgcard.json found → creating empty one")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump({"next_jpgcard": []}, f, indent=4, ensure_ascii=False)
+
+    # ------------------------------------------------------------------ #
+    # 6. Prepare download folder
+    # ------------------------------------------------------------------ #
+    download_root = r'C:\xampp\htdocs\serenum\files\downloaded'
+    download_dir = os.path.join(download_root, author)
+    os.makedirs(download_dir, exist_ok=True)
+    print(f"Images will be downloaded to: {download_dir}")
+
+    # ------------------------------------------------------------------ #
+    # 7. Validate ONLY NEW URLs + DOWNLOAD
+    # ------------------------------------------------------------------ #
+    valid_new_urls = []
+    invalid_count = 0
+    skipped_duplicates = 0
+    skipped_already_next = 0
+    checked_urls = 0
+
+    print(f"\nTarget: {cardamount} NEW valid JPG(s) for author '{author}'")
+    print(f"Base path: {base_path}")
+    print("Validating URLs from fetched list...\n")
+
+    for url in candidate_urls:
+        checked_urls += 1
+
+        if url in already_in_next:
+            skipped_already_next += 1
+            if skipped_already_next <= 10 or skipped_already_next % 50 == 0:
+                print(f"  [Skipped – already in next_jpgcard] {url}")
+            continue
+
+        if url in already_uploaded:
+            skipped_duplicates += 1
+            if skipped_duplicates <= 10 or skipped_duplicates % 50 == 0:
+                print(f"  [Skipped – already uploaded] {url}")
+            continue
+
+        is_valid, debug = check_single_url(
+            url,
+            temp_dir=download_dir,
+            final_dir=download_dir
+        )
+
+        if is_valid:
+            valid_new_urls.append(url)
+            print(f"  [NEW] {url} ({debug})")
+        else:
+            invalid_count += 1
+            print(f"  [Invalid] {url} ({debug})")
+
+        if len(valid_new_urls) >= cardamount:
+            print(f"\nSuccess: Found {len(valid_new_urls)} NEW valid URLs!")
+            break
+
+    if len(valid_new_urls) < cardamount:
+        needed = cardamount - len(valid_new_urls)
+        print(f"\nWarning: Only found {len(valid_new_urls)} new valid URL(s). Need {needed} more.")
+        print("   → Check server or run fetch_urls() again.")
+
+    # ------------------------------------------------------------------ #
+    # 8. Save next_jpgcard.json → ONLY URLs
+    # ------------------------------------------------------------------ #
+    try:
+        data = {
+            "next_jpgcard": valid_new_urls
+        }
+
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+        print("\n" + "=" * 70)
+        print(f"SUCCESS: Saved {len(valid_new_urls)} NEW valid link(s) to:")
+        print(f"   {json_path}")
+        print(f"Checked URLs                : {checked_urls}")
+        print(f"New & Valid                 : {len(valid_new_urls)}")
+        print(f"Invalid / Broken            : {invalid_count}")
+        print(f"Skipped (already uploaded)  : {skipped_duplicates}")
+        print(f"Skipped (already in next)   : {skipped_already_next}")
+        print("=" * 70)
+
+        if valid_new_urls:
+            print("\nNew URLs ready for posting (verified + downloaded):")
+            for u in valid_new_urls:
+                print(f"   {u}")
+        else:
+            print("\nNo new valid URLs found.")
+
+    except Exception as e:
+        print(f"Failed to write JSON: {e}")
+
+def orderjpgs():
+    # Load configuration from JSON
+    try:
+        with open(JSON_CONFIG_PATH, 'r') as json_file:
+            config = json.load(json_file)
+        author = config['author']
+        processjpgfrom = config.get('processjpgfrom', 'freshjpgs')  # Default to 'freshjpgs'
+        freshjpgs_directory = config['inputpath'].replace('authorvalue', author)
+        output_dir = config['outputpath'].replace('authorvalue', author)
+    except Exception as e:
+        print(f"Failed to load or parse {JSON_CONFIG_PATH}: {e}")
+        return
+
+    # Verify that output path ends with the author folder
+    if not output_dir.endswith(author):
+        print(f"Error: outputpath ({output_dir}) does not end with author folder '{author}'")
+        return
+
+    # Create output directory if it doesn't exist
+    if not os.path.exists(output_dir):
+        try:
+            os.makedirs(output_dir)
+            print(f"Created output directory: {output_dir}")
+        except Exception as e:
+            print(f"Failed to create output directory {output_dir}: {e}")
+            return
+
+    # Supported image extensions
+    image_extensions = {'.jpg', '.png', '.jpeg', '.bmp', '.gif', '.tiff'}
+    directory = None
+
+    if processjpgfrom == 'uploadedjpgs':
+        # Construct base path for uploadedjpgs
+        base_uploaded_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}"
+        if not os.path.exists(base_uploaded_path):
+            print(f"Base uploaded jpgs directory does not exist: {base_uploaded_path}")
+            # Fall back to freshjpgs
+            processjpgfrom = 'freshjpgs'
+            directory = freshjpgs_directory
+        else:
+            # Find valid date folders
+            date_folders = []
+            for f in os.listdir(base_uploaded_path):
+                if os.path.isdir(os.path.join(base_uploaded_path, f)):
+                    try:
+                        # Test if folder name matches DD-Month-YYYY format
+                        datetime.strptime(f, "%d-%B-%Y")
+                        date_folders.append(f)
+                    except ValueError:
+                        print(f"Skipping invalid date folder: {f}")
+                        continue
+
+            if not date_folders:
+                print(f"No valid date folders found in {base_uploaded_path}")
+                # Check base author folder for files
+                base_files = [f for f in os.listdir(base_uploaded_path) if f.lower().endswith(tuple(image_extensions))]
+                if base_files:
+                    # Create oldest date folder (today's date)
+                    oldest_date_folder = datetime.now().strftime("%d-%B-%Y")
+                    oldest_date_path = os.path.join(base_uploaded_path, oldest_date_folder)
+                    os.makedirs(oldest_date_path, exist_ok=True)
+                    print(f"Created oldest date folder: {oldest_date_path}")
+                    # Move files to oldest date folder
+                    for file in base_files:
+                        src = os.path.join(base_uploaded_path, file)
+                        dst = os.path.join(oldest_date_path, file)
+                        shutil.move(src, dst)
+                        print(f"Moved {file} to {oldest_date_path}")
+                    date_folders.append(oldest_date_folder)
+                else:
+                    print(f"No valid image files found in base folder {base_uploaded_path}")
+                    # Fall back to freshjpgs
+                    processjpgfrom = 'freshjpgs'
+                    directory = freshjpgs_directory
+            else:
+                # Sort folders by date (oldest first)
+                try:
+                    date_folders.sort(key=lambda x: datetime.strptime(x, "%d-%B-%Y"))
+                except ValueError as e:
+                    print(f"Error sorting date folders in {base_uploaded_path}: {e}")
+                    # Fall back to freshjpgs
+                    processjpgfrom = 'freshjpgs'
+                    directory = freshjpgs_directory
+
+                # Process folders from oldest to newest until a folder with >20 images is found
+                for date_folder in date_folders:
+                    directory = os.path.join(base_uploaded_path, date_folder)
+                    if not os.path.exists(directory):
+                        print(f"Directory does not exist: {directory}")
+                        continue
+                    # Check for valid image files
+                    image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
+                    if len(image_files) > 20:
+                        print(f"Processing directory with {len(image_files)} images: {directory}")
+                        break  # Found a folder with >20 images, proceed with this directory
+                    else:
+                        print(f"Directory {directory} has {len(image_files)} images (<=20), moving to next date folder")
+                        directory = None
+
+                if not directory:
+                    print(f"No date folder in {base_uploaded_path} has more than 20 images")
+                    # Check base author folder for files
+                    base_files = [f for f in os.listdir(base_uploaded_path) if f.lower().endswith(tuple(image_extensions))]
+                    if base_files:
+                        # Use the oldest date folder or create a new one
+                        oldest_date_folder = date_folders[0] if date_folders else datetime.now().strftime("%d-%B-%Y")
+                        oldest_date_path = os.path.join(base_uploaded_path, oldest_date_folder)
+                        os.makedirs(oldest_date_path, exist_ok=True)
+                        print(f"Using/created oldest date folder: {oldest_date_path}")
+                        # Move files to oldest date folder
+                        for file in base_files:
+                            src = os.path.join(base_uploaded_path, file)
+                            dst = os.path.join(oldest_date_path, file)
+                            shutil.move(src, dst)
+                            print(f"Moved {file} to {oldest_date_path}")
+                        # Recount files in the oldest date folder
+                        directory = oldest_date_path
+                        image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
+                        if len(image_files) > 20:
+                            print(f"Processing directory with {len(image_files)} images after moving files: {directory}")
+                        else:
+                            print(f"Directory {directory} has {len(image_files)} images (<=20) after moving files")
+                            # Fall back to freshjpgs
+                            processjpgfrom = 'freshjpgs'
+                            directory = freshjpgs_directory
+                    else:
+                        print(f"No valid image files found in base folder {base_uploaded_path}")
+                        # Fall back to freshjpgs
+                        processjpgfrom = 'freshjpgs'
+                        directory = freshjpgs_directory
+
+    if processjpgfrom == 'freshjpgs':
+        directory = freshjpgs_directory
+        # Verify input directory ends with author
+        if not directory.endswith(author):
+            print(f"Error: input directory ({directory}) does not end with author folder '{author}'")
+            return
+
+    if not directory or not os.path.exists(directory):
+        print(f"Directory does not exist: {directory}")
+        return
+
+    # Get all image files in the directory
+    image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
+
+    if not image_files:
+        print(f"No valid image files found in {directory}")
+        return
+
+    # Find existing card_N.jpg files and extract numbers
+    existing_numbers = []
+    for file in image_files:
+        match = re.match(r'card_(\d+)\.jpg$', file.lower())
+        if match:
+            existing_numbers.append(int(match.group(1)))
+
+    # Determine the highest number for renaming
+    if existing_numbers:
+        highest_num = max(existing_numbers)
+    else:
+        highest_num = 0
+
+    # Find isolated numbers (before any gap)
+    existing_numbers.sort()
+    isolated_numbers = []
+    for i in range(len(existing_numbers) - 1):
+        if existing_numbers[i + 1] - existing_numbers[i] > 1:
+            isolated_numbers.extend(existing_numbers[:i + 1])
+            break
+
+    # Start numbering from the highest number + 1
+    next_num = highest_num + 1 if existing_numbers else 1
+
+    # Track all card numbers (existing and new) to find the lowest later
+    all_card_numbers = [n for n in existing_numbers if n not in isolated_numbers]
+
+    # Rename isolated numbers to the end
+    for num in sorted(isolated_numbers):
+        old_name = f'card_{num}.jpg'
+        new_name = f'card_{next_num}.jpg'
+        old_path = os.path.join(directory, old_name)
+        new_path = os.path.join(directory, new_name)
+
+        # Ensure no overwrite
+        while os.path.exists(new_path):
+            next_num += 1
+            new_name = f'card_{next_num}.jpg'
+            new_path = os.path.join(directory, new_name)
+
+        os.rename(old_path, new_path)
+        print(f"Renamed {old_name} to {new_name}")
+        all_card_numbers.append(next_num)
+        next_num += 1
+
+    # Find unnumbered .jpg files
+    non_card_jpgs = []
+    for file in image_files:
+        if file.lower().endswith('.jpg') and not re.match(r'card_(\d+)\.jpg$', file.lower()):
+            non_card_jpgs.append(file)
+
+    # Sort alphabetically for consistent ordering
+    non_card_jpgs.sort()
+
+    # Rename unnumbered .jpg files
+    for file in non_card_jpgs:
+        old_path = os.path.join(directory, file)
+        new_name = f'card_{next_num}.jpg'
+        new_path = os.path.join(directory, new_name)
+
+        # Ensure no overwrite
+        while os.path.exists(new_path):
+            next_num += 1
+            new_name = f'card_{next_num}.jpg'
+            new_path = os.path.join(directory, new_name)
+
+        os.rename(old_path, new_path)
+        print(f"Renamed {file} to {new_name}")
+        all_card_numbers.append(next_num)
+        next_num += 1
+
+    # Convert and rename non-.jpg image files
+    non_jpg_images = []
+    for file in image_files:
+        if file.lower().endswith(tuple(image_extensions - {'.jpg'})):
+            non_jpg_images.append(file)
+
+    # Sort alphabetically for consistent ordering
+    non_jpg_images.sort()
+
+    for file in non_jpg_images:
+        old_path = os.path.join(directory, file)
+        new_name = f'card_{next_num}.jpg'
+        new_path = os.path.join(directory, new_name)
+
+        # Ensure no overwrite
+        while os.path.exists(new_path):
+            next_num += 1
+            new_name = f'card_{next_num}.jpg'
+            new_path = os.path.join(directory, new_name)
+
+        # Convert image to .jpg
+        try:
+            with Image.open(old_path) as img:
+                # Convert to RGB if necessary (e.g., for PNG with transparency)
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    img = img.convert('RGB')
+                img.save(new_path, 'JPEG', quality=95)
+            print(f"Converted and renamed {file} to {new_name}")
+            # Remove original non-.jpg file
+            os.remove(old_path)
+            all_card_numbers.append(next_num)
+            next_num += 1
+        except Exception as e:
+            print(f"Failed to convert {file}: {e}")
+
+    # Find the lowest card number after all operations
+    if all_card_numbers:
+        lowest_num = min(all_card_numbers)
+        lowest_card = f'card_{lowest_num}.jpg'
+        lowest_card_path = os.path.join(directory, lowest_card)
+
+        # Check if any card_N.jpg files exist in output_dir
+        output_files = [f for f in os.listdir(output_dir) if re.match(r'card_(\d+)\.jpg$', f.lower())]
+        json_path = os.path.join(output_dir, 'next_jpgcard.json')
+        output_card_path = os.path.join(output_dir, 'card_x.jpg')
+
+        # Write JSON and copy/rename only if card_x.jpg doesn't exist
+        if not os.path.exists(output_card_path):
+            # Copy the lowest card to output_dir
+            try:
+                temp_copy_path = os.path.join(output_dir, lowest_card)
+                shutil.move(lowest_card_path, temp_copy_path)
+                print(f"Copied {lowest_card} to {output_dir}")
+
+                # Rename the copied file to card_x.jpg
+                os.rename(temp_copy_path, output_card_path)
+                print(f"Renamed {lowest_card} to card_x.jpg in {output_dir}")
+
+                # Write JSON only if no card_N.jpg files exist in output_dir
+                if not output_files:
+                    try:
+                        timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
+                        with open(json_path, 'w') as json_file:
+                            json.dump({
+                                'next_jpgcard': lowest_card,
+                                'changed_to': 'card_x.jpg',
+                                'timestamp': timestamp
+                            }, json_file, indent=4)
+                        print(f"Wrote {lowest_card} (changed to card_x.jpg) with timestamp {timestamp} to {json_path}")
+                    except Exception as e:
+                        print(f"Failed to write JSON file: {e}")
+            except Exception as e:
+                print(f"Failed to copy or rename {lowest_card}: {e}")
+        else:
+            print(f"Skipped copying and renaming {lowest_card} as card_x.jpg already exists in {output_dir}")
+    else:
+        print("No card_N.jpg files found after processing.")
+
+
+def update_calendar():
+    """Update the calendar and write to JSON, unconditionally."""
+
+    # Get current date and time
+    now = datetime.now()
+    current_year = now.year
+    current_month = now.month
+    current_day = now.day
+    current_time_12hour = now.strftime("%I:%M %p").lower()
+    current_time_24hour = now.strftime("%H:%M")
+    current_date = datetime.strptime(f"{current_day:02d}/{current_month:02d}/{current_year}", "%d/%m/%Y")
+    
+    print(f"Current date and time: {current_date.strftime('%d/%m/%Y')} {current_time_12hour} ({current_time_24hour})")
+    
+    # Read pageandgroupauthors.json
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
+    try:
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
+        return
+    except json.decoder.JSONDecodeError:
+        print(f"Error: pageandgroupauthors.json contains invalid JSON")
+        return
+    
+    author = pageauthors['author']
+    type_value = pageauthors['type']
+    group_types = pageauthors['group_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
+    
+    # Read timeorders.json
+    timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
+    print(f"Reading timeorders.json from {timeorders_path}")
+    try:
+        with open(timeorders_path, 'r') as f:
+            timeorders_data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: timeorders.json not found at {timeorders_path}")
+        return
+    except json.decoder.JSONDecodeError:
+        print(f"Error: timeorders.json contains invalid JSON")
+        return
+    
+    # Select time slots based on type
+    if type_value not in timeorders_data:
+        print(f"Error: Type '{type_value}' not found in timeorders.json")
+        return
+    timeorders = timeorders_data[type_value]
+    print(f"Time slots loaded from timeorders.json for type '{type_value}':")
+    for t in timeorders:
+        print(f"  - {t['12hours']} ({t['24hours']})")
+    
+    # Sort timeorders by 24-hour format for consistent ordering
+    sorted_timeorders = sorted(timeorders, key=lambda x: x["24hours"])
+    
+    # Find ALL time slots after current time for TODAY
+    time_ahead_today = []
+    current_time = datetime.strptime(current_time_24hour, "%H:%M")
+    current_datetime = datetime.combine(current_date, current_time.time())
+    
+    print(f"Searching for time slots after {current_time_24hour}")
+    for t in sorted_timeorders:
+        slot_time = datetime.strptime(t["24hours"], "%H:%M")
+        delta = slot_time - current_time
+        minutes_distance = int(delta.total_seconds() / 60)
+        
+        # TODAY: Collect all slots >= current time AND before midnight (exclude 00:00)
+        if minutes_distance >= 0 and t["24hours"] != "00:00":
+            slot = {
+                "id": f"{current_day:02d}_{t['24hours'].replace(':', '')}",
+                "12hours": t["12hours"],
+                "24hours": t["24hours"],
+                "minutes_distance": minutes_distance,
+                "consideration": f"passed {t['12hours']}" if minutes_distance >= 50 else f"skip {t['12hours']}"
+            }
+            time_ahead_today.append(slot)
+            print(f"Slot TODAY: {t['12hours']} ({t['24hours']}): id={slot['id']}, minutes_distance={minutes_distance}, consideration={slot['consideration']}")
+    
+    # Calculate next month and year
+    next_month = current_month + 1 if current_month < 12 else 1
+    next_year = current_year if current_month < 12 else current_year + 1
+    
+    # Create calendar data structure
+    calendar_data = {
+        "calendars": [
+            {
+                "year": current_year,
+                "month": calendar.month_name[current_month],
+                "days": [
+                    {
+                        "week": week_idx + 1,
+                        "days": [
+                            {
+                                "day": {
+                                    "date": f"{day:02d}/{current_month:02d}/{current_year}" if day != 0 else None,
+                                    "time_12hour": current_time_12hour if day == current_day else "00:00 pm" if day != 0 else None,
+                                    "time_24hour": current_time_24hour if day == current_day else "00:00" if day != 0 else None,
+                                    "time_ahead": (
+                                        time_ahead_today if day == current_day else
+                                        [
+                                            {
+                                                "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
+                                                "12hours": t["12hours"],
+                                                "24hours": t["24hours"],
+                                                "minutes_distance": int((
+                                                    datetime.strptime(
+                                                        f"{day:02d}/{current_month:02d}/{current_year} {t['24hours']}",
+                                                        "%d/%m/%Y %H:%M"
+                                                    ) - current_datetime
+                                                ).total_seconds() / 60),
+                                                "consideration": f"passed {t['12hours']}"
+                                            } for t in sorted_timeorders
+                                        ] if day != 0 else []
+                                    )
+                                } if day != 0 and day >= current_day else {"day": None}
+                            } for day in week
+                        ]
+                    } for week_idx, week in enumerate(calendar.monthcalendar(current_year, current_month))
+                    if any(day >= current_day or day == 0 for day in week)
+                ]
+            },
+            {
+                "year": next_year,
+                "month": calendar.month_name[next_month],
+                "days": [
+                    {
+                        "week": week_idx + 1,
+                        "days": [
+                            {
+                                "day": {
+                                    "date": f"{day:02d}/{next_month:02d}/{next_year}" if day != 0 else None,
+                                    "time_12hour": "00:00 pm" if day != 0 else None,
+                                    "time_24hour": "00:00" if day != 0 else None,
+                                    "time_ahead": [
+                                        {
+                                            "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
+                                            "12hours": t["12hours"],
+                                            "24hours": t["24hours"],
+                                            "minutes_DISTANCE": int((
+                                                datetime.strptime(
+                                                    f"{day:02d}/{next_month:02d}/{next_year} {t['24hours']}",
+                                                    "%d/%m/%Y %H:%M"
+                                                ) - current_datetime
+                                            ).total_seconds() / 60),
+                                            "consideration": f"passed {t['12hours']}"
+                                        } for t in sorted_timeorders
+                                    ] if day != 0 else []
+                                } if day != 0 else {"day": None}
+                            } for day in week
+                        ]
+                    } for week_idx, week in enumerate(calendar.monthcalendar(next_year, next_month))
+                ]
+            }
+        ]
+    }
+    
+    # Define output path with author, group_types, and type
+    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
+    print(f"Writing calendar data to {output_path}")
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Write to JSON file
+    with open(output_path, 'w') as f:
+        json.dump(calendar_data, f, indent=4)
+    print(f"Calendar data successfully written to {output_path}")
+    
+    # Call schedule_time
+    update_timeschedule()
+def update_timeschedule():
+    """Move next → last (OVERWRITE), generate NEW next_schedule starting AFTER schedule_date."""
+    import os
+    import json
+    from datetime import datetime, timedelta
+
+    # --------------------------------------------------------------------- #
+    # 1. Load config
+    # --------------------------------------------------------------------- #
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    try:
+        with open(pageauthors_path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception as e:
+        print(f"Config error: {e}")
+        return
+
+    author        = cfg['author']
+    type_value    = cfg['type']
+    group_types   = cfg['group_types']
+    cardamount    = int(cfg.get('cardamount', 1))
+    schedule_date_str = cfg.get('schedule_date', '').strip()
+
+    print(f"Config loaded: author={author}, type={type_value}, cardamount={cardamount}, schedule_date='{schedule_date_str}'")
+
+    # --------------------------------------------------------------------- #
+    # 2. Parse schedule_date (must be valid)
+    # --------------------------------------------------------------------- #
+    base_datetime = None
+    if schedule_date_str:
+        for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+            try:
+                dt = datetime.strptime(schedule_date_str.split('.')[0], fmt)  # ignore milliseconds
+                if ' ' not in schedule_date_str:
+                    dt = dt.replace(hour=0, minute=0)
+                base_datetime = dt
+                print(f"Using schedule_date: {base_datetime.strftime('%d/%m/%Y %H:%M')}")
+                break
+            except ValueError:
+                continue
+
+    if base_datetime is None:
+        base_datetime = datetime.now()
+        print(f"Invalid schedule_date. Falling back to now: {base_datetime.strftime('%d/%m/%Y %H:%M')}")
+
+    # --------------------------------------------------------------------- #
+    # 3. Load timeorders
+    # --------------------------------------------------------------------- #
+    timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
+    try:
+        with open(timeorders_path, 'r', encoding='utf-8') as f:
+            timeorders_data = json.load(f)
+    except Exception as e:
+        print(f"Timeorders error: {e}")
+        return
+
+    if type_value not in timeorders_data:
+        print(f"Type '{type_value}' not in timeorders.json")
+        return
+
+    timeorders = sorted(timeorders_data[type_value], key=lambda x: x["24hours"])
+    valid_times_24 = [t["24hours"] for t in timeorders]
+    time_map = {t["24hours"]: t["12hours"] for t in timeorders}
+
+    print(f"Valid time slots for '{type_value}': {', '.join(valid_times_24)}")
+
+    # --------------------------------------------------------------------- #
+    # 4. Paths
+    # --------------------------------------------------------------------- #
+    base_dir = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}"
+    schedules_path = os.path.join(base_dir, f"{type_value}schedules.json")
+
+    # --------------------------------------------------------------------- #
+    # 5. Load existing schedules
+    # --------------------------------------------------------------------- #
+    old_last_schedule = []
+    old_next_schedule = []
+    if os.path.exists(schedules_path):
+        try:
+            with open(schedules_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            old_last_schedule = data.get("last_schedule", [])
+            old_next_schedule = data.get("next_schedule", [])
+            print(f"Loaded: {len(old_last_schedule)} last, {len(old_next_schedule)} next")
+        except Exception as e:
+            print(f"Error reading schedules.json: {e}")
+
+    # --------------------------------------------------------------------- #
+    # 6. STEP 1: Overwrite last_schedule with old_next_schedule
+    # --------------------------------------------------------------------- #
+    new_last_schedule = []
+    for item in old_next_schedule:
+        if isinstance(item, dict):
+            new_last_schedule.append(item)
+        elif isinstance(item, str):
+            # Legacy migration
+            if '_' not in item:
+                continue
+            day, time_part = item.split('_', 1)
+            time_24 = f"{time_part[:2]}:{time_part[2:]}"
+            time_12 = time_map.get(time_24, "12:00 AM")
+            migrated = {
+                "id": item,
+                "date": f"{day.zfill(2)}/{base_datetime.strftime('%m/%Y')}",
+                "time_12hour": time_12,
+                "time_24hour": time_24
+            }
+            new_last_schedule.append(migrated)
+            print(f"Migrated legacy: {item} → {migrated}")
+        else:
+            print(f"Skipping invalid schedule item: {item}")
+
+    print(f"last_schedule updated with {len(new_last_schedule)} slot(s)")
+
+    # --------------------------------------------------------------------- #
+    # 7. Build used_ids from new_last_schedule
+    # --------------------------------------------------------------------- #
+    used_ids = {slot.get("id") for slot in new_last_schedule if isinstance(slot, dict)}
+
+    # --------------------------------------------------------------------- #
+    # 8. Generate next_schedule: start AFTER base_datetime
+    # --------------------------------------------------------------------- #
+    next_schedule_list = []
+    current_search = base_datetime
+    max_days_ahead = 60  # safety
+    days_searched = 0
+
+    while len(next_schedule_list) < cardamount and days_searched < max_days_ahead:
+        day_searched = current_search.date()
+        day_str = day_searched.strftime("%d/%m/%Y")
+
+        for t in timeorders:
+            if len(next_schedule_list) >= cardamount:
+                break
+
+            slot_time_24 = t["24hours"]
+            try:
+                slot_datetime = datetime.combine(day_searched, datetime.strptime(slot_time_24, "%H:%M").time())
+            except:
+                continue
+
+            # Must be AFTER base_datetime
+            if slot_datetime <= base_datetime:
+                continue
+
+            # Today: apply 50-minute buffer
+            if day_searched == base_datetime.date():
+                minutes_diff = (slot_datetime - base_datetime).total_seconds() / 60
+                if minutes_diff < 50:
+                    continue
+            # Future days: allow immediate slot (e.g., 00:05)
+
+            slot_id = f"{day_searched.day:02d}_{slot_time_24.replace(':', '')}"
+
+            if slot_id in used_ids:
+                continue
+
+            new_slot = {
+                "id": slot_id,
+                "date": day_str,
+                "time_12hour": t["12hours"],
+                "time_24hour": slot_time_24
+            }
+            next_schedule_list.append(new_slot)
+            used_ids.add(slot_id)
+            print(f"Added to next: {day_str} {slot_time_24} ({slot_id})")
+
+        # Move to next day
+        current_search += timedelta(days=1)
+        days_searched += 1
+
+    if not next_schedule_list:
+        print("No available slots found after schedule_date.")
+        return
+
+    # --------------------------------------------------------------------- #
+    # 9. Write schedules.json
+    # --------------------------------------------------------------------- #
+    output_data = {
+        "last_schedule": new_last_schedule,
+        "next_schedule": next_schedule_list
+    }
+    os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
+    with open(schedules_path, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, indent=4, ensure_ascii=False)
+    print(f"Schedules written to {schedules_path}")
+
+    # --------------------------------------------------------------------- #
+    # 10. Update schedule_date to LAST slot in next_schedule
+    # --------------------------------------------------------------------- #
+    if next_schedule_list:
+        last_slot = next_schedule_list[-1]
+        try:
+            new_schedule_date = datetime.strptime(
+                f"{last_slot['date']} {last_slot['time_24hour']}",
+                "%d/%m/%Y %H:%M"
+            )
+            cfg["schedule_date"] = new_schedule_date.strftime("%d/%m/%Y %H:%M")
+            with open(pageauthors_path, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+            print(f"schedule_date updated to: {cfg['schedule_date']}")
+        except Exception as e:
+            print(f"Failed to update schedule_date: {e}")
+
+    print(f"SUCCESS: {len(next_schedule_list)} new slot(s) scheduled.")
+    print(f"         last_schedule: {len(new_last_schedule)} slot(s)")
+
+    # --------------------------------------------------------------------- #
+    # 11. Optional: randomize minutes
+    # --------------------------------------------------------------------- #
+    try:
+        randomize_next_schedule_minutes()
+    except NameError:
+        pass
+
+def randomize_next_schedule_minutes():
+    """
+    Randomize minutes (01–30) for EACH slot in next_schedule using its OWN hour.
+    Preserves original hour, only changes minutes.
+    """
+
+    # === Load config ===
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    try:
+        with open(pageauthors_path, 'r', encoding='utf-8') as f:
+            pageauthors = json.load(f)
+    except Exception as e:
+        print(f"[randomize] Config error: {e}")
+        return
+
+    author = pageauthors.get('author')
+    type_value = pageauthors.get('type')
+    group_types = pageauthors.get('group_types', '')
+
+    if not author or not type_value:
+        print("[randomize] Missing author or type in config")
+        return
+
+    # === Build path ===
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+
+    if not os.path.exists(schedules_path):
+        print(f"[randomize] schedules.json not found: {schedules_path}")
+        return
+
+    # === Read schedule ===
+    try:
+        with open(schedules_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[randomize] Error reading JSON: {e}")
+        return
+
+    if 'next_schedule' not in data or not data['next_schedule']:
+        print("[randomize] No next_schedule to randomize.")
+        return
+
+    schedule_list = data['next_schedule']
+    if isinstance(schedule_list, dict):
+        schedule_list = [schedule_list]
+
+    updated_slots = []
+    for slot in schedule_list:
+        try:
+            old_time = slot.get('time_24hour')
+            if not old_time or ':' not in old_time:
+                print(f"[randomize] Invalid time_24hour in slot: {slot}")
+                continue
+
+            hour = int(old_time.split(':')[0])
+            new_min = random.randint(1, 30)  # 01 to 30
+            new_time_24 = f"{hour:02d}:{new_min:02d}"
+
+            # Format 12-hour time
+            dt = datetime.strptime(new_time_24, "%H:%M")
+            new_time_12 = dt.strftime("%I:%M %p").lstrip("0").lower()
+            new_time_12 = new_time_12.replace(" 0", " ").replace("am", "AM").replace("pm", "PM")
+            if new_time_12.startswith("0"):
+                new_time_12 = new_time_12[1:]
+
+            # Update slot
+            slot["time_24hour"] = new_time_24
+            slot["time_12hour"] = new_time_12
+            updated_slots.append(f"{slot['date']} {new_time_24}")
+
+        except Exception as e:
+            print(f"[randomize] Failed to process slot {slot}: {e}")
+            continue
+
+    # === Write back ===
+    try:
+        with open(schedules_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+        print(f"[randomize] Successfully randomized {len(updated_slots)} slots (minutes 01–30):")
+        for s in sorted(updated_slots):
+            print(f"  → {s}")
+    except Exception as e:
+        print(f"[randomize] Failed to save file: {e}")
+def check_schedule_time():
+    """Check if the next schedule in schedules.json is behind the current time."""
+    # Get current date and time
+    now = datetime.now()
+    current_time_24hour = now.strftime("%H:%M")
+    current_date = now.strftime("%d/%m/%Y")
+    current_datetime = datetime.strptime(f"{current_date} {current_time_24hour}", "%d/%m/%Y %H:%M")
+    
+    print(f"Current date and time: {current_date} {current_time_24hour}")
+    
+    # Read pageandgroupauthors.json to get author, type, and group_types
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
+    try:
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
+        return
+    except json.decoder.JSONDecodeError:
+        print(f"Error: pageandgroupauthors.json contains invalid JSON")
+        return
+    
+    author = pageauthors['author']
+    type_value = pageauthors['type']
+    group_types = pageauthors['group_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
+    
+    # Read schedules.json based on new path structure
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    print(f"Reading schedules.json from {schedules_path}")
+    if not os.path.exists(schedules_path):
+        print(f"Error: schedules.json not found at {schedules_path}")
+        update_calendar()
+        return
+    
+    try:
+        with open(schedules_path, 'r') as f:
+            schedules_data = json.load(f)
+    except json.decoder.JSONDecodeError:
+        print(f"Error: schedules.json contains invalid JSON")
+        return
+    
+    # Check for next_schedule
+    if 'next_schedule' not in schedules_data:
+        print(f"Error: 'next_schedule' field missing in schedules.json")
+        update_calendar()
+        return
+    
+    next_schedule = schedules_data['next_schedule']
+    if not next_schedule:
+        print("No next schedule found in schedules.json")
+        return
+    
+    # Extract next schedule date and time
+    try:
+        next_schedule_date = next_schedule['date']
+        next_schedule_time = next_schedule['time_24hour']
+        next_schedule_datetime = datetime.strptime(f"{next_schedule_date} {next_schedule_time}", "%d/%m/%Y %H:%M")
+    except (KeyError, ValueError) as e:
+        print(f"Error: Invalid date or time format in next_schedule: {next_schedule}. Error: {str(e)}")
+        return
+    
+    # Compare with current time
+    if next_schedule_datetime < current_datetime:
+        print(f"Next schedule is behind the current time: {next_schedule_date} {next_schedule_time} is earlier than {current_date} {current_time_24hour}")
+        update_timeschedule()
+    else:
+        print(f"Next schedule is valid: {next_schedule_date} {next_schedule_time} is not behind {current_date} {current_time_24hour}")
+
+
+
 def resetgroupswitchandscheduledate():
     """
     Resets the group_switch to 'no' and schedule_date to 'none' in pageandgroupauthors.json.
@@ -1420,6 +3020,7 @@ def selectgroups():
             
             selectgroups.groups_selected = True
             selectgroups.failed_attempts = 0  # Reset failed attempts on success
+            toggle_group_types()
             print("Updated tracker: groups_selected set to True, failed_attempts reset to 0")
             return True
 
@@ -1430,1297 +3031,43 @@ def selectgroups():
         print(f"Invalid group config: '{group_config}'. Defaulting to no group selection.")
         return False
 
-
-def update_calendar_free():
-    """Update the calendar and write to JSON, unconditionally."""
-
-    # Get current date and time
-    now = datetime.now()
-    current_year = now.year
-    current_month = now.month
-    current_day = now.day
-    current_time_12hour = now.strftime("%I:%M %p").lower()
-    current_time_24hour = now.strftime("%H:%M")
-    current_date = datetime.strptime(f"{current_day:02d}/{current_month:02d}/{current_year}", "%d/%m/%Y")
-    
-    print(f"Current date and time: {current_date.strftime('%d/%m/%Y')} {current_time_12hour} ({current_time_24hour})")
-    
-    # Read pageandgroupauthors.json
-    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
-    try:
-        with open(pageauthors_path, 'r') as f:
-            pageauthors = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: pageandgroupauthors.json contains invalid JSON")
-        return
-    
-    author = pageauthors['author']
-    type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
-    
-    # Read timeorders.json
-    timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
-    print(f"Reading timeorders.json from {timeorders_path}")
-    try:
-        with open(timeorders_path, 'r') as f:
-            timeorders_data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: timeorders.json not found at {timeorders_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: timeorders.json contains invalid JSON")
-        return
-    
-    # Select time slots based on type
-    if type_value not in timeorders_data:
-        print(f"Error: Type '{type_value}' not found in timeorders.json")
-        return
-    timeorders = timeorders_data[type_value]
-    print(f"Time slots loaded from timeorders.json for type '{type_value}':")
-    for t in timeorders:
-        print(f"  - {t['12hours']} ({t['24hours']})")
-    
-    # Sort timeorders by 24-hour format for consistent ordering
-    sorted_timeorders = sorted(timeorders, key=lambda x: x["24hours"])
-    
-    # Find ALL time slots after current time for TODAY
-    time_ahead_today = []
-    current_time = datetime.strptime(current_time_24hour, "%H:%M")
-    current_datetime = datetime.combine(current_date, current_time.time())
-    
-    print(f"Searching for time slots after {current_time_24hour}")
-    for t in sorted_timeorders:
-        slot_time = datetime.strptime(t["24hours"], "%H:%M")
-        delta = slot_time - current_time
-        minutes_distance = int(delta.total_seconds() / 60)
-        
-        # TODAY: Collect all slots >= current time AND before midnight (exclude 00:00)
-        if minutes_distance >= 0 and t["24hours"] != "00:00":
-            slot = {
-                "id": f"{current_day:02d}_{t['24hours'].replace(':', '')}",
-                "12hours": t["12hours"],
-                "24hours": t["24hours"],
-                "minutes_distance": minutes_distance,
-                "consideration": f"passed {t['12hours']}" if minutes_distance >= 50 else f"skip {t['12hours']}"
-            }
-            time_ahead_today.append(slot)
-            print(f"Slot TODAY: {t['12hours']} ({t['24hours']}): id={slot['id']}, minutes_distance={minutes_distance}, consideration={slot['consideration']}")
-    
-    # Calculate next month and year
-    next_month = current_month + 1 if current_month < 12 else 1
-    next_year = current_year if current_month < 12 else current_year + 1
-    
-    # Create calendar data structure
-    calendar_data = {
-        "calendars": [
-            {
-                "year": current_year,
-                "month": calendar.month_name[current_month],
-                "days": [
-                    {
-                        "week": week_idx + 1,
-                        "days": [
-                            {
-                                "day": {
-                                    "date": f"{day:02d}/{current_month:02d}/{current_year}" if day != 0 else None,
-                                    "time_12hour": current_time_12hour if day == current_day else "00:00 pm" if day != 0 else None,
-                                    "time_24hour": current_time_24hour if day == current_day else "00:00" if day != 0 else None,
-                                    "time_ahead": (
-                                        time_ahead_today if day == current_day else
-                                        [
-                                            {
-                                                "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
-                                                "12hours": t["12hours"],
-                                                "24hours": t["24hours"],
-                                                "minutes_distance": int((
-                                                    datetime.strptime(
-                                                        f"{day:02d}/{current_month:02d}/{current_year} {t['24hours']}",
-                                                        "%d/%m/%Y %H:%M"
-                                                    ) - current_datetime
-                                                ).total_seconds() / 60),
-                                                "consideration": f"passed {t['12hours']}"
-                                            } for t in sorted_timeorders
-                                        ] if day != 0 else []
-                                    )
-                                } if day != 0 and day >= current_day else {"day": None}
-                            } for day in week
-                        ]
-                    } for week_idx, week in enumerate(calendar.monthcalendar(current_year, current_month))
-                    if any(day >= current_day or day == 0 for day in week)
-                ]
-            },
-            {
-                "year": next_year,
-                "month": calendar.month_name[next_month],
-                "days": [
-                    {
-                        "week": week_idx + 1,
-                        "days": [
-                            {
-                                "day": {
-                                    "date": f"{day:02d}/{next_month:02d}/{next_year}" if day != 0 else None,
-                                    "time_12hour": "00:00 pm" if day != 0 else None,
-                                    "time_24hour": "00:00" if day != 0 else None,
-                                    "time_ahead": [
-                                        {
-                                            "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
-                                            "12hours": t["12hours"],
-                                            "24hours": t["24hours"],
-                                            "minutes_DISTANCE": int((
-                                                datetime.strptime(
-                                                    f"{day:02d}/{next_month:02d}/{next_year} {t['24hours']}",
-                                                    "%d/%m/%Y %H:%M"
-                                                ) - current_datetime
-                                            ).total_seconds() / 60),
-                                            "consideration": f"passed {t['12hours']}"
-                                        } for t in sorted_timeorders
-                                    ] if day != 0 else []
-                                } if day != 0 else {"day": None}
-                            } for day in week
-                        ]
-                    } for week_idx, week in enumerate(calendar.monthcalendar(next_year, next_month))
-                ]
-            }
-        ]
-    }
-    
-    # Define output path with author, group_types, and type
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
-    print(f"Writing calendar data to {output_path}")
-    
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # Write to JSON file
-    with open(output_path, 'w') as f:
-        json.dump(calendar_data, f, indent=4)
-    print(f"Calendar data successfully written to {output_path}")
-    
-    # Call schedule_time
-    update_timeschedule()
-def set_custom_schedule_date():
+def toggle_group_types():
     """
-    Handles **all** schedule_date actions:
-      • custom date + time (dd/mm/yyyy hh:mm or hh:mm AM/PM) → next_schedule = that datetime
-      • resumetocurrentdate   → archive current schedule, clear schedules.json, call update_timeschedule()
-      • continuefromlastdate  → restore most recent record from schedulesrecords.json
-      • none / invalid        → do nothing
+    Toggle the 'group_types' field in the JSON config between 'uk' and 'others'.
+    If current value is 'uk' → rewrite to 'others'
+    If current value is 'others' → rewrite to 'uk'
+    If missing or invalid → default to 'others'
     """
-    import os, json
-    from datetime import datetime
-    import re
-
-    # ------------------------------------------------------------------ #
-    # 1. Load config
-    # ------------------------------------------------------------------ #
-    cfg_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    if not os.path.exists(cfg_path):
-        print("[schedule] config not found")
-        return
+    if not os.path.exists(JSON_CONFIG_PATH):
+        print(f"Config file {JSON_CONFIG_PATH} does not exist. Creating with default 'group_types': 'others'.")
+        config_data = {"group_types": "others"}
+        os.makedirs(os.path.dirname(JSON_CONFIG_PATH), exist_ok=True)
+        with open(JSON_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4)
+        print("Created config with group_types = 'others'")
+        return True
 
     try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
+        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
     except Exception as e:
-        print(f"[schedule] error reading config: {e}")
-        return
+        print(f"Error reading config {JSON_CONFIG_PATH}: {str(e)}. Initializing with defaults.")
+        config_data = {}
 
-    author       = cfg.get("author")
-    typ          = cfg.get("type")
-    group_types  = cfg.get("group_types", "")
-    schedule_raw = cfg.get("schedule_date", "none").strip()
+    current_type = config_data.get('group_types', 'others').strip().lower()
+    
+    new_type = 'uk' if current_type == 'others' else 'others'
+    
+    config_data['group_types'] = new_type
 
-    if not author or not typ:
-        print("[schedule] missing author or type")
-        return
-
-    # ------------------------------------------------------------------ #
-    # 2. Paths
-    # ------------------------------------------------------------------ #
-    base_dir = fr"C:\xampp\htdocs\serenum\files\next jpg\{author}\jsons\{group_types}"
-    schedules_path       = os.path.join(base_dir, f"{typ}schedules.json")
-    schedules_records_path = os.path.join(base_dir, f"{typ}schedulesrecords.json")
-
-    # ------------------------------------------------------------------ #
-    # 3. Helper: Parse datetime from flexible input
-    # ------------------------------------------------------------------ #
-    def parse_custom_datetime(input_str):
-        input_str = input_str.strip()
-        if not input_str or input_str.lower() in ("none", "resumetocurrentdate", "continuefromlastdate"):
-            return None
-
-        # Regex patterns
-        pattern_24 = r'^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}):(\d{2})$'  # dd/mm/yyyy hh:mm
-        pattern_12 = r'^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)$'  # with AM/PM
-        pattern_12_spaced = r'^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}):(\d{2})\s+(AM|PM)$'  # extra space
-
-        match = None
-        for pattern in [pattern_24, pattern_12, pattern_12_spaced]:
-            match = re.match(pattern, input_str, re.IGNORECASE)
-            if match:
-                break
-
-        if not match:
-            return None
-
-        date_part = match.group(1)
-        try:
-            dt = datetime.strptime(date_part, "%d/%m/%Y")
-        except ValueError:
-            return None
-
-        if len(match.groups()) == 3:  # 24-hour format
-            hh, mm = int(match.group(2)), int(match.group(3))
-            if not (0 <= hh <= 23 and 0 <= mm <= 59):
-                return None
-            dt = dt.replace(hour=hh, minute=mm)
-        else:  # 12-hour format
-            hh, mm, ampm = int(match.group(2)), int(match.group(3)), match.group(4).upper()
-            if not (1 <= hh <= 12 and 0 <= mm <= 59):
-                return None
-            if hh == 12:
-                hh = 0 if ampm == 'AM' else 12
-            else:
-                hh = hh if ampm == 'AM' else hh + 12
-            dt = dt.replace(hour=hh, minute=mm)
-
-        return dt
-
-    # ------------------------------------------------------------------ #
-    # 4. CUSTOM DATE + TIME
-    # ------------------------------------------------------------------ #
-    parsed_dt = parse_custom_datetime(schedule_raw)
-    if parsed_dt:
-        # Preserve old next_schedule as last_schedule
-        last_sched = None
-        if os.path.exists(schedules_path) and os.path.getsize(schedules_path):
-            try:
-                with open(schedules_path, "r", encoding="utf-8") as f:
-                    old = json.load(f)
-                last_sched = old.get("next_schedule")
-            except Exception:
-                pass
-
-        # Format times
-        date_str = parsed_dt.strftime("%d/%m/%Y")
-        time_24 = parsed_dt.strftime("%H:%M")
-        time_12 = parsed_dt.strftime("%I:%M %p").lstrip("0").replace(" 0", " ").lower()
-        # Fix: "12:05 am" → "12:05 am", "01:05 pm" → "1:05 pm"
-        if time_12.startswith("0"):
-            time_12 = time_12[1:]
-        time_12 = time_12.replace("am", "AM").replace("pm", "PM")  # standardize
-
-        hour_24 = int(time_24.split(":")[0])
-        id_str = f"{parsed_dt.day:02d}_{hour_24:02d}00"
-
-        next_sched = {
-            "id":           id_str,
-            "date":         date_str,
-            "time_12hour":  time_12,
-            "time_24hour":  time_24
-        }
-
-        new_data = {"last_schedule": last_sched, "next_schedule": next_sched}
-        os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
-        with open(schedules_path, "w", encoding="utf-8") as f:
-            json.dump(new_data, f, indent=4)
-
-        print(f"[schedule] custom datetime written → {date_str} {time_24}")
-
-        # Reset config
-        cfg["schedule_date"] = "none"
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=4)
-        return
-
-    # ------------------------------------------------------------------ #
-    # 5. RESUME TO CURRENT DATE
-    # ------------------------------------------------------------------ #
-    if schedule_raw.lower() == "resumetocurrentdate":
-        print("[schedule] resumetocurrentdate")
-
-        cur = {}
-        if os.path.exists(schedules_path) and os.path.getsize(schedules_path):
-            try:
-                with open(schedules_path, "r", encoding="utf-8") as f:
-                    cur = json.load(f)
-            except Exception as e:
-                print(f"[schedule] read error: {e}")
-
-        has_data = cur and (cur.get("last_schedule") or cur.get("next_schedule"))
-
-        if has_data:
-            recs = []
-            if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path):
-                try:
-                    with open(schedules_records_path, "r", encoding="utf-8") as f:
-                        recs = json.load(f)
-                        if not isinstance(recs, list):
-                            recs = []
-                except Exception:
-                    recs = []
-
-            if cur not in recs:
-                recs.append(cur)
-                os.makedirs(os.path.dirname(schedules_records_path), exist_ok=True)
-                with open(schedules_records_path, "w", encoding="utf-8") as f:
-                    json.dump(recs, f, indent=4)
-                print("[schedule] archived current schedule")
-
-        os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
-        with open(schedules_path, "w", encoding="utf-8") as f:
-            json.dump({}, f, indent=4)
-
-        cfg["schedule_date"] = "none"
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=4)
-
-        try:
-            update_timeschedule()
-        except NameError:
-            print("[schedule] update_timeschedule not defined")
-        return
-
-    # ------------------------------------------------------------------ #
-    # 6. CONTINUE FROM LAST DATE
-    # ------------------------------------------------------------------ #
-    if schedule_raw.lower() == "continuefromlastdate":
-        print("[schedule] continuefromlastdate")
-
-        os.makedirs(os.path.dirname(schedules_path), exist_ok=True)
-        with open(schedules_path, "w", encoding="utf-8") as f:
-            json.dump({}, f, indent=4)
-
-        recs = []
-        if os.path.exists(schedules_records_path) and os.path.getsize(schedules_records_path):
-            try:
-                with open(schedules_records_path, "r", encoding="utf-8") as f:
-                    recs = json.load(f)
-                    if not isinstance(recs, list):
-                        recs = []
-            except Exception:
-                recs = []
-
-        if not recs:
-            print("[schedule] no records to restore")
-            cfg["schedule_date"] = "none"
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=4)
-            try:
-                update_calendar_free()
-            except NameError:
-                pass
-            return
-
-        latest = None
-        latest_dt = None
-        for r in recs:
-            ns = r.get("next_schedule", {})
-            if not ns or "date" not in ns or "time_24hour" not in ns:
-                continue
-            try:
-                dt = datetime.strptime(f"{ns['date']} {ns['time_24hour']}", "%d/%m/%Y %H:%M")
-                if latest_dt is None or dt > latest_dt:
-                    latest_dt = dt
-                    latest = r
-            except ValueError:
-                continue
-
-        if latest:
-            with open(schedules_path, "w", encoding="utf-8") as f:
-                json.dump(latest, f, indent=4)
-            ns = latest.get('next_schedule', {})
-            print(f"[schedule] restored latest schedule: {ns.get('date')} {ns.get('time_24hour')}")
-        else:
-            print("[schedule] no valid next_schedule in records")
-
-        cfg["schedule_date"] = "none"
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=4)
-        return
-
-    # ------------------------------------------------------------------ #
-    # 7. NONE / INVALID
-    # ------------------------------------------------------------------ #
-    if schedule_raw.lower() != "none":
-        print(f"[schedule] invalid schedule_date: '{schedule_raw}' – use 'dd/mm/yyyy hh:mm', 'hh:mm AM/PM', 'resumetocurrentdate', 'continuefromlastdate', or 'none'")
-    else:
-        print("[schedule] schedule_date = 'none' – nothing to do")  
-        
-def update_calendar():
-    """Update the calendar and write to JSON, conditional on driverprogress.json status."""
-    check_schedule_time()
-    # Check driverprogress.json for condition
-    driver_progress_path = r"C:\xampp\htdocs\serenum\driverprogress.json"
     try:
-        with open(driver_progress_path, 'r') as f:
-            progress_data = json.load(f)
-        if not (progress_data.get("driver") == "started" and progress_data.get("scheduled") == "successfully"):
-            print(f"Skipping update_calendar: driverprogress.json does not match required condition (driver: started, scheduled: successfully). Current: {progress_data}")
-            return
-        print("driverprogress.json condition met: {'driver': 'started', 'scheduled': 'successfully'}")
-    except FileNotFoundError:
-        print(f"Error: {driver_progress_path} not found. Skipping update_calendar.")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: {driver_progress_path} contains invalid JSON. Skipping update_calendar.")
-        return
+        with open(JSON_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4)
+        print(f"Successfully toggled group_types: '{current_type}' → '{new_type}'")
+        return True
     except Exception as e:
-        print(f"Error reading {driver_progress_path}: {str(e)}. Skipping update_calendar.")
-        return
-
-    # Get current date and time
-    now = datetime.now()
-    current_year = now.year
-    current_month = now.month
-    current_day = now.day
-    current_time_12hour = now.strftime("%I:%M %p").lower()
-    current_time_24hour = now.strftime("%H:%M")
-    current_date = datetime.strptime(f"{current_day:02d}/{current_month:02d}/{current_year}", "%d/%m/%Y")
-    
-    print(f"Current date and time: {current_date.strftime('%d/%m/%Y')} {current_time_12hour} ({current_time_24hour})")
-    
-    # Read pageandgroupauthors.json
-    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
-    try:
-        with open(pageauthors_path, 'r') as f:
-            pageauthors = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: pageandgroupauthors.json contains invalid JSON")
-        return
-    
-    author = pageauthors['author']
-    type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
-    
-    # Read timeorders.json
-    timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
-    print(f"Reading timeorders.json from {timeorders_path}")
-    try:
-        with open(timeorders_path, 'r') as f:
-            timeorders_data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: timeorders.json not found at {timeorders_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: timeorders.json contains invalid JSON")
-        return
-    
-    # Select time slots based on type
-    if type_value not in timeorders_data:
-        print(f"Error: Type '{type_value}' not found in timeorders.json")
-        return
-    timeorders = timeorders_data[type_value]
-    print(f"Time slots loaded from timeorders.json for type '{type_value}':")
-    for t in timeorders:
-        print(f"  - {t['12hours']} ({t['24hours']})")
-    
-    # Sort timeorders by 24-hour format for consistent ordering
-    sorted_timeorders = sorted(timeorders, key=lambda x: x["24hours"])
-    
-    # Find ALL time slots after current time for TODAY
-    time_ahead_today = []
-    current_time = datetime.strptime(current_time_24hour, "%H:%M")
-    current_datetime = datetime.combine(current_date, current_time.time())
-    
-    print(f"Searching for time slots after {current_time_24hour}")
-    for t in sorted_timeorders:
-        slot_time = datetime.strptime(t["24hours"], "%H:%M")
-        delta = slot_time - current_time
-        minutes_distance = int(delta.total_seconds() / 60)
-        
-        # TODAY: Collect all slots >= current time AND before midnight (exclude 00:00)
-        if minutes_distance >= 0 and t["24hours"] != "00:00":
-            slot = {
-                "id": f"{current_day:02d}_{t['24hours'].replace(':', '')}",
-                "12hours": t["12hours"],
-                "24hours": t["24hours"],
-                "minutes_distance": minutes_distance,
-                "consideration": f"passed {t['12hours']}" if minutes_distance >= 50 else f"skip {t['12hours']}"
-            }
-            time_ahead_today.append(slot)
-            print(f"Slot TODAY: {t['12hours']} ({t['24hours']}): id={slot['id']}, minutes_distance={minutes_distance}, consideration={slot['consideration']}")
-    
-    # Calculate next month and year
-    next_month = current_month + 1 if current_month < 12 else 1
-    next_year = current_year if current_month < 12 else current_year + 1
-    
-    # Create calendar data structure
-    calendar_data = {
-        "calendars": [
-            {
-                "year": current_year,
-                "month": calendar.month_name[current_month],
-                "days": [
-                    {
-                        "week": week_idx + 1,
-                        "days": [
-                            {
-                                "day": {
-                                    "date": f"{day:02d}/{current_month:02d}/{current_year}" if day != 0 else None,
-                                    "time_12hour": current_time_12hour if day == current_day else "00:00 pm" if day != 0 else None,
-                                    "time_24hour": current_time_24hour if day == current_day else "00:00" if day != 0 else None,
-                                    "time_ahead": (
-                                        time_ahead_today if day == current_day else
-                                        [
-                                            {
-                                                "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
-                                                "12hours": t["12hours"],
-                                                "24hours": t["24hours"],
-                                                "minutes_distance": int((
-                                                    datetime.strptime(
-                                                        f"{day:02d}/{current_month:02d}/{current_year} {t['24hours']}",
-                                                        "%d/%m/%Y %H:%M"
-                                                    ) - current_datetime
-                                                ).total_seconds() / 60),
-                                                "consideration": f"passed {t['12hours']}"
-                                            } for t in sorted_timeorders
-                                        ] if day != 0 else []
-                                    )
-                                } if day != 0 and day >= current_day else {"day": None}
-                            } for day in week
-                        ]
-                    } for week_idx, week in enumerate(calendar.monthcalendar(current_year, current_month))
-                    if any(day >= current_day or day == 0 for day in week)
-                ]
-            },
-            {
-                "year": next_year,
-                "month": calendar.month_name[next_month],
-                "days": [
-                    {
-                        "week": week_idx + 1,
-                        "days": [
-                            {
-                                "day": {
-                                    "date": f"{day:02d}/{next_month:02d}/{next_year}" if day != 0 else None,
-                                    "time_12hour": "00:00 pm" if day != 0 else None,
-                                    "time_24hour": "00:00" if day != 0 else None,
-                                    "time_ahead": [
-                                        {
-                                            "id": f"{day:02d}_{t['24hours'].replace(':', '')}",
-                                            "12hours": t["12hours"],
-                                            "24hours": t["24hours"],
-                                            "minutes_distance": int((
-                                                datetime.strptime(
-                                                    f"{day:02d}/{next_month:02d}/{next_year} {t['24hours']}",
-                                                    "%d/%m/%Y %H:%M"
-                                                ) - current_datetime
-                                            ).total_seconds() / 60),
-                                            "consideration": f"passed {t['12hours']}"
-                                        } for t in sorted_timeorders
-                                    ] if day != 0 else []
-                                } if day != 0 else {"day": None}
-                            } for day in week
-                        ]
-                    } for week_idx, week in enumerate(calendar.monthcalendar(next_year, next_month))
-                ]
-            }
-        ]
-    }
-    
-    # Define output path with author, group_types, and type
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
-    print(f"Writing calendar data to {output_path}")
-    
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # Write to JSON file
-    with open(output_path, 'w') as f:
-        json.dump(calendar_data, f, indent=4)
-    print(f"Calendar data successfully written to {output_path}")
-    
-    # Call schedule_time
-    update_timeschedule()
-def randomize_next_schedule_minutes():
-    """Set next_schedule minutes to a random value between 02 and 50 (same hour)."""
-    
-    # === 1. Get author, type, group from pageandgroupauthors.json ===
-    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    try:
-        with open(pageauthors_path, 'r') as f:
-            pageauthors = json.load(f)
-    except Exception as e:
-        print(f"Error: Could not read pageandgroupauthors.json → {e}")
-        return
-
-    author = pageauthors['author']
-    type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-
-    # === 2. Build path to schedules.json ===
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
-    
-    if not os.path.exists(schedules_path):
-        print(f"Error: schedules.json not found at {schedules_path}")
-        return
-
-    # === 3. Read current schedules.json ===
-    try:
-        with open(schedules_path, 'r') as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"Error reading schedules.json: {e}")
-        return
-
-    if 'next_schedule' not in data:
-        print("No 'next_schedule' found in file.")
-        return
-
-    next_sched = data['next_schedule']
-    old_time = next_sched['time_24hour']
-    
-    try:
-        hour = int(old_time.split(':')[0])
-        # Generate random minute: 02 to 50
-        new_minute = random.randint(2, 50)
-        new_minute_str = f"{new_minute:02d}"
-        
-        new_time_24 = f"{hour:02d}:{new_minute_str}"
-        new_time_12 = datetime.strptime(new_time_24, "%H:%M").strftime("%I:%M %p").lower()
-        
-    except Exception as e:
-        print(f"Invalid time format: {old_time} → {e}")
-        return
-
-    # === 4. Update next_schedule ===
-    data['next_schedule'].update({
-        "time_24hour": new_time_24,
-        "time_12hour": new_time_12
-    })
-
-    # === 5. Write back to file ===
-    try:
-        with open(schedules_path, 'w') as f:
-            json.dump(data, f, indent=4)
-        print("Minutes randomized (02–50)!")
-        print(f"   Old: {old_time}")
-        print(f"   New: {new_time_24} ({new_time_12})")
-        print(f"   File: {schedules_path}")
-    except Exception as e:
-        print(f"Failed to save: {e}")
-def update_timeschedule():
-    """Determine the next schedule time and write to schedules.json."""
-    
-    # Get current date and time
-    now = datetime.now()
-    current_year = now.year
-    current_month = now.month
-    current_day = now.day
-    current_time_24hour = now.strftime("%H:%M")
-    current_time_12hour = now.strftime("%I:%M %p").lower()
-    current_date = now.strftime("%d/%m/%Y")
-    
-    print(f"Current date and time: {current_date} {current_time_12hour} ({current_time_24hour})")
-    
-    # Read pageandgroupauthors.json to get author, type, and group_types
-    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
-    try:
-        with open(pageauthors_path, 'r') as f:
-            pageauthors = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: pageandgroupauthors.json contains invalid JSON")
-        return
-    
-    author = pageauthors['author']
-    type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
-    
-    # Read calendar.json based on new path structure
-    calendar_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
-    print(f"Reading calendar.json from {calendar_path}")
-    try:
-        with open(calendar_path, 'r') as f:
-            calendar_data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: calendar.json not found at {calendar_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: calendar.json contains invalid JSON")
-        return
-    
-    # Read existing schedules.json to get the last recorded slot and previous next_schedule
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
-    last_schedule = None
-    previous_next_schedule = None
-    if os.path.exists(schedules_path):
-        try:
-            with open(schedules_path, 'r') as f:
-                existing_data = json.load(f)
-                if isinstance(existing_data, dict):
-                    if 'last_schedule' in existing_data:
-                        last_schedule = existing_data['last_schedule']
-                        print(f"Previous slot (last_schedule): {last_schedule}")
-                    if 'next_schedule' in existing_data:
-                        previous_next_schedule = existing_data['next_schedule']
-                        print(f"Previous next_schedule: {previous_next_schedule}")
-                    else:
-                        print(f"Error: 'next_schedule' field missing in schedules.json")
-                else:
-                    print(f"Error: Invalid format in schedules.json, expected dict with 'last_schedule' and 'next_schedule'")
-        except json.decoder.JSONDecodeError:
-            print(f"schedules.json is empty or contains invalid JSON, treating as non-existent")
-    
-    # Read timeorders.json
-    timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
-    print(f"Reading timeorders.json from {timeorders_path}")
-    try:
-        with open(timeorders_path, 'r') as f:
-            timeorders_data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: timeorders.json not found at {timeorders_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: timeorders.json contains invalid JSON")
-        return
-    
-    # Select time slots based on type
-    if type_value not in timeorders_data:
-        print(f"Error: Type '{type_value}' not found in timeorders.json")
-        return
-    timeorders = timeorders_data[type_value]
-    print(f"Time orders for {type_value}: {timeorders}")
-    
-    # Sort timeorders by 24-hour format
-    sorted_timeorders = sorted(timeorders, key=lambda x: x["24hours"])
-    
-    # Find the next "passed" time slot
-    current_time = datetime.strptime(current_time_24hour, "%H:%M")
-    current_datetime = datetime.combine(datetime.strptime(current_date, "%d/%m/%Y"), current_time.time())
-    
-    next_slot = None
-    found_last_slot = False if last_schedule else True
-    found_previous_next_slot = False if previous_next_schedule else True
-    last_schedule_date = None
-    last_schedule_time = None
-    previous_next_schedule_date = None
-    previous_next_schedule_time = None
-    
-    if last_schedule:
-        try:
-            last_schedule_date = datetime.strptime(last_schedule["date"], "%d/%m/%Y")
-            last_schedule_time = datetime.strptime(last_schedule["time_24hour"], "%H:%M")
-        except ValueError:
-            print(f"Invalid date or time format in last_schedule: {last_schedule}")
-            found_last_slot = True  # Treat invalid last_schedule as if it doesn't exist
-    
-    if previous_next_schedule:
-        try:
-            previous_next_schedule_date = datetime.strptime(previous_next_schedule["date"], "%d/%m/%Y")
-            previous_next_schedule_time = datetime.strptime(previous_next_schedule["time_24hour"], "%H:%M")
-        except ValueError:
-            print(f"Invalid date or time format in previous_next_schedule: {previous_next_schedule}")
-            found_previous_next_slot = True  # Treat invalid previous_next_schedule as if it doesn't exist
-    
-    # Iterate through calendar to find the next valid slot
-    for cal in calendar_data["calendars"]:
-        for week in cal["days"]:
-            for day_entry in week["days"]:
-                day = day_entry.get("day")
-                if not day or (day.get("day") is None and not day.get("date")):
-                    continue
-                
-                date = day.get("date")
-                if not date:
-                    continue
-                
-                try:
-                    slot_date = datetime.strptime(date, "%d/%m/%Y")
-                except ValueError:
-                    print(f"Invalid date format in calendar: {date}")
-                    continue
-                
-                # Skip dates before today
-                if slot_date.date() < current_datetime.date():
-                    continue
-                
-                # Process time slots for the date
-                for slot in day.get("time_ahead", []):
-                    print(f"Checking slot: {slot}")
-                    # Validate slot time
-                    if slot["24hours"] not in [t["24hours"] for t in sorted_timeorders]:
-                        print(f"Slot {slot['24hours']} not in timeorders, skipping")
-                        continue
-                    
-                    # Only consider slots marked as "passed"
-                    if "passed" not in slot["consideration"].lower():
-                        print(f"Slot {slot['24hours']} not marked as 'passed', skipping")
-                        continue
-                    
-                    # For today, ensure the slot is at least 50 minutes ahead
-                    if slot_date.date() == current_datetime.date():
-                        try:
-                            slot_time = datetime.strptime(slot["24hours"], "%H:%M")
-                            delta = slot_time - current_time
-                            minutes_distance = int(delta.total_seconds() / 60)
-                            if minutes_distance < 50:
-                                print(f"Slot {slot['24hours']} is {minutes_distance} minutes away, too soon, skipping")
-                                continue
-                        except ValueError:
-                            print(f"Invalid time format in slot: {slot['24hours']}")
-                            continue
-                    
-                    # If last_schedule exists, check if we need to skip until after it
-                    if last_schedule and not found_last_slot:
-                        if (last_schedule["date"] == date and 
-                            last_schedule["time_24hour"] == slot["24hours"] and 
-                            last_schedule["id"] == slot["id"]):
-                            found_last_slot = True
-                            print(f"Found last_schedule match: {slot}")
-                            continue
-                        # If no match, check if we've passed last_schedule's date/time
-                        slot_time = datetime.strptime(slot["24hours"], "%H:%M")
-                        if (slot_date.date() > last_schedule_date.date() or 
-                            (slot_date.date() == last_schedule_date.date() and slot_time > last_schedule_time)):
-                            found_last_slot = True
-                            print(f"Passed last_schedule date/time, proceeding with slot: {slot}")
-                    
-                    # If previous_next_schedule exists, check if we need to skip it
-                    if previous_next_schedule and not found_previous_next_slot:
-                        if (previous_next_schedule["date"] == date and 
-                            previous_next_schedule["time_24hour"] == slot["24hours"] and 
-                            previous_next_schedule["id"] == slot["id"]):
-                            found_previous_next_slot = True
-                            print(f"Found previous_next_schedule match: {slot}")
-                            continue
-                        # If no match, check if we've passed previous_next_schedule's date/time
-                        slot_time = datetime.strptime(slot["24hours"], "%H:%M")
-                        if (slot_date.date() > previous_next_schedule_date.date() or 
-                            (slot_date.date() == previous_next_schedule_date.date() and slot_time > previous_next_schedule_time)):
-                            found_previous_next_slot = True
-                            print(f"Passed previous_next_schedule date/time, proceeding with slot: {slot}")
-                    
-                    # Select this slot only if we've passed both last_schedule and previous_next_schedule
-                    if found_last_slot and found_previous_next_slot:
-                        next_slot = {
-                            "id": slot["id"],
-                            "date": date,
-                            "time_12hour": slot["12hours"],
-                            "time_24hour": slot["24hours"]
-                        }
-                        print(f"Found next passed slot: {next_slot['time_12hour']} ({next_slot['time_24hour']}) on {next_slot['date']}, id={next_slot['id']}")
-                        break
-                
-                if next_slot:
-                    break
-            if next_slot:
-                break
-        if next_slot:
-            break
-    
-    # If no next slot is found
-    if not next_slot:
-        print("No further passed time slots found in the calendar")
-        return
-    
-    # Prepare the output JSON with last_schedule set to previous next_schedule
-    output_data = {
-        "last_schedule": previous_next_schedule if previous_next_schedule else last_schedule,
-        "next_schedule": next_slot
-    }
-    
-    # Write the new data to schedules.json
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
-    print(f"Writing to schedules.json at {output_path}")
-    
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # Write the output data
-    with open(output_path, 'w') as f:
-        json.dump(output_data, f, indent=4)
-    print(f"Successfully wrote previous and current slots to {output_path}")
-    randomize_next_schedule_minutes()
-
-def check_schedule_time():
-    """Check if the next schedule in schedules.json is behind the current time."""
-    # Get current date and time
-    now = datetime.now()
-    current_time_24hour = now.strftime("%H:%M")
-    current_date = now.strftime("%d/%m/%Y")
-    current_datetime = datetime.strptime(f"{current_date} {current_time_24hour}", "%d/%m/%Y %H:%M")
-    
-    print(f"Current date and time: {current_date} {current_time_24hour}")
-    
-    # Read pageandgroupauthors.json to get author, type, and group_types
-    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
-    print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
-    try:
-        with open(pageauthors_path, 'r') as f:
-            pageauthors = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: pageandgroupauthors.json not found at {pageauthors_path}")
-        return
-    except json.decoder.JSONDecodeError:
-        print(f"Error: pageandgroupauthors.json contains invalid JSON")
-        return
-    
-    author = pageauthors['author']
-    type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
-    
-    # Read schedules.json based on new path structure
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
-    print(f"Reading schedules.json from {schedules_path}")
-    if not os.path.exists(schedules_path):
-        print(f"Error: schedules.json not found at {schedules_path}")
-        update_calendar_free()
-        return
-    
-    try:
-        with open(schedules_path, 'r') as f:
-            schedules_data = json.load(f)
-    except json.decoder.JSONDecodeError:
-        print(f"Error: schedules.json contains invalid JSON")
-        return
-    
-    # Check for next_schedule
-    if 'next_schedule' not in schedules_data:
-        print(f"Error: 'next_schedule' field missing in schedules.json")
-        update_calendar_free()
-        return
-    
-    next_schedule = schedules_data['next_schedule']
-    if not next_schedule:
-        print("No next schedule found in schedules.json")
-        return
-    
-    # Extract next schedule date and time
-    try:
-        next_schedule_date = next_schedule['date']
-        next_schedule_time = next_schedule['time_24hour']
-        next_schedule_datetime = datetime.strptime(f"{next_schedule_date} {next_schedule_time}", "%d/%m/%Y %H:%M")
-    except (KeyError, ValueError) as e:
-        print(f"Error: Invalid date or time format in next_schedule: {next_schedule}. Error: {str(e)}")
-        return
-    
-    # Compare with current time
-    if next_schedule_datetime < current_datetime:
-        print(f"Next schedule is behind the current time: {next_schedule_date} {next_schedule_time} is earlier than {current_date} {current_time_24hour}")
-        update_timeschedule()
-    else:
-        print(f"Next schedule is valid: {next_schedule_date} {next_schedule_time} is not behind {current_date} {current_time_24hour}")
-
-
-
-
-
-
-
-def markjpgs():
-    # Load configuration from JSON
-    try:
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
-        author = config['author']
-        processpathfrom = config.get('processpathfrom', 'freshjpgs')  # Default to 'freshjpgs'
-        freshjpgs_directory = config['inputpath'].replace('authorvalue', author)
-        output_dir = config['outputpath'].replace('authorvalue', author)
-    except Exception as e:
-        print(f"Failed to load or parse {JSON_CONFIG_PATH}: {e}")
-        return
-
-    # Verify that output path ends with the author folder
-    if not output_dir.endswith(author):
-        print(f"Error: outputpath ({output_dir}) does not end with author folder '{author}'")
-        return
-
-    # Create output directory if it doesn't exist
-    if not os.path.exists(output_dir):
-        try:
-            os.makedirs(output_dir)
-            print(f"Created output directory: {output_dir}")
-        except Exception as e:
-            print(f"Failed to create output directory {output_dir}: {e}")
-            return
-
-    # Supported image extensions
-    image_extensions = {'.jpg', '.png', '.jpeg', '.bmp', '.gif', '.tiff'}
-    directory = None
-
-    if processpathfrom == 'uploadedjpgs':
-        # Construct base path for uploadedjpgs
-        base_uploaded_path = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}"
-        if not os.path.exists(base_uploaded_path):
-            print(f"Base uploaded jpgs directory does not exist: {base_uploaded_path}")
-            # Fall back to freshjpgs
-            processpathfrom = 'freshjpgs'
-            directory = freshjpgs_directory
-        else:
-            # Find valid date folders
-            date_folders = []
-            for f in os.listdir(base_uploaded_path):
-                if os.path.isdir(os.path.join(base_uploaded_path, f)):
-                    try:
-                        # Test if folder name matches DD-Month-YYYY format
-                        datetime.strptime(f, "%d-%B-%Y")
-                        date_folders.append(f)
-                    except ValueError:
-                        print(f"Skipping invalid date folder: {f}")
-                        continue
-
-            if not date_folders:
-                print(f"No valid date folders found in {base_uploaded_path}")
-                # Check base author folder for files
-                base_files = [f for f in os.listdir(base_uploaded_path) if f.lower().endswith(tuple(image_extensions))]
-                if base_files:
-                    # Create oldest date folder (today's date)
-                    oldest_date_folder = datetime.now().strftime("%d-%B-%Y")
-                    oldest_date_path = os.path.join(base_uploaded_path, oldest_date_folder)
-                    os.makedirs(oldest_date_path, exist_ok=True)
-                    print(f"Created oldest date folder: {oldest_date_path}")
-                    # Move files to oldest date folder
-                    for file in base_files:
-                        src = os.path.join(base_uploaded_path, file)
-                        dst = os.path.join(oldest_date_path, file)
-                        shutil.move(src, dst)
-                        print(f"Moved {file} to {oldest_date_path}")
-                    date_folders.append(oldest_date_folder)
-                else:
-                    print(f"No valid image files found in base folder {base_uploaded_path}")
-                    # Fall back to freshjpgs
-                    processpathfrom = 'freshjpgs'
-                    directory = freshjpgs_directory
-            else:
-                # Sort folders by date (oldest first)
-                try:
-                    date_folders.sort(key=lambda x: datetime.strptime(x, "%d-%B-%Y"))
-                except ValueError as e:
-                    print(f"Error sorting date folders in {base_uploaded_path}: {e}")
-                    # Fall back to freshjpgs
-                    processpathfrom = 'freshjpgs'
-                    directory = freshjpgs_directory
-
-                # Process folders from oldest to newest until a folder with >20 images is found
-                for date_folder in date_folders:
-                    directory = os.path.join(base_uploaded_path, date_folder)
-                    if not os.path.exists(directory):
-                        print(f"Directory does not exist: {directory}")
-                        continue
-                    # Check for valid image files
-                    image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
-                    if len(image_files) > 20:
-                        print(f"Processing directory with {len(image_files)} images: {directory}")
-                        break  # Found a folder with >20 images, proceed with this directory
-                    else:
-                        print(f"Directory {directory} has {len(image_files)} images (<=20), moving to next date folder")
-                        directory = None
-
-                if not directory:
-                    print(f"No date folder in {base_uploaded_path} has more than 20 images")
-                    # Check base author folder for files
-                    base_files = [f for f in os.listdir(base_uploaded_path) if f.lower().endswith(tuple(image_extensions))]
-                    if base_files:
-                        # Use the oldest date folder or create a new one
-                        oldest_date_folder = date_folders[0] if date_folders else datetime.now().strftime("%d-%B-%Y")
-                        oldest_date_path = os.path.join(base_uploaded_path, oldest_date_folder)
-                        os.makedirs(oldest_date_path, exist_ok=True)
-                        print(f"Using/created oldest date folder: {oldest_date_path}")
-                        # Move files to oldest date folder
-                        for file in base_files:
-                            src = os.path.join(base_uploaded_path, file)
-                            dst = os.path.join(oldest_date_path, file)
-                            shutil.move(src, dst)
-                            print(f"Moved {file} to {oldest_date_path}")
-                        # Recount files in the oldest date folder
-                        directory = oldest_date_path
-                        image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
-                        if len(image_files) > 20:
-                            print(f"Processing directory with {len(image_files)} images after moving files: {directory}")
-                        else:
-                            print(f"Directory {directory} has {len(image_files)} images (<=20) after moving files")
-                            # Fall back to freshjpgs
-                            processpathfrom = 'freshjpgs'
-                            directory = freshjpgs_directory
-                    else:
-                        print(f"No valid image files found in base folder {base_uploaded_path}")
-                        # Fall back to freshjpgs
-                        processpathfrom = 'freshjpgs'
-                        directory = freshjpgs_directory
-
-    if processpathfrom == 'freshjpgs':
-        directory = freshjpgs_directory
-        # Verify input directory ends with author
-        if not directory.endswith(author):
-            print(f"Error: input directory ({directory}) does not end with author folder '{author}'")
-            return
-
-    if not directory or not os.path.exists(directory):
-        print(f"Directory does not exist: {directory}")
-        return
-
-    # Get all image files in the directory
-    image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
-
-    if not image_files:
-        print(f"No valid image files found in {directory}")
-        return
-
-    # Find existing card_N.jpg files and extract numbers
-    existing_numbers = []
-    for file in image_files:
-        match = re.match(r'card_(\d+)\.jpg$', file.lower())
-        if match:
-            existing_numbers.append(int(match.group(1)))
-
-    # Determine the highest number for renaming
-    if existing_numbers:
-        highest_num = max(existing_numbers)
-    else:
-        highest_num = 0
-
-    # Find isolated numbers (before any gap)
-    existing_numbers.sort()
-    isolated_numbers = []
-    for i in range(len(existing_numbers) - 1):
-        if existing_numbers[i + 1] - existing_numbers[i] > 1:
-            isolated_numbers.extend(existing_numbers[:i + 1])
-            break
-
-    # Start numbering from the highest number + 1
-    next_num = highest_num + 1 if existing_numbers else 1
-
-    # Track all card numbers (existing and new) to find the lowest later
-    all_card_numbers = [n for n in existing_numbers if n not in isolated_numbers]
-
-    # Rename isolated numbers to the end
-    for num in sorted(isolated_numbers):
-        old_name = f'card_{num}.jpg'
-        new_name = f'card_{next_num}.jpg'
-        old_path = os.path.join(directory, old_name)
-        new_path = os.path.join(directory, new_name)
-
-        # Ensure no overwrite
-        while os.path.exists(new_path):
-            next_num += 1
-            new_name = f'card_{next_num}.jpg'
-            new_path = os.path.join(directory, new_name)
-
-        os.rename(old_path, new_path)
-        print(f"Renamed {old_name} to {new_name}")
-        all_card_numbers.append(next_num)
-        next_num += 1
-
-    # Find unnumbered .jpg files
-    non_card_jpgs = []
-    for file in image_files:
-        if file.lower().endswith('.jpg') and not re.match(r'card_(\d+)\.jpg$', file.lower()):
-            non_card_jpgs.append(file)
-
-    # Sort alphabetically for consistent ordering
-    non_card_jpgs.sort()
-
-    # Rename unnumbered .jpg files
-    for file in non_card_jpgs:
-        old_path = os.path.join(directory, file)
-        new_name = f'card_{next_num}.jpg'
-        new_path = os.path.join(directory, new_name)
-
-        # Ensure no overwrite
-        while os.path.exists(new_path):
-            next_num += 1
-            new_name = f'card_{next_num}.jpg'
-            new_path = os.path.join(directory, new_name)
-
-        os.rename(old_path, new_path)
-        print(f"Renamed {file} to {new_name}")
-        all_card_numbers.append(next_num)
-        next_num += 1
-
-    # Convert and rename non-.jpg image files
-    non_jpg_images = []
-    for file in image_files:
-        if file.lower().endswith(tuple(image_extensions - {'.jpg'})):
-            non_jpg_images.append(file)
-
-    # Sort alphabetically for consistent ordering
-    non_jpg_images.sort()
-
-    for file in non_jpg_images:
-        old_path = os.path.join(directory, file)
-        new_name = f'card_{next_num}.jpg'
-        new_path = os.path.join(directory, new_name)
-
-        # Ensure no overwrite
-        while os.path.exists(new_path):
-            next_num += 1
-            new_name = f'card_{next_num}.jpg'
-            new_path = os.path.join(directory, new_name)
-
-        # Convert image to .jpg
-        try:
-            with Image.open(old_path) as img:
-                # Convert to RGB if necessary (e.g., for PNG with transparency)
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    img = img.convert('RGB')
-                img.save(new_path, 'JPEG', quality=95)
-            print(f"Converted and renamed {file} to {new_name}")
-            # Remove original non-.jpg file
-            os.remove(old_path)
-            all_card_numbers.append(next_num)
-            next_num += 1
-        except Exception as e:
-            print(f"Failed to convert {file}: {e}")
-
-    # Find the lowest card number after all operations
-    if all_card_numbers:
-        lowest_num = min(all_card_numbers)
-        lowest_card = f'card_{lowest_num}.jpg'
-        lowest_card_path = os.path.join(directory, lowest_card)
-
-        # Check if any card_N.jpg files exist in output_dir
-        output_files = [f for f in os.listdir(output_dir) if re.match(r'card_(\d+)\.jpg$', f.lower())]
-        json_path = os.path.join(output_dir, 'next_jpgcard.json')
-        output_card_path = os.path.join(output_dir, 'card_x.jpg')
-
-        # Write JSON and copy/rename only if card_x.jpg doesn't exist
-        if not os.path.exists(output_card_path):
-            # Copy the lowest card to output_dir
-            try:
-                temp_copy_path = os.path.join(output_dir, lowest_card)
-                shutil.move(lowest_card_path, temp_copy_path)
-                print(f"Copied {lowest_card} to {output_dir}")
-
-                # Rename the copied file to card_x.jpg
-                os.rename(temp_copy_path, output_card_path)
-                print(f"Renamed {lowest_card} to card_x.jpg in {output_dir}")
-
-                # Write JSON only if no card_N.jpg files exist in output_dir
-                if not output_files:
-                    try:
-                        timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
-                        with open(json_path, 'w') as json_file:
-                            json.dump({
-                                'next_jpgcard': lowest_card,
-                                'changed_to': 'card_x.jpg',
-                                'timestamp': timestamp
-                            }, json_file, indent=4)
-                        print(f"Wrote {lowest_card} (changed to card_x.jpg) with timestamp {timestamp} to {json_path}")
-                    except Exception as e:
-                        print(f"Failed to write JSON file: {e}")
-            except Exception as e:
-                print(f"Failed to copy or rename {lowest_card}: {e}")
-        else:
-            print(f"Skipped copying and renaming {lowest_card} as card_x.jpg already exists in {output_dir}")
-    else:
-        print("No card_N.jpg files found after processing.")
+        print(f"Failed to write to config {JSON_CONFIG_PATH}: {str(e)}")
+        return False
 
 
 
@@ -2728,6 +3075,9 @@ def toggleaddphoto():
     """
     Uses OCR to locate and click the 'Add photo' or 'Add photo/video' button.
     Tracks whether the button has already been toggled via function attribute.
+    Adds human-like mouse behavior:
+      - Random movements across screen regions
+      - Smooth, slow glide to target
     """
     # ---- STATE TRACKER ----
     if hasattr(toggleaddphoto, 'is_toggled') and toggleaddphoto.is_toggled:
@@ -2804,10 +3154,39 @@ def toggleaddphoto():
 
                 print(f"Detected: {detected_phrase}")
                 print(f"Coordinates: left={x}, top={y}, width={w}, height={h}")
-                print(f"Moving to: ({center_x}, {center_y})")
+                print(f"Target center: ({center_x}, {center_y})")
 
-                pyautogui.moveTo(center_x, center_y)
-                time.sleep(0.1)
+                # === HUMAN-LIKE MOUSE BEHAVIOR ===
+                screen_width, screen_height = pyautogui.size()
+                current_x, current_y = pyautogui.position()
+
+                # 1. Random movements across 3-5 regions
+                print("Performing random mouse movements...")
+                num_moves = random.randint(3, 5)
+                for _ in range(num_moves):
+                    # Pick random region (avoid edges)
+                    rand_x = random.randint(100, screen_width - 100)
+                    rand_y = random.randint(100, screen_height - 100)
+                    duration = random.uniform(0.3, 0.8)
+                    pyautogui.moveTo(rand_x, rand_y, duration=duration, tween=pyautogui.easeInOutQuad)
+                    time.sleep(random.uniform(0.1, 0.4))
+
+                # 2. Final slow, smooth move to target
+                print(f"Slowly moving to target ({center_x}, {center_y})...")
+                move_duration = random.uniform(1.2, 2.1)  # Slow and natural
+                pyautogui.moveTo(center_x, center_y, duration=move_duration, tween=pyautogui.easeInOutQuad)
+
+                # Small random offset within button bounds for realism
+                offset_x = random.randint(-w//4, w//4)
+                offset_y = random.randint(-h//4, h//4)
+                final_x = center_x + offset_x
+                final_y = center_y + offset_y
+                final_x = max(0, min(final_x, screen_width))
+                final_y = max(0, min(final_y, screen_height))
+
+                print(f"Final click position (with offset): ({final_x}, {final_y})")
+                pyautogui.moveTo(final_x, final_y, duration=0.3, tween=pyautogui.easeInOutQuad)
+                time.sleep(0.2)
                 pyautogui.click()
                 print("Clicked on 'Add photo' or 'Add photo/video'")
 
@@ -2835,7 +3214,12 @@ def toggleaddphoto():
         print(f"An error occurred in toggleaddphoto(): {e}")
 
 def selectmedia():
-    """Select media by COPYING the file path and PASTING it (faster & more reliable)."""
+    """
+    Select media by COPYING the file path and PASTING it (faster & more reliable).
+    Adds randomized human-like delays:
+      - Before paste: 0.8–2.1 sec
+      - Before Enter: 0.5–2.0 sec
+    """
     # Initialize tracker if not already set
     if not hasattr(selectmedia, 'has_uploaded'):
         selectmedia.has_uploaded = False
@@ -2854,35 +3238,45 @@ def selectmedia():
 
         # Ensure the file exists before attempting to input the path
         if not os.path.exists(file_path):
-            print(f"❌ Media file does not exist: {file_path}")
+            print(f"Media file does not exist: {file_path}")
             return
 
-        print(f"📁 Preparing to COPY-PASTE: {file_path}")
+        print(f"Preparing to COPY-PASTE: {file_path}")
         
-        # **COPY PATH TO CLIPBOARD** (faster than typing)
-        import pyperclip
+        # **COPY PATH TO CLIPBOARD**
         pyperclip.copy(file_path)
-        print(f"✅ COPIED TO CLIPBOARD: {file_path}")
-        
+        print(f"COPIED TO CLIPBOARD: {file_path}")
+
+        # **RANDOM DELAY BEFORE PASTING** (human thinking + focus shift)
+        paste_delay = random.uniform(0.8, 2.1)
+        print(f"Waiting {paste_delay:.2f}s before pasting...")
+        time.sleep(paste_delay)
+
         # **PASTE PATH** (Ctrl+V)
         pyautogui.hotkey('ctrl', 'v')
-        print("✅ PASTED PATH (Ctrl+V)")
-        
+        print("PASTED PATH (Ctrl+V)")
+
+        # **RANDOM DELAY BEFORE ENTER** (0.5 to 2.0 sec)
+        enter_delay = random.uniform(0.5, 2.0)
+        print(f"Waiting {enter_delay:.2f}s before pressing Enter...")
+        time.sleep(enter_delay)
+
         # **PRESS ENTER**
         pyautogui.press("enter")
-        print("✅ PRESSED ENTER")
+        print("PRESSED ENTER")
 
         # Update tracker to indicate media has been selected
         selectmedia.has_uploaded = True
-        print("✅ Updated tracker: has_uploaded set to True")
+        print("Updated tracker: has_uploaded set to True")
 
-        time.sleep(3)  # Pause to allow file dialog to process
+        time.sleep(3)  # Final wait for upload dialog to process
         confirmselectedmedia()
 
     except Exception as e:
-        print(f"❌ Failed to select media: {str(e)}")
-        selectmedia.has_uploaded = True  # Mark as done even on error
+        print(f"Failed to select media: {str(e)}")
+        selectmedia.has_uploaded = True  # Prevent retry loop
         raise
+
 def confirmselectedmedia():
     """
     Confirm media selection with progressive patience:
@@ -2963,7 +3357,6 @@ def confirm_fileisready():
         print("❌ File dialog not confirmed - closing")
         pyautogui.hotkey('alt', 'f4')
         return False
-
 
 
 def writecaption_ocr():
@@ -3127,16 +3520,17 @@ def writecaption_ocr():
         print(f"Failed to enter text (GUI): {str(e)}")
         return False
 
+
+
 def writecaption_element():
     """
-    Finds the Facebook post composer by writing a *real* random caption
-    from the same JSON file that writecaption_ocr() uses.
-    Returns the working WebElement or None.
-
-    NEW: 
-      - Uses `writecaption_element.has_written` (like toggleaddphoto.is_toggled)
-      - Skips entire process if caption already written this session
-      - Reset via reset_trackers()
+    Finds Facebook post composer using 2–3 RANDOM human-like typing actions:
+      - Mistakes (wrong letter/caps) at Start/Middle/End
+      - Backspace correction
+      - Full clear + rewrite (2–3 times, different spots)
+      - Dynamic typing speed
+      - Mixed behaviors (e.g., typo + caps + clear)
+    No mouse movement.
     """
     # ---- EARLY EXIT: Already written this session ----
     if getattr(writecaption_element, 'has_written', False):
@@ -3146,7 +3540,7 @@ def writecaption_element():
     print("\n=== LOCATING POST COMPOSER (via real caption test) ===")
 
     # --------------------------------------------------------------------- #
-    # 0. Load caption (same as writecaption_ocr)
+    # 0. Load caption
     # --------------------------------------------------------------------- #
     try:
         with open(JSON_CONFIG_PATH, 'r') as json_file:
@@ -3164,7 +3558,7 @@ def writecaption_element():
             captions = json.load(f)
 
         selected_caption = random.choice(captions)['description']
-        print(f"Loaded caption for author '{author}' (group '{group_types}'): '{selected_caption}'")
+        print(f"Loaded caption: '{selected_caption}'")
 
     except Exception as e:
         print(f"Could not load caption JSON: {e}")
@@ -3197,7 +3591,125 @@ def writecaption_element():
         return None
 
     # --------------------------------------------------------------------- #
-    # 2. Test each candidate (with "already-written" check)
+    # 2. Core Helpers
+    # --------------------------------------------------------------------- #
+    def type_with_speed_variation(el, text):
+        """Type with randomized speed zones: slow → fast → medium (shuffled)"""
+        ActionChains(driver).click(el).perform()
+        time.sleep(0.3)
+        if not text:
+            return
+
+        parts = [text[:len(text)//3], text[len(text)//3:2*len(text)//3], text[2*len(text)//3:]]
+        speeds = [
+            ("slow", 0.12, 0.28),
+            ("fast", 0.02, 0.07),
+            ("medium", 0.08, 0.18)
+        ]
+        random.shuffle(speeds)
+
+        for i, part in enumerate(parts):
+            if not part:
+                continue
+            min_d, max_d = speeds[i][1], speeds[i][2]
+            for char in part:
+                ActionChains(driver).send_keys(char).perform()
+                time.sleep(random.uniform(min_d, max_d))
+
+    def select_all_and_clear(el):
+        ActionChains(driver).click(el).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+        time.sleep(0.2)
+        ActionChains(driver).send_keys(Keys.DELETE).perform()
+        time.sleep(0.3)
+
+    def insert_mistake(el, pos, typo_type='letter'):
+        """Insert mistake at given position"""
+        ActionChains(driver).click(el).perform()
+        time.sleep(0.3)
+
+        before = selected_caption[:pos]
+        after = selected_caption[pos:]
+
+        # Type up to mistake
+        for c in before:
+            ActionChains(driver).send_keys(c).perform()
+            time.sleep(random.uniform(0.05, 0.18))
+
+        if typo_type == 'letter':
+            wrong = random.choice('zqxjkv')
+            ActionChains(driver).send_keys(wrong).perform()
+            time.sleep(random.uniform(0.4, 1.2))
+            ActionChains(driver).send_keys(Keys.BACKSPACE).perform()
+            time.sleep(random.uniform(0.2, 0.5))
+        elif typo_type == 'caps':
+            pyautogui.press('capslock')
+            time.sleep(0.2)
+            caps_len = random.randint(2, 5)
+            wrong = selected_caption[pos:pos+caps_len].upper()
+            for c in wrong:
+                ActionChains(driver).send_keys(c).perform()
+                time.sleep(random.uniform(0.1, 0.25))
+            time.sleep(random.uniform(0.7, 1.8))
+            for _ in range(len(wrong)):
+                ActionChains(driver).send_keys(Keys.BACKSPACE).perform()
+                time.sleep(random.uniform(0.15, 0.3))
+            pyautogui.press('capslock')
+            time.sleep(0.2)
+
+        # Continue correctly
+        type_with_speed_variation(el, after)
+
+    # --------------------------------------------------------------------- #
+    # 3. Generate 2–3 Random Actions (Mixed & Varied)
+    # --------------------------------------------------------------------- #
+    def generate_actions():
+        actions = []
+        num_actions = random.randint(2, 3)
+
+        # Possible stages
+        stages = ['start', 'middle', 'end']
+        used_stages = set()
+
+        # Possible action types
+        action_types = ['letter_mistake', 'caps_mistake', 'clear_rewrite']
+
+        for _ in range(num_actions):
+            # Choose action type
+            act = random.choice(action_types)
+
+            if act == 'clear_rewrite':
+                # Ensure not repeating same spot
+                if len(used_stages) == 3:
+                    continue
+                stage = random.choice([s for s in stages if s not in used_stages])
+                used_stages.add(stage)
+                pos = 0 if stage == 'start' else len(selected_caption)//2 if stage == 'middle' else len(selected_caption)
+                actions.append(('clear_rewrite', stage, pos))
+            else:
+                # Mistake at random position (avoid overlap)
+                available_pos = []
+                if 'start' not in used_stages:
+                    available_pos.extend(list(range(1, max(2, len(selected_caption)//4))))
+                if 'middle' not in used_stages:
+                    mid_start = max(2, len(selected_caption)//4)
+                    mid_end = min(len(selected_caption)-2, 3*len(selected_caption)//4)
+                    available_pos.extend(list(range(mid_start, mid_end)))
+                if 'end' not in used_stages and len(selected_caption) > 6:
+                    available_pos.extend(list(range(max(3, len(selected_caption)-6), len(selected_caption)-1)))
+
+                if not available_pos:
+                    continue
+                pos = random.choice(available_pos)
+                typo = act.replace('_mistake', '')
+                actions.append((act, 'mistake', pos))
+
+        return actions if len(actions) >= 2 else generate_actions()  # Ensure at least 2
+
+    actions = generate_actions()
+    print(f"Generated {len(actions)} mixed actions: {actions}")
+
+    # --------------------------------------------------------------------- #
+    # 4. Test Each Candidate
     # --------------------------------------------------------------------- #
     working_element = None
     for i, el in enumerate(candidates):
@@ -3210,62 +3722,62 @@ def writecaption_element():
             w, h = size.get('width', 0), size.get('height', 0)
             print(f"  [{i}] Size: {w}x{h}")
 
-            # ---- READ CURRENT CONTENT BEFORE TOUCHING ----
+            # Check if already correct
             current_text = driver.execute_script(
                 "return arguments[0].textContent || arguments[0].innerText || '';", el
             ).strip()
-
-            # Normalize for comparison
-            norm_caption = selected_caption.strip().lower()
-            norm_current = current_text.strip().lower()
-
-            if norm_current == norm_caption:
-                print(f"  [{i}] Caption already present – using this element.")
+            if selected_caption.strip().lower() in current_text.strip().lower():
+                print(f"  [{i}] Caption already present.")
                 working_element = el
+                writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
-                writecaption_element.has_written = True  # MARK AS DONE
                 break
 
-            # ---- CLICK & WRITE (ONLY IF NOT ALREADY THERE) ----
-            el.click()
-            time.sleep(0.3)
-            ActionChains(driver).send_keys(selected_caption).perform()
-            time.sleep(1.0)
+            print(f"  [{i}] Applying {len(actions)} mixed human actions...")
 
-            # Read back what we just wrote
-            current_text = driver.execute_script(
+            # Execute actions
+            for j, (act_type, stage_or_typo, pos) in enumerate(actions):
+                print(f"    Action {j+1}: {act_type} at {stage_or_typo} (pos={pos})")
+                if act_type == 'clear_rewrite':
+                    type_with_speed_variation(el, selected_caption[:pos])
+                    time.sleep(random.uniform(0.8, 1.8))
+                    select_all_and_clear(el)
+                    time.sleep(random.uniform(0.7, 1.5))
+                elif act_type in ['letter_mistake', 'caps_mistake']:
+                    typo = act_type.split('_')[0]
+                    insert_mistake(el, pos, typo)
+
+            time.sleep(1.5)
+
+            # Final verification
+            final_text = driver.execute_script(
                 "return arguments[0].textContent || arguments[0].innerText || '';", el
             ).strip()
 
-            print(f"     Wrote caption  Got back: '{current_text}'")
-
-            if selected_caption.lower() in current_text.lower():
-                print(f"     SUCCESS! This is the real composer.")
+            if selected_caption.lower() in final_text.lower():
+                print(f"  [{i}] SUCCESS! Composer found after {len(actions)} actions.")
                 working_element = el
+                writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
-                writecaption_element.has_written = True  # MARK AS DONE
                 break
             else:
-                print(f"     Failed – caption did not appear.")
-                # Clear failed attempt
-                driver.execute_script("arguments[0].textContent = '';", el)
+                print(f"  [{i}] Failed. Clearing...")
+                select_all_and_clear(el)
 
         except Exception as e:
             print(f"  [{i}] Error: {e}")
 
     # --------------------------------------------------------------------- #
-    # 3. Return result
+    # 5. Final Result
     # --------------------------------------------------------------------- #
     if working_element:
-        final_size = working_element.size
-        print(f"\nCOMPOSER FOUND! Using candidate with size {final_size}")
+        print(f"\nCOMPOSER FOUND! | {len(actions)} mixed actions applied.")
         return working_element
     else:
-        print("\nNo candidate accepted the caption. Composer not found.")
+        print("\nComposer not found. Falling back to OCR...")
         writecaption_ocr()
-        return None
-    
-         
+        return None       
+
 
 
 def extract_texts(return_time_value=None, additional_texts=None):
@@ -3403,10 +3915,15 @@ def toggleschedule():
             print(f"Alternative locator for schedule toggle failed: {str(e2)}")
             raise Exception("Could not locate or toggle schedule button")
 
+
 def set_webschedule():
     """
     Set schedule by reading target date and time from {type_value}schedules.json (new structure).
     Uses pageandgroupauthors.json to determine author, type, and group_types.
+    Randomly chooses one of 3 input sequences:
+      1. Date → Hour → Minute → (AM/PM)
+      2. Hour → Minute → (AM/PM) → Date
+      3. Minute → Hour → (AM/PM) → Date
     Checks current UI date/time via input values and extract_texts().
     Detects 24h vs 12h format and sets accordingly.
     Skips if no changes needed. Reloads on click interception or overlay.
@@ -3442,18 +3959,24 @@ def set_webschedule():
         print(f"Error: {type_value}schedules.json contains invalid JSON")
         return
 
-    # --- 3. Extract next_schedule ---
-    next_schedule = json_data.get('next_schedule')
-    if not next_schedule:
-        print("No 'next_schedule' found in schedules.json")
+    # --- 3. Extract next_schedule (now a LIST) ---
+    next_schedule_list = json_data.get('next_schedule')
+    if not next_schedule_list or not isinstance(next_schedule_list, list) or len(next_schedule_list) == 0:
+        print("No valid 'next_schedule' list found in schedules.json")
         return
 
-    target_date = next_schedule.get('date')  # e.g., "01/11/2025"
-    target_time_12h = next_schedule.get('time_12hour')  # e.g., "07:00 am"
-    target_time_24h = next_schedule.get('time_24hour')  # e.g., "07:00"
+    # Use the first item in the list
+    next_schedule = next_schedule_list[0]
+    if not isinstance(next_schedule, dict):
+        print(f"First item in next_schedule is not a dict: {next_schedule}")
+        return
+
+    target_date = next_schedule.get('date')  # e.g., "18/11/2025"
+    target_time_12h = next_schedule.get('time_12hour')  # e.g., "8:25 PM"
+    target_time_24h = next_schedule.get('time_24hour')  # e.g., "20:25"
 
     if not all([target_date, target_time_12h, target_time_24h]):
-        print(f"Missing fields in next_schedule: {next_schedule}")
+        print(f"Missing fields in next_schedule[0]: {next_schedule}")
         return
 
     # Normalize case
@@ -3487,22 +4010,17 @@ def set_webschedule():
             '07': ('July', 'Jul'), '08': ('August', 'Aug'), '09': ('September', 'Sep'),
             '10': ('October', 'Oct'), '11': ('November', 'Nov'), '12': ('December', 'Dec')
         }
-        full_month, short_month = month_map[month]
+        full_month, short_month = month_map.get(month, (month, month))
 
         formats = {
-            # Slashes
             'dd/mm/yyyy': f"{day_padded}/{month_padded}/{year}",
             'd/mm/yyyy': f"{day_unpadded}/{month_padded}/{year}",
             'dd/mm/yy': f"{day_padded}/{month_padded}/{year_short}",
             'd/mm/yy': f"{day_unpadded}/{month_padded}/{year_short}",
-
-            # Dashes
             'dd-mm-yyyy': f"{day_padded}-{month_padded}-{year}",
             'd-mm-yyyy': f"{day_unpadded}-{month_padded}-{year}",
-            'dd-mm-yy': f"{day_padded}-{month_padded}/{year_short}",
-            'd-mm-yy': f"{day_unpadded}-{month_padded}/{year_short}",
-
-            # Worded
+            'dd-mm-yy': f"{day_padded}-{month_padded}-{year_short}",
+            'd-mm-yy': f"{day_unpadded}-{month_padded}-{year_short}",
             'dd month yyyy': f"{day_padded} {full_month} {year}",
             'd month yyyy': f"{day_unpadded} {full_month} {year}",
             'dd mon yyyy': f"{day_padded} {short_month} {year}",
@@ -3511,8 +4029,6 @@ def set_webschedule():
             'month d, yyyy': f"{full_month} {day_unpadded}, {year}",
             'mon dd yyyy': f"{short_month} {day_padded} {year}",
             'mon d yyyy': f"{short_month} {day_unpadded} {year}",
-
-            # No-space OCR variants
             'ddmonthyyyy': f"{day_padded}{full_month}{year}",
             'dmonthyyyy': f"{day_unpadded}{full_month}{year}",
             'ddmonyyyy': f"{day_padded}{short_month}{year}",
@@ -3521,8 +4037,6 @@ def set_webschedule():
             'monthdyyyy': f"{full_month}{day_unpadded}{year}",
             'monddyyyy': f"{short_month}{day_padded}{year}",
             'mondyyyy': f"{short_month}{day_unpadded}{year}",
-
-            # Comma no space
             'monthdd,yyyy': f"{full_month}{day_padded},{year}",
             'monthd,yyyy': f"{full_month}{day_unpadded},{year}",
             'mondd,yyyy': f"{short_month}{day_padded},{year}",
@@ -3604,67 +4118,70 @@ def set_webschedule():
 
     print(f"Update needed → Date match: {date_matches}, Time match: {time_matches}")
 
-    # --- 12. SET DATE (if needed) ---
-    if not date_matches:
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", date_input)
-            date_input.click()
-            time.sleep(0.5)
-            ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
-            time.sleep(0.3)
-            ActionChains(driver).send_keys(target_date).perform()
-            print(f"Set date: {target_date}")
-            date_input.send_keys(Keys.TAB)
-            time.sleep(1)
-        except Exception as e:
-            if "intercepted" in str(e).lower():
-                print("Click intercepted on date input. Reloading...")
-                reset_trackers()
-                driver.refresh()
-                raise Exception("Reload due to click interception")
-            raise
+    # --- 12. RANDOMLY CHOOSE INPUT SEQUENCE ---
+    sequences = [
+        # 1: Date → Hour → Minute → (AM/PM)
+        lambda: [
+            ("date", date_input, target_date),
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("minute", minute_input, minute_24h),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None
+        ],
+        # 2: Hour → Minute → (AM/PM) → Date
+        lambda: [
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("minute", minute_input, minute_24h),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None,
+            ("date", date_input, target_date)
+        ],
+        # 3: Minute → Hour → (AM/PM) → Date
+        lambda: [
+            ("minute", minute_input, minute_24h),
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None,
+            ("date", date_input, target_date)
+        ]
+    ]
 
-    # --- 13. SET TIME (if needed) ---
-    if not time_matches:
+    chosen_seq = random.choice(sequences)
+    steps = [step for step in chosen_seq() if step is not None]
+    seq_names = " → ".join([s[0].capitalize() for s in steps])
+    print(f"Random input sequence chosen: {seq_names}")
+
+    # --- 13. EXECUTE RANDOM SEQUENCE ---
+    for field_name, element, value in steps:
         try:
-            # Set Hour
-            hour_input.click()
-            time.sleep(0.5)
-            hour_input.clear()
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
             time.sleep(0.3)
-            send_val = hour_24h.zfill(2) if is_24h_format else hour_12h.lstrip('0') or '12'
-            hour_input.send_keys(send_val)
-            print(f"Set hour: {send_val}")
+            element.click()
             time.sleep(0.5)
 
-            # Set AM/PM if 12h
-            if not is_24h_format and am_pm_input:
-                am_pm_input.click()
+            if field_name == "date":
+                ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
                 time.sleep(0.3)
-                ActionChains(driver).send_keys(period).send_keys(Keys.ENTER).perform()
-                print(f"Set period: {period}")
-                time.sleep(0.5)
+                ActionChains(driver).send_keys(value).perform()
+                print(f"Set {field_name}: {value}")
+            elif field_name == "period":
+                ActionChains(driver).send_keys(value).send_keys(Keys.ENTER).perform()
+                print(f"Set {field_name}: {value}")
+            else:
+                element.clear()
+                time.sleep(0.3)
+                element.send_keys(value)
+                print(f"Set {field_name}: {value}")
 
-            hour_input.send_keys(Keys.TAB)
-            time.sleep(0.5)
-
-            # Set Minute
-            minute_input.click()
-            time.sleep(0.3)
-            minute_input.clear()
-            time.sleep(0.3)
-            minute_input.send_keys(minute_24h)
-            print(f"Set minute: {minute_24h}")
-            minute_input.send_keys(Keys.TAB)
-            time.sleep(1)
+            element.send_keys(Keys.TAB)
+            time.sleep(0.6)
 
         except Exception as e:
             if "intercepted" in str(e).lower():
-                print("Click intercepted during time set. Reloading...")
+                print(f"Click intercepted on {field_name}. Reloading...")
                 reset_trackers()
                 driver.refresh()
                 raise Exception("Reload due to click interception")
-            raise
+            else:
+                print(f"Error setting {field_name}: {e}")
+                raise
 
     # --- 14. Final Verification ---
     time.sleep(1.5)
@@ -3693,7 +4210,7 @@ def set_webschedule():
         if final_extracted_time not in [exp1, exp2]:
             raise Exception(f"Time not set (12h): '{final_extracted_time}' != '{exp1}' or '{exp2}'")
 
-    print(f"SCHEDULE SET & VERIFIED → {target_date} at {target_time_12h.upper()}")
+    print(f"SCHEDULE SET & VERIFIED → {target_date} at {target_time_12h.upper()} (via {seq_names})")
 
     # --- 15. Handle Overlay (post-set) ---
     overlays = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
@@ -3750,7 +4267,6 @@ def click_schedule_button():
                 json.dump(progress_data, f, indent=4)
             print(f"Updated {driver_progress_path} with driver: started, scheduled: successfully")
             uploadedjpgs()
-            update_calendar()
         except Exception as e:
             print(f"Failed to write to {driver_progress_path}: {str(e)}")
 
@@ -3776,87 +4292,505 @@ def click_schedule_button():
             raise Exception("Page reloaded due to overlay")
         print(f"Failed to schedule: {str(e)}")
         raise
+
+
 def uploadedjpgs():
-    """Upload JPGs, organizing by date in subfolders."""
-    # Load configuration from JSON
+    """Move URLs from next_jpgcard.json → uploadedjpgs.json
+       AND move all image files (jpg/jpeg/png/gif) from next_jpg → uploaded_jpgs.
+       Supports LIST or SINGLE STRING in 'next_jpgcard'.
+       Clears next_jpgcard.json and empties next_jpg folder after move.
+       Safe, robust, with full logging."""
+
+    # ------------------------------------------------------------------ #
+    # 1. Load configuration
+    # ------------------------------------------------------------------ #
+    JSON_CONFIG_PATH = r'C:\xampp\htdocs\serenum\pageandgroupauthors.json'
+
     try:
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
-        author = config['author']
-        # Use outputpath from JSON as source_dir, replacing authorvalue
-        source_dir = config['outputpath'].replace('authorvalue', author)
-    except Exception as e:
-        print(f"Failed to load or parse {JSON_CONFIG_PATH}: {e}")
-        return
+        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            config = json.load(f)
 
-    # Get current date (without time) in DD-Month-YYYY format for folder naming
-    current_date = datetime.now().strftime("%d-%B-%Y")
-
-    # Construct destination directory with author and date
-    dest_dir = f"C:\\xampp\\htdocs\\serenum\\files\\uploaded jpgs\\{author}\\{current_date}"
-    source_file = 'card_x.jpg'
-
-    # Create source directory if it doesn't exist
-    if not os.path.exists(source_dir):
-        try:
-            os.makedirs(source_dir)
-            print(f"Created source directory: {source_dir}")
-        except Exception as e:
-            print(f"Failed to create source directory {source_dir}: {e}")
+        author = config.get('author', '').strip()
+        if not author:
+            print("Error: 'author' is missing or empty in config.")
             return
 
-    # Create destination directory (with date) if it doesn't exist
-    if not os.path.exists(dest_dir):
+    except Exception as e:
+        print(f"Failed to load config: {e}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 2. Define paths - RAW STRINGS
+    # ------------------------------------------------------------------ #
+    next_dir = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
+    uploaded_dir = fr'C:\xampp\htdocs\serenum\files\uploaded jpgs\{author}'
+
+    next_json_path = os.path.join(next_dir, 'next_jpgcard.json')
+    uploaded_json_path = os.path.join(uploaded_dir, 'uploadedjpgs.json')
+
+    # Ensure directories exist
+    os.makedirs(next_dir, exist_ok=True)
+    os.makedirs(uploaded_dir, exist_ok=True)
+
+    # ------------------------------------------------------------------ #
+    # 3. Load next_jpgcard.json (URLs to archive)
+    # ------------------------------------------------------------------ #
+    next_urls = []
+    if os.path.exists(next_json_path):
         try:
-            os.makedirs(dest_dir)
-            print(f"Created destination directory: {dest_dir}")
+            with open(next_json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            raw_next = data.get("next_jpgcard")
+
+            if raw_next is None:
+                print("Warning: 'next_jpgcard' missing in JSON.")
+            elif isinstance(raw_next, str):
+                url = raw_next.strip()
+                next_urls = [url] if url else []
+                print(f"Detected SINGLE URL → {len(next_urls)} item")
+            elif isinstance(raw_next, list):
+                next_urls = [url.strip() for url in raw_next if isinstance(url, str) and url.strip()]
+                print(f"Detected LIST → {len(next_urls)} valid URL(s)")
+            else:
+                print(f"Warning: Invalid type for 'next_jpgcard': {type(raw_next)}")
         except Exception as e:
-            print(f"Failed to create destination directory {dest_dir}: {e}")
+            print(f"Failed to read next_jpgcard.json: {e}")
+    else:
+        print(f"Info: No next_jpgcard.json found at:\n   {next_json_path}")
+
+    # ------------------------------------------------------------------ #
+    # 4. Find ALL image files in next_jpg folder
+    # ------------------------------------------------------------------ #
+    image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
+    image_files = [
+        f for f in os.listdir(next_dir)
+        if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(next_dir, f))
+    ]
+
+    moved_files_count = 0
+    failed_moves = []
+
+    print(f"\nFound {len(image_files)} image file(s) to move:")
+    for img in image_files:
+        print(f"   → {img}")
+
+    # ------------------------------------------------------------------ #
+    # 5. Move image files to uploaded_jpgs folder
+    # ------------------------------------------------------------------ #
+    if image_files:
+        for img_name in image_files:
+            src_path = os.path.join(next_dir, img_name)
+            dst_path = os.path.join(uploaded_dir, img_name)
+
+            try:
+                # Avoid overwrite: append (1), (2), etc. if exists
+                base, ext = os.path.splitext(img_name)
+                counter = 1
+                original_dst = dst_path
+                while os.path.exists(dst_path):
+                    new_name = f"{base} ({counter}){ext}"
+                    dst_path = os.path.join(uploaded_dir, new_name)
+                    counter += 1
+
+                shutil.move(src_path, dst_path)
+                moved_files_count += 1
+                print(f"   Moved: {img_name} → uploaded jpgs")
+            except Exception as e:
+                failed_moves.append((img_name, str(e)))
+                print(f"   Failed to move {img_name}: {e}")
+
+    # ------------------------------------------------------------------ #
+    # 6. Load existing uploadedjpgs.json (URLs)
+    # ------------------------------------------------------------------ #
+    existing_uploaded = []
+    if os.path.exists(uploaded_json_path):
+        try:
+            with open(uploaded_json_path, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+                raw = existing_data.get("uploaded_jpgs", [])
+                if isinstance(raw, list):
+                    existing_uploaded = [u.strip() for u in raw if isinstance(u, str) and u.strip()]
+                elif isinstance(raw, str):
+                    url = raw.strip()
+                    existing_uploaded = [url] if url else []
+                    print("Fixed: 'uploaded_jpgs' was string → converted to list.")
+        except Exception as e:
+            print(f"Warning: Could not read uploadedjpgs.json: {e}")
+
+    print(f"Found {len(existing_uploaded)} previously recorded uploaded URLs.")
+
+    # ------------------------------------------------------------------ #
+    # 7. Combine & deduplicate URLs
+    # ------------------------------------------------------------------ #
+    all_urls = existing_uploaded + next_urls
+    unique_urls = []
+    seen = set()
+    for url in all_urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+    newly_added_urls = len(unique_urls) - len(existing_uploaded)
+
+    # ------------------------------------------------------------------ #
+    # 8. Save updated uploadedjpgs.json
+    # ------------------------------------------------------------------ #
+    timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
+
+    uploaded_data = {
+        "uploaded_jpgs": unique_urls,
+        "last_moved_from_next": timestamp,
+        "total_uploaded": len(unique_urls),
+        "moved_this_time_urls": len(next_urls),
+        "newly_added_urls": newly_added_urls,
+        "moved_files_count": moved_files_count,
+        "failed_file_moves": [f"{name}: {err}" for name, err in failed_moves],
+        "author": author
+    }
+
+    try:
+        with open(uploaded_json_path, 'w', encoding='utf-8') as f:
+            json.dump(uploaded_data, f, indent=4, ensure_ascii=False)
+        print(f"\nSaved updated uploadedjpgs.json → {len(unique_urls)} total URLs")
+    except Exception as e:
+        print(f"Failed to write uploadedjpgs.json: {e}")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 9. Clear next_jpgcard.json
+    # ------------------------------------------------------------------ #
+    try:
+        cleared_data = {
+            "next_jpgcard": [],
+            "timestamp": timestamp,
+            "total_checked": data.get("total_checked", 0) if 'data' in locals() else 0,
+            "total_valid": 0,
+            "total_invalid": data.get("total_invalid", 0) if 'data' in locals() else 0,
+            "note": "Cleared by uploadedjpgs() – URLs moved + files relocated"
+        }
+        with open(next_json_path, 'w', encoding='utf-8') as f:
+            json.dump(cleared_data, f, indent=4, ensure_ascii=False)
+        print(f"Cleared next_jpgcard.json")
+    except Exception as e:
+        print(f"Warning: Could not clear next_jpgcard.json: {e}")
+
+    # ------------------------------------------------------------------ #
+    # 10. Final Summary
+    # ------------------------------------------------------------------ #
+    print("\n" + "="*70)
+    print(f" SUMMARY FOR @{author.upper()}")
+    print(f"   URLs moved     : {len(next_urls)} → {newly_added_urls} new")
+    print(f"   Files moved    : {moved_files_count} image(s)")
+    if failed_moves:
+        print(f"   Failed moves   : {len(failed_moves)}")
+    print(f"   Total archived : {len(unique_urls)} URLs")
+    print(f"   Folder cleared : next jpg → uploaded jpgs")
+    print("="*70)
+
+    print(f"\nAll done! Ready for next batch.")
+
+def moveuploadedurls():
+    """
+    Automates moving uploaded JPG URLs to the 'Uploaded' folder on jpgsvault.rf.gd using Selenium.
+    After successful move:
+      • Deletes ALL image files (.jpg, .png, .gif, etc.) from:
+          - jpgfolders\{author}
+          - next jpg\{author}
+          - uploaded jpgs\{author}
+      • Clears next_jpgcard.json
+      • Removes moved URLs from uploadedjpgs.json
+    Full cleanup for a clean slate.
+    """
+    # --------------------- CONFIG & PATHS ---------------------
+    TARGET_URL = "https://jpgsvault.rf.gd/jpgsvault.php"
+    CONFIG_PATH = r'C:\xampp\htdocs\serenum\pageandgroupauthors.json'
+    UPLOADED_JSON_DIR = r'C:\xampp\htdocs\serenum\files\uploaded jpgs'
+    NEXT_JSON_DIR = r'C:\xampp\htdocs\serenum\files\next jpg'
+    JPGFOLDERS_DIR = r'C:\xampp\htdocs\serenum\files\jpgfolders'
+    CHROME_BINARY = r"C:\xampp\htdocs\CIPHER\googlechrome\Google\Chrome\Application\chrome.exe"
+
+    # Supported image extensions (case-insensitive)
+    IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ico', '.svg'}
+
+    print("\n" + "="*80)
+    print("STARTING: move uploaded urls + FULL IMAGE CLEANUP (ALL FOLDERS)")
+    print("="*80)
+
+    # --------------------- LOAD CONFIG ---------------------
+    if not os.path.exists(CONFIG_PATH):
+        print(f"ERROR: Config file not found: {CONFIG_PATH}")
+        return
+
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        author = config.get('author', '').strip()
+        if not author:
+            print("ERROR: 'author' is missing or empty in config.")
             return
-
-    # Check if source file exists
-    source_path = os.path.join(source_dir, source_file)
-    if not os.path.exists(source_path):
-        print(f"Source file does not exist: {source_path}")
+        print(f"Author: {author}")
+    except Exception as e:
+        print(f"ERROR: Failed to load config: {e}")
         return
 
-    # Get all card_N.jpg files in the date-specific destination directory
-    try:
-        dest_files = [f for f in os.listdir(dest_dir) if re.match(r'card_(\d+)\.jpg$', f.lower())]
-    except Exception as e:
-        print(f"Failed to list files in destination directory {dest_dir}: {e}")
+    # --------------------- DERIVED PATHS ---------------------
+    uploaded_json_path = os.path.join(UPLOADED_JSON_DIR, author, 'uploadedjpgs.json')
+    next_json_path = os.path.join(NEXT_JSON_DIR, author, 'next_jpgcard.json')
+    jpgfolder_dir = os.path.join(JPGFOLDERS_DIR, author)
+    next_dir = os.path.join(NEXT_JSON_DIR, author)
+    uploaded_dir = os.path.join(UPLOADED_JSON_DIR, author)
+
+    # Ensure all author directories exist
+    author_dirs = {
+        'jpgfolders': jpgfolder_dir,
+        'next_jpg': next_dir,
+        'uploaded_jpgs': uploaded_dir
+    }
+
+    for name, path in author_dirs.items():
+        if not os.path.exists(path):
+            print(f"WARNING: Directory not found: {path} ({name})")
+        else:
+            print(f"Found: {path} ({name})")
+
+    if not os.path.exists(uploaded_json_path):
+        print(f"ERROR: uploadedjpgs.json not found: {uploaded_json_path}")
         return
 
-    # Extract numbers from existing card_N.jpg files in the current date folder
-    existing_numbers = []
-    for file in dest_files:
-        match = re.match(r'card_(\d+)\.jpg$', file.lower())
-        if match:
-            existing_numbers.append(int(match.group(1)))
-
-    # Determine the next number for the current date folder
-    next_num = max(existing_numbers) + 1 if existing_numbers else 1
-
-    # Define destination file path with date folder
-    dest_file = f'card_{next_num}.jpg'
-    dest_path = os.path.join(dest_dir, dest_file)
-
-    # Ensure no overwrite
-    while os.path.exists(dest_path):
-        next_num += 1
-        dest_file = f'card_{next_num}.jpg'
-        dest_path = os.path.join(dest_dir, dest_file)
-
-    # Copy and rename the file
+    # --------------------- LOAD UPLOADED URLS TO MOVE ---------------------
     try:
-        shutil.move(source_path, dest_path)
-        print(f"Copied and renamed {source_file} to {dest_file} in {dest_dir}")
+        with open(uploaded_json_path, 'r', encoding='utf-8') as f:
+            uploaded_data = json.load(f)
+        all_uploaded_urls = uploaded_data.get("uploaded_jpgs", [])
     except Exception as e:
-        print(f"Failed to copy or rename {source_file} to {dest_file}: {e}")
-        
+        print(f"ERROR: Failed to read uploadedjpgs.json: {e}")
+        return
+
+    if not all_uploaded_urls:
+        print("No URLs in uploadedjpgs.json. Nothing to move.")
+        return
+
+    # Load next_jpgcard to know which ones were just marked
+    next_urls = []
+    if os.path.exists(next_json_path):
+        try:
+            with open(next_json_path, 'r', encoding='utf-8') as f:
+                next_data = json.load(f)
+            next_urls = next_data.get("next_jpgcard", [])
+        except Exception as e:
+            print(f"Warning: Could not read next_jpgcard.json: {e}")
+    else:
+        print("No next_jpgcard.json found. Will move all in uploadedjpgs.json.")
+
+    # Use next_urls if available, else fall back to all
+    urls_to_move = next_urls if next_urls else all_uploaded_urls
+    if not urls_to_move:
+        print("No URLs to move (next_jpgcard empty and no fallback).")
+        return
+
+    print(f"Preparing to move {len(urls_to_move)} URL(s) to 'Uploaded' folder...")
+
+    # --------------------- SETUP SELENIUM ---------------------
+    driver = None
+    success = False
+    try:
+        options = Options()
+        options.add_argument("--disable-notifications")
+        options.add_argument("--disable-autofill")
+        options.add_argument("--log-level=3")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+
+        if os.path.exists(CHROME_BINARY):
+            options.binary_location = CHROME_BINARY
+            print("Using custom Chrome binary.")
+        else:
+            print("Custom Chrome binary not found. Using default.")
+
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager(driver_version="139.0.7258.128").install()),
+            options=options
+        )
+        driver.set_page_load_timeout(60)
+        driver.implicitly_wait(10)
+
+        print(f"Navigating to: {TARGET_URL}")
+        driver.get(TARGET_URL)
+        time.sleep(3)
+
+        # Click "FOLDERS ▼"
+        print('Clicking "FOLDERS ▼"')
+        folder_toggle = driver.find_element(By.ID, "folder-toggle")
+        folder_toggle.click()
+        time.sleep(1)
+
+        # Click author folder
+        print(f'Opening folder: "{author}"')
+        folder_menu = driver.find_element(By.ID, "folder-menu")
+        author_folder_xpath = f".//div[contains(@class, 'folder-item')]//span[@class='folder-name' and text()='{author}']"
+        author_folder = folder_menu.find_element(By.XPATH, author_folder_xpath)
+        author_folder.click()
+        time.sleep(2)
+
+        # Click "Move to Uploaded"
+        print('Clicking "Move to Uploaded"')
+        move_btn = driver.find_element(By.ID, "move-to-uploaded-btn")
+        move_btn.click()
+        time.sleep(1)
+
+        # Input URLs
+        print(f"Pasting {len(urls_to_move)} URL(s)...")
+        textarea = driver.find_element(By.ID, "move-indices")
+        url_input = ",\n".join(urls_to_move)
+        textarea.clear()
+        textarea.send_keys(url_input)
+
+        # Click Move
+        print('Confirming move...')
+        move_yes_btn = driver.find_element(By.ID, "move-yes")
+        move_yes_btn.click()
+        time.sleep(4)
+
+        # Check success
+        try:
+            alert_modal = driver.find_element(By.ID, "alert-modal")
+            alert_msg = alert_modal.find_element(By.ID, "alert-message").text
+            print(f"Server: {alert_msg}")
+
+            if "moved" in alert_msg.lower() and "to uploaded" in alert_msg.lower():
+                success = True
+                print("SUCCESS: Server confirmed move!")
+                alert_ok = driver.find_element(By.ID, "alert-ok")
+                alert_ok.click()
+            else:
+                print("WARNING: Move may have failed. Check message.")
+        except Exception as e:
+            print(f"WARNING: No alert appeared. Exception: {e}")
+
+    except Exception as e:
+        print(f"SELENIUM ERROR: {e}")
+        traceback.print_exc()
+    finally:
+        if driver:
+            driver.quit()
+            print("Browser closed.")
+
+    # --------------------- FULL CLEANUP (ONLY IF SUCCESS) ---------------------
+    if not success:
+        print("\nCLEANUP SKIPPED: Move was not confirmed successful.")
+        return
+
+    print("\n" + "-"*60)
+    print("STARTING FULL IMAGE CLEANUP ACROSS ALL AUTHOR FOLDERS")
+    print("-"*60)
+
+    deleted_files = 0
+    failed_deletes = 0
+
+    def is_image_file(filepath):
+        """Check if file is an image by extension AND content (using imghdr)"""
+        if not os.path.isfile(filepath):
+            return False
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in IMAGE_EXTENSIONS:
+            # Double-check with imghdr (except for SVG which is XML)
+            if ext == '.svg':
+                return True
+            try:
+                return imghdr.what(filepath) is not None
+            except:
+                return ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+        return False
+
+    def delete_images_in_folder(folder_path, label):
+        nonlocal deleted_files, failed_deletes
+        if not os.path.exists(folder_path):
+            print(f"{label} not found: {folder_path}")
+            return
+        print(f"Scanning for images in: {folder_path}")
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            if is_image_file(file_path):
+                try:
+                    os.remove(file_path)
+                    deleted_files += 1
+                    print(f"  [DELETED] {label}/{filename}")
+                except Exception as e:
+                    failed_deletes += 1
+                    print(f"  [FAILED] {label}/{filename} → {e}")
+
+    # 1. Delete ALL images from all three author directories
+    delete_images_in_folder(jpgfolder_dir, "jpgfolders")
+    delete_images_in_folder(next_dir, "next jpg")
+    delete_images_in_folder(uploaded_dir, "uploaded jpgs")
+
+    # 2. Clear next_jpgcard.json
+    if os.path.exists(next_json_path):
+        try:
+            with open(next_json_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "next_jpgcard": [],
+                    "timestamp": datetime.now(pytz.timezone('Africa/Lagos')).isoformat(),
+                    "note": "Cleared after successful move to Uploaded folder"
+                }, f, indent=4)
+            print(f"Cleared: {next_json_path}")
+        except Exception as e:
+            print(f"Failed to clear next_jpgcard.json: {e}")
+    else:
+        print("next_jpgcard.json not found (already clean)")
+
+    # 3. Remove moved URLs from uploadedjpgs.json
+    remaining_urls = [u for u in all_uploaded_urls if u not in urls_to_move]
+    try:
+        timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
+        new_data = {
+            "uploaded_jpgs": remaining_urls,
+            "last_moved_to_uploaded": timestamp,
+            "total_uploaded": len(remaining_urls),
+            "last_moved_count": len(urls_to_move),
+            "author": author
+        }
+        with open(uploaded_json_path, 'w', encoding='utf-8') as f:
+            json.dump(new_data, f, indent=4)
+        print(f"Updated uploadedjpgs.json → {len(remaining_urls)} remaining")
+    except Exception as e:
+        print(f"Failed to update uploadedjpgs.json: {e}")
+
+    # --------------------- FINAL SUMMARY ---------------------
+    print("\n" + "="*80)
+    print("FULL CLEANUP COMPLETE")
+    print("="*80)
+    print(f"Moved URLs             : {len(urls_to_move)}")
+    print(f"Total images deleted   : {deleted_files}")
+    print(f"Delete failures        : {failed_deletes}")
+    print(f"Remaining in uploaded  : {len(remaining_urls)}")
+    print(f"next_jpgcard.json      : CLEARED")
+    print(f"All author image dirs  : CLEANED (.jpg, .png, .gif, .webp, etc.)")
+    print("="*80)
+    print("All done. Ready for next batch!")
+
+
+def firstbatch():  
+    fetch_urls()
+    corruptedjpgs()
+    markjpgs()
+    corruptedjpgs()
+    crop_and_moveto_jpgs()
+    orderjpgs()
+
+def secondbatch():  
+    selectgroups() #*
+    toggleaddphoto() #*
+    writecaption_element()
+    toggleschedule() #*
+    update_calendar()
+    set_webschedule() #*   
 
 def main():
     try:
+        firstbatch()
         # Initialize WebDriver
         driver, wait = initialize_driver(mode="headed")
         

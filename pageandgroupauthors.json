@@ -1,12 +1,13 @@
 {
-    "author": "sunshine",
-    "inputpath": "C:\\xampp\\htdocs\\serenum\\files\\jpgs\\authorvalue",
+    "author": "Sunshine",
+    "inputpath": "C:\\xampp\\htdocs\\serenum\\files\\jpgfolders\\authorvalue",
     "outputpath": "C:\\xampp\\htdocs\\serenum\\files\\next jpg\\authorvalue",
-    "page": "none",
+    "page": "include",
     "group": "include",
-    "processpathfrom": "uploadedjpgs",
-    "schedule_date": "none",
+    "processjpgfrom": "freshjpgs",
+    "cardamount": "1",
+    "schedule_date": "16/11/2025 18:00",
     "type": "fullorders",
-    "group_types": "others",
+    "group_types": "uk",
     "group_switch": "no"
 }
