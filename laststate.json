@@ -1,0 +1,23 @@
+{
+  "setwebschedule_previous_input": [
+    "mm_hh_date",
+    "mm_date_hh",
+    "date_hh_mm",
+    "date_mm_hh",
+    "hh_mm_date",
+    "hh_date_mm"
+  ],
+  "last_used": "hh_date_mm",
+  "write_caption_previous_behaviors": [
+    "start_typo",
+    "end_typo",
+    "start_capslock",
+    "end_capslock",
+    "start_clear"
+  ],
+  "caption_last_used": "start_clear",
+  "toggleaddphoto_last_region": [
+    1536.0,
+    240.0
+  ]
+}

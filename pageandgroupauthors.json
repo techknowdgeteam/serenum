@@ -6,8 +6,8 @@
     "group": "include",
     "processjpgfrom": "freshjpgs",
     "cardamount": "1",
-    "schedule_date": "16/11/2025 18:00",
+    "schedule_date": "16/11/2025 14:00",
     "type": "fullorders",
-    "group_types": "uk",
+    "group_types": "others",
     "group_switch": "no"
 }
