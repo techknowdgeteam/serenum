@@ -231,6 +231,7 @@ def launch_profile():
                     print(f"URL correct. Proceeding with post actions...")
                     firstbatch()
                     secondbatch()
+                    uploadedjpgs()
                 else:
                     print(f"URL MISMATCH: {current_url} ≠ {uploadpost_url}")
                     print("Forcing navigation to correct URL...")
@@ -928,8 +929,8 @@ def check_single_url(
 def markjpgs():
     """
     Guarantees:
-        • jpgfolders   → exactly `cardamount` NEW image files (not in uploadedjpgs.json)
-        • next_jpgcard.json → exactly `cardamount` **original URLs**
+        • jpgfolders    → exactly `cardamount` NEW image files (not in uploadedjpgs.json)
+        • next_jpgcard.json → exactly `cardamount` **original URLs** (all NEW)
         • 1:1 filename ↔ URL mapping
     Any mismatch → delete everything and re-download **only new URLs**.
     """
@@ -979,7 +980,7 @@ def markjpgs():
     )
 
     jpgfolders_dir = fr'C:\xampp\htdocs\serenum\files\jpgfolders\{author}'
-    next_json_dir   = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
+    next_json_dir    = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
     next_json_path  = os.path.join(next_json_dir, 'next_jpgcard.json')
     download_dir    = fr'C:\xampp\htdocs\serenum\files\downloaded\{author}'
     uploaded_json_path = fr'C:\xampp\htdocs\serenum\files\uploaded jpgs\{author}\uploadedjpgs.json'
@@ -1002,13 +1003,14 @@ def markjpgs():
         print(f"Failed to read fetched list: {e}")
         return
 
-    candidate_urls = [
+    # Filter to relevant image URLs only
+    all_image_urls = [
         u for u in all_fetched_urls
         if u.startswith(base_path) and u.lower().endswith(('.jpg', '.jpeg', '.png'))
     ]
-    print(f"Found {len(candidate_urls)} candidate JPG/PNG URLs")
+    print(f"Found {len(all_image_urls)} candidate JPG/PNG URLs")
 
-    if len(candidate_urls) == 0:
+    if len(all_image_urls) == 0:
         print("No candidate URLs found. Abort.")
         return
 
@@ -1020,16 +1022,28 @@ def markjpgs():
         try:
             with open(uploaded_json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                raw = data.get("uploaded_jpgs", [])
-                for u in (raw if isinstance(raw, list) else [raw]):
-                    if isinstance(u, str):
-                        uploaded_urls.add(u.strip())
+            
+            # Handling the single comma-separated string format
+            raw = data.get("uploaded_jpgs", [])
+            
+            if isinstance(raw, str):
+                items = raw.strip().split(',')
+            elif isinstance(raw, list):
+                items = raw
+            else:
+                items = []
+
+            for u in items:
+                if isinstance(u, str):
+                    uploaded_urls.add(u.strip())
+            
             print(f"Loaded {len(uploaded_urls)} already-uploaded URLs → will skip them")
         except Exception as e:
             print(f"Warning: Could not read uploadedjpgs.json: {e}")
 
-    original_count = len(candidate_urls)
-    candidate_urls = [u for u in candidate_urls if u not in uploaded_urls]
+    original_count = len(all_image_urls)
+    # **THIS IS THE CRUCIAL FILTERING STEP**
+    candidate_urls = [u for u in all_image_urls if u not in uploaded_urls]
     skipped = original_count - len(candidate_urls)
     print(f"After deduplication: {len(candidate_urls)} new URLs left ({skipped} already uploaded)")
 
@@ -1046,7 +1060,11 @@ def markjpgs():
             with open(next_json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 next_urls = data.get("next_jpgcard", [])
-            print(f"Loaded {len(next_urls)} URL(s) from next_jpgcard.json")
+            
+            # Explicitly check for *uploaded* URLs in the current next_urls list (shouldn't happen)
+            next_urls = [u for u in next_urls if u not in uploaded_urls]
+            
+            print(f"Loaded {len(next_urls)} URL(s) from next_jpgcard.json (after checking against uploaded list)")
         except Exception as e:
             print(f"Corrupted next_jpgcard.json → {e}. Will rebuild.")
             next_urls = []
@@ -1068,18 +1086,18 @@ def markjpgs():
     def filename_from_url(url: str) -> str:
         return os.path.basename(url.split("?")[0])
 
-    url_filenames   = {filename_from_url(u) for u in next_urls}
-    file_names      = set(existing_files)
+    url_filenames    = {filename_from_url(u) for u in next_urls}
+    file_names       = set(existing_files)
 
     files_match_urls = file_names == url_filenames
     url_count_ok     = len(next_urls) == cardamount
     file_count_ok    = file_count == cardamount
 
     print("\nVALIDATION CHECK:")
-    print(f"  • Required count       : {cardamount}")
-    print(f"  • Files in folder      : {file_count}")
-    print(f"  • URLs in JSON         : {len(next_urls)}")
-    print(f"  • 1:1 filename match   : {'YES' if files_match_urls else 'NO'}")
+    print(f"  • Required count         : {cardamount}")
+    print(f"  • Files in folder        : {file_count}")
+    print(f"  • URLs in JSON           : {len(next_urls)}")
+    print(f"  • 1:1 filename match     : {'YES' if files_match_urls else 'NO'}")
 
     # ------------------------------------------------------------------ #
     # 8. DECISION – perfect sync or wipe & rebuild
@@ -1088,18 +1106,20 @@ def markjpgs():
         print("\nPERFECT MATCH – skipping download.")
         return
     else:
+        # **WIPE AND REBUILD TRIGGERED**
         reasons = []
-        if not file_count_ok:   reasons.append(f"File count ({file_count} ≠ {cardamount})")
-        if not url_count_ok:    reasons.append(f"URL count ({len(next_urls)} ≠ {cardamount})")
+        if not file_count_ok:    reasons.append(f"File count ({file_count} ≠ {cardamount})")
+        if not url_count_ok:     reasons.append(f"URL count ({len(next_urls)} ≠ {cardamount})")
         if not files_match_urls: reasons.append("Filename mismatch")
         print("\nMISMATCH DETECTED:")
         for r in reasons: print(f"  → {r}")
 
         # ---- wipe everything ------------------------------------------------
+        print("Wiping jpgfolders and reset next_jpgcard.json...")
         for f in existing_files:
             try:
                 os.remove(os.path.join(jpgfolders_dir, f))
-                print(f"  [DELETED] {f}")
+                # print(f"  [DELETED] {f}")
             except Exception: pass
 
         for f in os.listdir(download_dir):
@@ -1108,9 +1128,12 @@ def markjpgs():
                 try: os.remove(p)
                 except Exception: pass
 
+        # **IMPORTANT: Resetting the JSON ensures all old URL records are gone**
         with open(next_json_path, 'w', encoding='utf-8') as f:
             json.dump({"next_jpgcard": []}, f, indent=4, ensure_ascii=False)
         print("  [RESET] next_jpgcard.json")
+        
+        # Now, proceed to download **ONLY** from the filtered list (`candidate_urls`)
 
         print(f"\nREDOWNLOADING EXACTLY {cardamount} **NEW** VALID IMAGES...\n")
 
@@ -1121,6 +1144,7 @@ def markjpgs():
     valid_urls = []
     saved_paths = []
 
+    # Note: `candidate_urls` is already guaranteed to be NEW (not in uploadedjpgs.json)
     for url in candidate_urls:
         if downloaded >= cardamount:
             break
@@ -1168,7 +1192,7 @@ def markjpgs():
     try:
         with open(next_json_path, 'w', encoding='utf-8') as f:
             json.dump(
-                {"next_jpgcard": valid_urls},
+                {"next_jpgcard": valid_urls}, # valid_urls contains ONLY NEW URLs
                 f,
                 indent=4,
                 ensure_ascii=False
@@ -1184,16 +1208,16 @@ def markjpgs():
     print("\n" + "="*80)
     print("FINAL STATUS – NEW IMAGES DOWNLOADED & SYNCED")
     print("="*80)
-    print(f"Author         : {author}")
-    print(f"Required       : {cardamount}")
-    print(f"Skipped        : {skipped} (already uploaded)")
-    print(f"Downloaded     : {downloaded} NEW")
-    print(f"jpgfolders     : {jpgfolders_dir}")
-    print(f"Download Dir   : {download_dir}")
-    print(f"JSON Path      : {next_json_path}")
-    print(f"Ready for      : crop_and_moveto_jpgs() → then uploadedjpgs()")
+    print(f"Author             : {author}")
+    print(f"Required           : {cardamount}")
+    print(f"Skipped            : {skipped} (already uploaded)")
+    print(f"Downloaded         : {downloaded} NEW")
+    print(f"jpgfolders         : {jpgfolders_dir}")
+    print(f"Download Dir       : {download_dir}")
+    print(f"JSON Path          : {next_json_path}")
+    print(f"Ready for          : crop_and_moveto_jpgs() → then uploadedjpgs()")
     print("="*80)
-    print("All files and records are in perfect 1:1 sync. No duplicates.")
+    print("All files and records are in perfect 1:1 sync. No duplicates of uploaded URLs.")
     print("="*80)
 
 
@@ -1399,7 +1423,7 @@ def orderjpgs():
             return
     else:
         print("No card images processed. Nothing to output.")
-
+    
 
 def update_calendar():
     """Update the calendar and write to JSON, unconditionally."""
@@ -3587,21 +3611,18 @@ def writecaption_ocr():
 
 
 def writecaption_element():
-    """
-    NIGERIA FAST MODE: 6 BEHAVIORS (START/END + CAPSLOCK TYPOS)
-    Strict 6-cycle. No last repeat. Saves state.
-    """
     # ---- EARLY EXIT ----
     if getattr(writecaption_element, 'has_written', False):
         print("\nCAPTION ALREADY WRITTEN. SKIPPING.")
         return None
 
-    print("\nLOCATING COMPOSER (NIGERIA FAST MODE)")
+    print("\nLOCATING COMPOSER (NIGERIA FAST MODE - TYPING ONLY)")
 
     # --------------------------------------------------------------------- #
     # 0. Load caption
     # --------------------------------------------------------------------- #
     try:
+        # Assuming JSON_CONFIG_PATH, json, os, random, WebDriverWait, EC, By, ActionChains, time, Keys, driver are defined/imported in the scope
         with open(JSON_CONFIG_PATH, 'r') as json_file:
             config = json.load(json_file)
         author = config['author']
@@ -3650,11 +3671,16 @@ def writecaption_element():
         return None
 
     # --------------------------------------------------------------------- #
-    # 2. SPEED TYPING + BACKSPACE ENGINE
+    # 2. SPEED TYPING ENGINE
     # --------------------------------------------------------------------- #
     def type_with_speed(el, text, speed_profile):
+        """
+        Types the text into the element according to the 3-part speed profile.
+        speed_profile: list of 3 strings ('fast' or 'slow')
+        """
         if not text:
             return
+        # Ensure the element is focused
         ActionChains(driver).click(el).perform()
         time.sleep(random.uniform(0.1, 0.25))
 
@@ -3663,10 +3689,17 @@ def writecaption_element():
             "slow": (0.04, 0.09)
         }
 
-        p1 = len(text) // 3
-        p2 = len(text) // 3
-        p3 = len(text) - p1 - p2
+        # Divide text into three parts (p1, p2, p3)
+        total_len = len(text)
+        p1 = total_len // 3
+        p2 = (total_len - p1) // 2
+        p3 = total_len - p1 - p2
+
         parts = [text[:p1], text[p1:p1+p2], text[p1+p2:]]
+
+        # Ensure speed_profile has 3 elements
+        if len(speed_profile) < 3:
+            speed_profile = ["fast", "fast", "fast"] # Fallback
 
         for i, part in enumerate(parts):
             if not part:
@@ -3676,77 +3709,42 @@ def writecaption_element():
                 ActionChains(driver).send_keys(char).perform()
                 time.sleep(random.uniform(min_d, max_d))
 
-    def backspace(el, count):
-        for _ in range(count):
-            ActionChains(driver).send_keys(Keys.BACKSPACE).perform()
-            time.sleep(random.uniform(0.06, 0.12))
 
     # --------------------------------------------------------------------- #
-    # 3. 6 BEHAVIORS (START & END ONLY + CAPSLOCK)
+    # 3. 5 BEHAVIORS (SPEED PROFILES ONLY)
     # --------------------------------------------------------------------- #
-    def b1_start_typo(el, text):
-        print("  [1] START typo → backspace → correct | Speed: fast-slow-fast")
-        wrong = random.choice(['zx', 'qw', 'fp', 'vb'])
-        type_with_speed(el, wrong, ["fast", "fast", "fast"])
-        time.sleep(random.uniform(0.3, 0.7))
-        backspace(el, len(wrong))
+    def b1_s_f_s(el, text):
+        print("  [1] Slow-Fast-Slow | Profile: ['slow', 'fast', 'slow']")
+        type_with_speed(el, text, ["slow", "fast", "slow"])
+
+    def b2_f_s_f(el, text):
+        print("  [2] Fast-Slow-Fast | Profile: ['fast', 'slow', 'fast']")
         type_with_speed(el, text, ["fast", "slow", "fast"])
 
-    def b2_end_typo(el, text):
-        print("  [2] END typo → backspace → correct | Speed: slow-fast-fast")
-        type_with_speed(el, text, ["slow", "fast", "fast"])
-        wrong = random.choice(['zx', 'qw', 'fp'])
-        type_with_speed(el, wrong, ["fast", "fast", "fast"])
-        time.sleep(random.uniform(0.3, 0.7))
-        backspace(el, len(wrong))
+    def b3_s_s_f(el, text):
+        print("  [3] Slow-Slow-Fast | Profile: ['slow', 'slow', 'fast']")
+        type_with_speed(el, text, ["slow", "slow", "fast"])
 
-    def b3_start_capslock(el, text):
-        print("  [3] START CAPSLOCK typo → backspace → correct")
-        wrong = random.choice(['Zx', 'Qw', 'Fp', 'Vb'])
-        type_with_speed(el, wrong, ["fast", "fast", "fast"])
-        time.sleep(random.uniform(0.4, 0.8))
-        backspace(el, len(wrong))
-        type_with_speed(el, text, ["fast", "slow", "fast"])
+    def b4_f_s_s(el, text):
+        print("  [4] Fast-Slow-Slow | Profile: ['fast', 'slow', 'slow']")
+        type_with_speed(el, text, ["fast", "slow", "slow"])
 
-    def b4_end_capslock(el, text):
-        print("  [4] END CAPSLOCK typo → backspace → correct")
-        type_with_speed(el, text, ["slow", "fast", "fast"])
-        wrong = random.choice(['Zx', 'Qw', 'Fp'])
-        type_with_speed(el, wrong, ["fast", "fast", "fast"])
-        time.sleep(random.uniform(0.4, 0.8))
-        backspace(el, len(wrong))
-
-    def b5_start_clear_rewrite(el, text):
-        print("  [5] START typo → CLEAR ALL → rewrite | Speed: fast-fast-slow")
-        wrong = random.choice(['zx', 'qw'])
-        type_with_speed(el, wrong, ["fast", "fast", "fast"])
-        time.sleep(0.5)
-        backspace(el, len(wrong))
-        ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
-        time.sleep(0.2)
-        ActionChains(driver).send_keys(Keys.DELETE).perform()
-        time.sleep(0.3)
+    def b5_f_f_s(el, text):
+        print("  [5] Fast-Fast-Slow | Profile: ['fast', 'fast', 'slow']")
         type_with_speed(el, text, ["fast", "fast", "slow"])
+    
+    # Removed b6_paste_direct completely
 
-    def b6_end_partial_rewrite(el, text):
-        print("  [6] END typo → delete last 3 → rewrite end | Speed: slow-slow-fast")
-        type_with_speed(el, text[:-3], ["slow", "slow", "fast"])
-        wrong = random.choice(['zx', 'qw', 'fp'])
-        type_with_speed(el, wrong, ["fast", "fast", "fast"])
-        time.sleep(0.5)
-        backspace(el, len(wrong) + 3)
-        type_with_speed(el, text[-3:], ["fast", "fast", "fast"])
-
-    # Behavior registry
+    # Behavior registry (5 typing profiles)
     behaviors = [
-        ("start_typo", b1_start_typo),
-        ("end_typo", b2_end_typo),
-        ("start_capslock", b3_start_capslock),
-        ("end_capslock", b4_end_capslock),
-        ("start_clear", b5_start_clear_rewrite),
-        ("end_partial", b6_end_partial_rewrite),
+        ("s_f_s", b1_s_f_s),
+        ("f_s_f", b2_f_s_f),
+        ("s_s_f", b3_s_s_f),
+        ("f_s_s", b4_f_s_s),
+        ("f_f_s", b5_f_f_s),
     ]
     behavior_order = [b[0] for b in behaviors]
+    MAX_BEHAVIORS = len(behavior_order) # Now 5
 
     # --------------------------------------------------------------------- #
     # 4. LOAD laststate.json
@@ -3759,6 +3757,7 @@ def writecaption_element():
         try:
             with open(laststate_path, 'r') as f:
                 data = json.load(f)
+                # Filter out behaviors that are no longer supported (like paste_direct)
                 used = data.get("write_caption_previous_behaviors", [])
                 used_behaviors = [s for s in used if s in behavior_order]
                 last_used_behavior = data.get("caption_last_used")
@@ -3767,24 +3766,29 @@ def writecaption_element():
         except Exception as e:
             print(f"ERROR reading laststate.json: {e}")
 
-    print(f"Used: {len(used_behaviors)}/6 → {used_behaviors}")
+    print(f"Used: {len(used_behaviors)}/{MAX_BEHAVIORS} → {used_behaviors}")
     print(f"Last: {last_used_behavior}")
 
     # --------------------------------------------------------------------- #
-    # 5. PICK NEXT BEHAVIOR (6-CYCLE)
+    # 5. PICK NEXT BEHAVIOR (STRICT {MAX_BEHAVIORS}-CYCLE)
     # --------------------------------------------------------------------- #
     next_behavior_key = None
-    if len(used_behaviors) < 6:
+    if len(used_behaviors) < MAX_BEHAVIORS:
+        # Pick the first unused behavior
         for key in behavior_order:
             if key not in used_behaviors:
                 next_behavior_key = key
                 break
     else:
-        for key in behavior_order:
-            if key != last_used_behavior:
-                next_behavior_key = key
-                break
+        # All 5 used, start cycling based on the last used one
+        if last_used_behavior and last_used_behavior in behavior_order:
+            # Find the index of the last used behavior
+            last_index = behavior_order.index(last_used_behavior)
+            # Calculate the index of the next behavior in the cycle (wrap around)
+            next_index = (last_index + 1) % MAX_BEHAVIORS
+            next_behavior_key = behavior_order[next_index]
         else:
+            # Fallback to the first behavior
             next_behavior_key = behavior_order[0]
 
     chosen_func = dict(behaviors)[next_behavior_key]
@@ -3799,14 +3803,14 @@ def writecaption_element():
             if not el.is_displayed():
                 continue
 
-            print(f"  [{i}] Testing → {next_behavior_key}")
+            print(f"  [{i}] Testing → {next_behavior_key}")
 
             current = driver.execute_script(
                 "return arguments[0].textContent || arguments[0].innerText || '';", el
             ).strip()
 
             if selected_caption.lower() in current.lower():
-                print(f"  [{i}] Already present.")
+                print(f"  [{i}] Already present.")
                 working_element = el
                 writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
@@ -3820,7 +3824,7 @@ def writecaption_element():
             ).strip()
 
             if selected_caption.lower() in final.lower():
-                print(f"  SUCCESS! Composer locked.")
+                print(f"  SUCCESS! Composer locked.")
                 working_element = el
                 writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
@@ -3829,9 +3833,10 @@ def writecaption_element():
                 if next_behavior_key not in used_behaviors:
                     used_behaviors.append(next_behavior_key)
                 else:
+                    # Move to end if already present (acts as a timestamp)
                     used_behaviors.remove(next_behavior_key)
                     used_behaviors.append(next_behavior_key)
-                used_behaviors = used_behaviors[-6:]
+                used_behaviors = used_behaviors[-MAX_BEHAVIORS:] # Keep last MAX_BEHAVIORS only
 
                 state_data = {}
                 if os.path.exists(laststate_path):
@@ -3849,17 +3854,18 @@ def writecaption_element():
                 try:
                     with open(laststate_path, 'w') as f:
                         json.dump(state_data, f, indent=2)
-                    print(f"SAVED: {len(used_behaviors)}/6 | Last: {next_behavior_key}")
+                    print(f"SAVED: {len(used_behaviors)}/{MAX_BEHAVIORS} | Last: {next_behavior_key}")
                 except Exception as e:
                     print(f"ERROR writing laststate.json: {e}")
 
                 break
             else:
+                # Clear the element if the caption was not correctly written (e.g., failed click/type)
                 ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
                 ActionChains(driver).send_keys(Keys.DELETE).perform()
 
         except Exception as e:
-            print(f"  [{i}] Error: {e}")
+            print(f"  [{i}] Error: {e}")
 
     # --------------------------------------------------------------------- #
     # 7. Return
@@ -3869,8 +3875,9 @@ def writecaption_element():
         return working_element
     else:
         print("\nFallback to OCR...")
+        # Assuming writecaption_ocr() is defined in the external scope
         writecaption_ocr()
-        return None     
+        return None
 
 
 def extract_texts(return_time_value=None, additional_texts=None):
@@ -4390,6 +4397,7 @@ def click_schedule_button():
             )
         )
         print("Success message confirmed.")
+        uploadedjpgs()
         
         
 
@@ -4404,6 +4412,8 @@ def click_schedule_button():
                 json.dump(progress_data, f, indent=4)
             print(f"Updated {driver_progress_path} with driver: started, scheduled: successfully")
             uploadedjpgs()
+            print("executed uploaded jpgs")
+            time.sleep(3)
         except Exception as e:
             print(f"Failed to write to {driver_progress_path}: {str(e)}")
 
@@ -4432,13 +4442,17 @@ def click_schedule_button():
 
 def uploadedjpgs():
     """Archive VALID URLs from next_jpgcard.json → uploadedjpgs.json
-       AND DELETE **ALL** files from:
-         - next jpg folder
-         - uploaded jpgs folder
-         - downloaded folder
-         - jpgfolders folder ← NEW!
-       Fully clear next_jpgcard.json.
-       Only valid URLs are preserved. Safe, robust, full logging."""
+    AND DELETE **ALL** files from:
+      - next jpg folder
+      - uploaded jpgs folder
+      - downloaded folder
+      - jpgfolders folder ← NEW!
+    Fully clear next_jpgcard.json.
+    Only valid URLs are preserved. Safe, robust, full logging.
+    
+    MODIFICATION: 'uploaded_jpgs' is saved as a single, comma-separated string
+    wrapped in double quotes, instead of a JSON list.
+    """
 
     from datetime import datetime
     import pytz
@@ -4466,11 +4480,11 @@ def uploadedjpgs():
     # ------------------------------------------------------------------ #
     # 2. Define ALL relevant paths (including jpgfolders)
     # ------------------------------------------------------------------ #
-    next_dir           = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
-    uploaded_dir       = fr'C:\xampp\htdocs\serenum\files\uploaded jpgs\{author}'
-    downloaded_dir     = fr'C:\xampp\htdocs\serenum\files\downloaded\{author}'
-    jpgfolders_dir     = fr'C:\xampp\htdocs\serenum\files\jpgfolders\{author}'  # ← NEW
-    next_json_path     = os.path.join(next_dir, 'next_jpgcard.json')
+    next_dir            = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
+    uploaded_dir        = fr'C:\xampp\htdocs\serenum\files\uploaded jpgs\{author}'
+    downloaded_dir      = fr'C:\xampp\htdocs\serenum\files\downloaded\{author}'
+    jpgfolders_dir      = fr'C:\xampp\htdocs\serenum\files\jpgfolders\{author}'  # ← NEW
+    next_json_path      = os.path.join(next_dir, 'next_jpgcard.json')
     uploaded_json_path = os.path.join(uploaded_dir, 'uploadedjpgs.json')
 
     # Ensure all directories exist
@@ -4488,6 +4502,7 @@ def uploadedjpgs():
                 next_json_data = json.load(f)
             raw = next_json_data.get("next_jpgcard", [])
 
+            # Handle case where 'next_jpgcard' might be a single string or a list
             items = [raw] if isinstance(raw, str) else raw
             for item in items:
                 if isinstance(item, str):
@@ -4523,6 +4538,7 @@ def uploadedjpgs():
     for label, folder in folders_to_clean:
         print(f"\nCleaning {label} folder: {folder}")
         try:
+            # os.listdir will list files AND directories
             files = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
         except Exception as e:
             print(f"  [ERROR] Cannot access folder: {e}")
@@ -4532,7 +4548,7 @@ def uploadedjpgs():
             print(f"  → Already empty.")
             continue
 
-        # Preserve uploadedjpgs.json
+        # Preserve uploadedjpgs.json in its directory
         if label == "uploaded jpgs":
             files = [f for f in files if f != 'uploadedjpgs.json']
 
@@ -4541,26 +4557,38 @@ def uploadedjpgs():
             try:
                 os.remove(path)
                 delete_stats[label]["deleted"] += 1
-                print(f"   [DELETED] {f}")
+                print(f"    [DELETED] {f}")
             except Exception as e:
                 delete_stats[label]["failed"].append((f, str(e)))
-                print(f"   [FAILED] {f} → {e}")
+                print(f"    [FAILED] {f} → {e}")
 
     # ------------------------------------------------------------------ #
-    # 5. Load existing uploadedjpgs.json – keep ONLY valid URLs
+    # 5. Load existing uploadedjpgs.json – and parse its string format
     # ------------------------------------------------------------------ #
     existing_uploaded = []
     if os.path.exists(uploaded_json_path):
         try:
             with open(uploaded_json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                raw = data.get("uploaded_jpgs", [])
-                candidates = [raw] if isinstance(raw, str) else raw
-                for u in candidates:
-                    if isinstance(u, str) and u.strip().lower().startswith(('http://', 'https://')):
-                        existing_uploaded.append(u.strip())
+                
+            # Expecting a string of comma-separated URLs or a list (for backward compatibility)
+            raw_urls = data.get("uploaded_jpgs", [])
+            
+            if isinstance(raw_urls, str):
+                # Split the comma-separated string into a list of URLs
+                candidates = raw_urls.strip().split(',')
+            elif isinstance(raw_urls, list):
+                # Handle old list format for seamless transition
+                candidates = raw_urls
+            else:
+                candidates = []
+
+            for u in candidates:
+                if isinstance(u, str) and u.strip().lower().startswith(('http://', 'https://')):
+                    existing_uploaded.append(u.strip())
+                    
         except Exception as e:
-            print(f"Warning: Could not read uploadedjpgs.json: {e}")
+            print(f"Warning: Could not read or parse uploadedjpgs.json: {e}")
 
     print(f"Found {len(existing_uploaded)} previously archived URLs.")
 
@@ -4571,13 +4599,18 @@ def uploadedjpgs():
     unique_urls = list(dict.fromkeys(all_urls))
     newly_added = len(unique_urls) - len(existing_uploaded)
 
+    # CONVERT LIST OF URLS TO THE REQUESTED SINGLE COMMA-SEPARATED STRING
+    # Example: ["url1", "url2"] -> "url1,url2"
+    uploaded_jpgs_string = ",".join(unique_urls)
+
     # ------------------------------------------------------------------ #
     # 7. Save updated uploadedjpgs.json with full cleanup metadata
     # ------------------------------------------------------------------ #
     timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
 
     uploaded_data = {
-        "uploaded_jpgs": unique_urls,
+        # MODIFICATION HERE: storing the list as a single comma-separated string
+        "uploaded_jpgs": uploaded_jpgs_string, 
         "last_cleared": timestamp,
         "total_uploaded": len(unique_urls),
         "urls_added_this_time": len(next_urls),
@@ -4601,8 +4634,9 @@ def uploadedjpgs():
 
     try:
         with open(uploaded_json_path, 'w', encoding='utf-8') as f:
+            # json.dump will wrap the single string in quotes (e.g., "url1,url2,url3")
             json.dump(uploaded_data, f, indent=4, ensure_ascii=False)
-        print(f"\nSaved uploadedjpgs.json → {len(unique_urls)} clean URLs preserved")
+        print(f"\nSaved uploadedjpgs.json → {len(unique_urls)} clean URLs preserved (as string)")
     except Exception as e:
         print(f"Failed to write uploadedjpgs.json: {e}")
         return
@@ -4634,14 +4668,14 @@ def uploadedjpgs():
     print("\n" + "="*88)
     print(f" TOTAL SYSTEM RESET COMPLETE FOR @{author.upper()}")
     print("="*88)
-    print(f"   URLs archived       : {len(next_urls)} → {newly_added} new unique")
-    print(f"   Total valid URLs    : {len(unique_urls)}")
-    print(f"   Files deleted       : {total_deleted} across 4 folders")
+    print(f"   URLs archived             : {len(next_urls)} → {newly_added} new unique")
+    print(f"   Total valid URLs          : {len(unique_urls)}")
+    print(f"   Files deleted             : {total_deleted} across 4 folders")
     if total_failed:
-        print(f"   Failed deletes      : {total_failed}")
-    print(f"   Folders wiped       : next jpg | uploaded jpgs | downloaded | jpgfolders")
-    print(f"   next_jpgcard.json   : FULLY CLEARED")
-    print(f"   uploadedjpgs.json   : UPDATED & SAFE")
+        print(f"   Failed deletes            : {total_failed}")
+    print(f"   Folders wiped             : next jpg | uploaded jpgs | downloaded | jpgfolders")
+    print(f"   next_jpgcard.json         : FULLY CLEARED")
+    print(f"   uploadedjpgs.json         : UPDATED & SAFE (URLs stored as a single string)")
     print("="*88)
     print(f" SYSTEM READY FOR FRESH MARKJPGS() CYCLE")
     print(f" @teamxtech – {timestamp.split('T')[0]} {timestamp.split('T')[1][:8]} WAT")
@@ -4977,9 +5011,4 @@ def main():
 
 if __name__ == "__main__":
    main()
-
-   
-
-
-
 
