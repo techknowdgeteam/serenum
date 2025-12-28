@@ -1,13 +1,13 @@
 {
-    "author": "Sunshine",
+    "author": "Harley",
     "inputpath": "C:\\xampp\\htdocs\\serenum\\files\\jpgfolders\\authorvalue",
     "outputpath": "C:\\xampp\\htdocs\\serenum\\files\\next jpg\\authorvalue",
     "page": "include",
     "group": "include",
     "processjpgfrom": "freshjpgs",
     "cardamount": "1",
-    "schedule_date": "24/11/2025 00:00",
-    "type": "fullorders",
+    "schedule_date": "01/01/2026 16:00",
+    "type": "threeorders",
     "group_types": "uk",
     "group_switch": "no"
 }

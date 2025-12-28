@@ -1,8 +1,11 @@
 {
   "Brilliance":{
-    "schedule":["https://business.facebook.com/latest/composer?asset_id=104604438384358&nav_ref=fb_composer_share_to_groups_redirect_composer&ref=fb_composer_share_to_groups"]
+    "schedule":["https://business.facebook.com/latest/composer/?page_id=104604438384358&asset_id=104604438384358&redirect_session_id=55a6907f-4a2d-4237-8cee-2013fe5d87ae"]
   },
    "Sunshine":{
-    "schedule":["https://business.facebook.com/latest/composer?asset_id=349110742249855&nav_ref=fb_composer_share_to_groups_redirect_composer&ref=fb_composer_share_to_groups"]
+    "schedule":["https://business.facebook.com/latest/composer/?asset_id=349110742249855&nav_ref=internal_nav&ref=biz_web_home_create_post&context_ref=HOME","https://business.facebook.com/latest/composer/?asset_id=518704588000840&nav_ref=internal_nav&ref=biz_web_home_create_post&context_ref=HOME"]
+  },
+   "Harley":{
+    "schedule":["https://business.facebook.com/latest/composer/?asset_id=518704588000840&nav_ref=internal_nav&ref=biz_web_home_create_post&context_ref=HOME"]
   }
 }
