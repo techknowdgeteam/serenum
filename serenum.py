@@ -3119,12 +3119,6 @@ def toggle_group_types():
 
 
 def toggleaddphoto():
-    """
-    OCR-based 'Add photo/video' button click.
-    • 0–2 random mouse movements (never the same region twice).
-    • Infinite variety – no hard-coded paths.
-    • Creates / updates laststate.json safely.
-    """
     # ---- STATE TRACKER ----
     if getattr(toggleaddphoto, 'is_toggled', False):
         print("'Add photo/video' button already toggled. Skipping.")
@@ -4978,8 +4972,9 @@ def firstbatch():
     orderjpgs()
 
 def secondbatch():  
-    selectgroups() #*
+     #*
     toggleaddphoto() #*
+    selectgroups()
     writecaption_element()
     toggleschedule() #*
     update_calendar()

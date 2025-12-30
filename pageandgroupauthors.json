@@ -6,8 +6,8 @@
     "group": "include",
     "processjpgfrom": "freshjpgs",
     "cardamount": "1",
-    "schedule_date": "01/01/2026 16:00",
-    "type": "threeorders",
-    "group_types": "uk",
+    "schedule_date": "18/01/2026 12:00",
+    "type": "fourorders",
+    "group_types": "others",
     "group_switch": "no"
 }
