@@ -9,15 +9,15 @@
   ],
   "last_used": "hh_mm_date",
   "write_caption_previous_behaviors": [
-    "s_f_s",
-    "f_s_f",
     "s_s_f",
     "f_s_s",
-    "f_f_s"
+    "f_f_s",
+    "s_f_s",
+    "f_s_f"
   ],
-  "caption_last_used": "f_f_s",
+  "caption_last_used": "f_s_f",
   "toggleaddphoto_last_region": [
     1536.0,
-    960.0
+    240.0
   ]
 }

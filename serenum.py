@@ -979,7 +979,7 @@ def markjpgs():
     current_domain_base = "https://fhdrikxsirudr.fwh.is/jpgs/"
     legacy_domain_base  = "https://jpgsvault.rf.gd/jpgs/"
 
-    # Primary base path (current active domain)
+    # Primary base path (current active domain) – lowercased for comparison only
     base_path = (
         f"{current_domain_base}{author}_uploaded/"
         if processjpgfrom == 'uploadedjpgs'
@@ -992,6 +992,11 @@ def markjpgs():
         if processjpgfrom == 'uploadedjpgs'
         else f"{legacy_domain_base}{author}/"
     )
+
+    # Lowercase versions for case-insensitive matching
+    base_path_lower = base_path.lower()
+    alternative_base_lower = alternative_base.lower()
+    author_lower = author.lower()
 
     jpgfolders_dir = fr'C:\xampp\htdocs\serenum\files\jpgfolders\{author}'
     next_json_dir    = fr'C:\xampp\htdocs\serenum\files\next jpg\{author}'
@@ -1017,10 +1022,10 @@ def markjpgs():
         print(f"Failed to read fetched list: {e}")
         return
 
-    # Filter to relevant image URLs only – support BOTH domains
+    # Filter to relevant image URLs only – case-insensitive domain/author match
     all_image_urls = [
         u for u in all_fetched_urls
-        if (u.startswith(base_path) or u.startswith(alternative_base))
+        if (u.lower().startswith(base_path_lower) or u.lower().startswith(alternative_base_lower))
         and u.lower().endswith(('.jpg', '.jpeg', '.png'))
     ]
     print(f"Found {len(all_image_urls)} candidate JPG/PNG URLs (current + legacy domains)")
@@ -1030,9 +1035,9 @@ def markjpgs():
         return
 
     # ------------------------------------------------------------------ #
-    # 4. Load uploadedjpgs.json → SKIP ALREADY ARCHIVED URLs
+    # 4. Load uploadedjpgs.json → SKIP ALREADY ARCHIVED URLs (case-insensitive)
     # ------------------------------------------------------------------ #
-    uploaded_urls = set()
+    uploaded_urls_lower = set()
     if os.path.exists(uploaded_json_path):
         try:
             with open(uploaded_json_path, 'r', encoding='utf-8') as f:
@@ -1049,14 +1054,14 @@ def markjpgs():
 
             for u in items:
                 if isinstance(u, str):
-                    uploaded_urls.add(u.strip())
+                    uploaded_urls_lower.add(u.strip().lower())
             
-            print(f"Loaded {len(uploaded_urls)} already-uploaded URLs → will skip them")
+            print(f"Loaded {len(uploaded_urls_lower)} already-uploaded URLs → will skip them (case-insensitive)")
         except Exception as e:
             print(f"Warning: Could not read uploadedjpgs.json: {e}")
 
     original_count = len(all_image_urls)
-    candidate_urls = [u for u in all_image_urls if u not in uploaded_urls]
+    candidate_urls = [u for u in all_image_urls if u.lower() not in uploaded_urls_lower]
     skipped = original_count - len(candidate_urls)
     print(f"After deduplication: {len(candidate_urls)} new URLs left ({skipped} already uploaded)")
 
@@ -1074,7 +1079,8 @@ def markjpgs():
                 data = json.load(f)
                 next_urls = data.get("next_jpgcard", [])
             
-            next_urls = [u for u in next_urls if u not in uploaded_urls]
+            # Remove any that are already uploaded (case-insensitive)
+            next_urls = [u for u in next_urls if u.lower() not in uploaded_urls_lower]
             
             print(f"Loaded {len(next_urls)} URL(s) from next_jpgcard.json (after checking against uploaded list)")
         except Exception as e:
@@ -1093,15 +1099,15 @@ def markjpgs():
     print(f"Found {file_count} image(s) in jpgfolders")
 
     # ------------------------------------------------------------------ #
-    # 7. VALIDATION
+    # 7. VALIDATION – filename matching is now case-insensitive
     # ------------------------------------------------------------------ #
     def filename_from_url(url: str) -> str:
         return os.path.basename(url.split("?")[0])
 
-    url_filenames    = {filename_from_url(u) for u in next_urls}
-    file_names       = set(existing_files)
+    url_filenames_lower    = {filename_from_url(u).lower() for u in next_urls}
+    file_names_lower       = {f.lower() for f in existing_files}
 
-    files_match_urls = file_names == url_filenames
+    files_match_urls = file_names_lower == url_filenames_lower
     url_count_ok     = len(next_urls) == cardamount
     file_count_ok    = file_count == cardamount
 
@@ -1109,7 +1115,7 @@ def markjpgs():
     print(f"  • Required count         : {cardamount}")
     print(f"  • Files in folder        : {file_count}")
     print(f"  • URLs in JSON           : {len(next_urls)}")
-    print(f"  • 1:1 filename match     : {'YES' if files_match_urls else 'NO'}")
+    print(f"  • 1:1 filename match     : {'YES' if files_match_urls else 'NO'} (case-insensitive)")
 
     # ------------------------------------------------------------------ #
     # 8. DECISION – perfect sync or wipe & rebuild
@@ -1121,7 +1127,7 @@ def markjpgs():
         reasons = []
         if not file_count_ok:    reasons.append(f"File count ({file_count} ≠ {cardamount})")
         if not url_count_ok:     reasons.append(f"URL count ({len(next_urls)} ≠ {cardamount})")
-        if not files_match_urls: reasons.append("Filename mismatch")
+        if not files_match_urls: reasons.append("Filename mismatch (case-insensitive)")
         print("\nMISMATCH DETECTED:")
         for r in reasons: print(f"  → {r}")
 
@@ -1224,7 +1230,7 @@ def markjpgs():
     print("="*80)
     print("All files and records are in perfect 1:1 sync. No duplicates of uploaded URLs.")
     print("="*80)
-
+    
 def orderjpgs():
     # Load configuration from JSON
     try:
@@ -3118,7 +3124,169 @@ def toggle_group_types():
 
 
 
+
 def toggleaddphoto():
+    # ---- STATE TRACKER ----
+    if getattr(toggleaddphoto, 'is_toggled', False):
+        print("'Add photo/video' button already toggled. Skipping.")
+        return
+
+    print("Searching for 'Add photo/video' button via image matching...")
+    try:
+        retry_count = 0
+        max_retries = 3
+        save_path = r"C:\xampp\htdocs\serenum\files\gui"
+        laststate_path = r"C:\xampp\htdocs\serenum\laststate.json"
+
+        # Template image paths
+        addphoto_path = os.path.join(save_path, "addphoto.png")
+        addmedia_path = os.path.join(save_path, "addmedia.png")
+
+        if not os.path.exists(addphoto_path) and not os.path.exists(addmedia_path):
+            print("Error: Neither addphoto.png nor addmedia.png found in gui folder!")
+            return
+
+        # --- LOAD OR CREATE laststate.json ---
+        full_state = {}
+        if os.path.exists(laststate_path):
+            try:
+                with open(laststate_path, 'r') as f:
+                    full_state = json.load(f)
+                print("Loaded laststate.json")
+            except Exception as e:
+                print(f"Error reading laststate.json: {e}. Starting fresh.")
+                full_state = {}
+        else:
+            print(f"laststate.json not found – will create at: {laststate_path}")
+
+        last_region = full_state.get("toggleaddphoto_last_region")
+        print(f"Last visited region: {last_region}")
+
+        while retry_count < max_retries:
+            # ---- 1. Locate the button using image matching ----
+            button_location = None
+            confidence = 0.85  # Adjust if needed (lower = more lenient, higher = stricter)
+
+            for template_path in [addphoto_path, addmedia_path]:
+                if not os.path.exists(template_path):
+                    continue
+                try:
+                    loc = pyautogui.locateOnScreen(template_path, confidence=confidence)
+                    if loc is not None:
+                        button_location = loc
+                        print(f"Found match: {os.path.basename(template_path)} at {loc}")
+                        break
+                except pyautogui.ImageNotFoundException:
+                    continue
+                except Exception as e:
+                    print(f"Error during locateOnScreen({os.path.basename(template_path)}): {e}")
+
+            if button_location is None:
+                # Optional: take screenshot for debugging when not found
+                os.makedirs(save_path, exist_ok=True)
+                screenshot_file = os.path.join(save_path, "windowstext_debug.png")
+                screenshot = ImageGrab.grab()
+                screenshot.save(screenshot_file)
+                print(f"Button not found on attempt {retry_count + 1}. Screenshot saved: {screenshot_file}")
+
+                retry_count += 1
+                if retry_count >= max_retries:
+                    print("Max retries reached – giving up.")
+                else:
+                    time.sleep(1)
+                continue
+
+            # ---- 2. Calculate center of the detected button ----
+            center_x = button_location.left + button_location.width // 2
+            center_y = button_location.top + button_location.height // 2
+            w = button_location.width
+            h = button_location.height
+
+            print(f"Detected button at center ({center_x}, {center_y})")
+
+            # ---- Human-like mouse path (same as your original) ----
+            screen_w, screen_h = pyautogui.size()
+
+            # 9 dynamic region centers (top-left → bottom-right)
+            region_centers = [
+                (screen_w * 0.2, screen_h * 0.2),
+                (screen_w * 0.5, screen_h * 0.2),
+                (screen_w * 0.8, screen_h * 0.2),
+                (screen_w * 0.2, screen_h * 0.5),
+                (screen_w * 0.5, screen_h * 0.5),
+                (screen_w * 0.8, screen_h * 0.5),
+                (screen_w * 0.2, screen_h * 0.8),
+                (screen_w * 0.5, screen_h * 0.8),
+                (screen_w * 0.8, screen_h * 0.8),
+            ]
+
+            # 0, 1 or 2 random intermediate moves
+            num_moves = random.randint(0, 2)
+            print(f"Performing {num_moves} random movement(s)...")
+
+            used_regions = []
+            if isinstance(last_region, (list, tuple)) and len(last_region) == 2:
+                used_regions.append(tuple(last_region))
+
+            current_region = None
+            for _ in range(num_moves):
+                available = [r for r in region_centers if r not in used_regions]
+                if not available:
+                    available = region_centers
+                region = random.choice(available)
+                used_regions.append(region)
+                current_region = region
+
+                off_x = random.randint(-150, 150)
+                off_y = random.randint(-150, 150)
+                rand_x = max(50, min(region[0] + off_x, screen_w - 50))
+                rand_y = max(50, min(region[1] + off_y, screen_h - 50))
+
+                duration = random.uniform(0.3, 0.9)
+                print(f"  → Moving to region near ({rand_x}, {rand_y})")
+                pyautogui.moveTo(rand_x, rand_y, duration=duration,
+                                 tween=pyautogui.easeInOutQuad)
+                time.sleep(random.uniform(0.1, 0.4))
+
+            # ---- Final slow move to the button ----
+            print(f"Slowly moving to target ({center_x}, {center_y})...")
+            pyautogui.moveTo(center_x, center_y,
+                             duration=random.uniform(1.2, 2.1),
+                             tween=pyautogui.easeInOutQuad)
+
+            # Tiny final jitter inside the button bounds
+            jitter_x = random.randint(-w // 4, w // 4)
+            jitter_y = random.randint(-h // 4, h // 4)
+            final_x = max(0, min(center_x + jitter_x, screen_w))
+            final_y = max(0, min(center_y + jitter_y, screen_h))
+
+            print(f"Final click at: ({final_x}, {final_y})")
+            pyautogui.moveTo(final_x, final_y, duration=0.2)
+            time.sleep(0.2)
+            pyautogui.click()
+            print("Clicked 'Add photo/video' button")
+
+            # ---- Mark as toggled & persist last region ----
+            toggleaddphoto.is_toggled = True
+
+            if current_region:
+                full_state["toggleaddphoto_last_region"] = list(current_region)
+
+            os.makedirs(os.path.dirname(laststate_path), exist_ok=True)
+            with open(laststate_path, 'w') as f:
+                json.dump(full_state, f, indent=2)
+            print(f"SAVED: laststate.json (region {current_region})")
+
+            time.sleep(3)
+            selectmedia()  # <-- your existing helper function
+            
+            return
+
+    except Exception as e:
+        print(f"Error in toggleaddphoto(): {e}")
+
+
+def toggleaddphoto_():
     # ---- STATE TRACKER ----
     if getattr(toggleaddphoto, 'is_toggled', False):
         print("'Add photo/video' button already toggled. Skipping.")
@@ -3293,6 +3461,8 @@ def toggleaddphoto():
                     time.sleep(1)
                     continue
                 print("Max retries reached – giving up.")
+                toggleaddphoto()
+                
             time.sleep(1)
 
     except Exception as e:
@@ -3621,18 +3791,29 @@ def writecaption_element():
     # --------------------------------------------------------------------- #
     try:
         # Assuming JSON_CONFIG_PATH, json, os, random, WebDriverWait, EC, By, ActionChains, time, Keys, driver are defined/imported in the scope
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
+        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as json_file:
             config = json.load(json_file)
-        author = config['author']
-        group_types = config.get('group_types', 'others').lower()
+        
+        author = config['author'].strip()
+        author_lower = author.lower()  # For case-insensitive path construction
+        
+        group_types = config.get('group_types', 'others').lower().strip()
         if group_types not in ['uk', 'others']:
             group_types = 'others'
+        
+        # Case-insensitive filename construction
         json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({group_types}).json"
-
+        
+        # Also try alternative casing variants if main file not found
         if not os.path.exists(json_path):
-            raise FileNotFoundError(json_path)
+            # Try lowercase author version
+            alt_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author_lower}({group_types}).json"
+            if os.path.exists(alt_path):
+                json_path = alt_path
+            else:
+                raise FileNotFoundError(f"Caption file not found: {json_path}")
 
-        with open(json_path, 'r') as f:
+        with open(json_path, 'r', encoding='utf-8') as f:
             captions = json.load(f)
 
         selected_caption = random.choice(captions)['description']
@@ -3697,7 +3878,7 @@ def writecaption_element():
 
         # Ensure speed_profile has 3 elements
         if len(speed_profile) < 3:
-            speed_profile = ["fast", "fast", "fast"] # Fallback
+            speed_profile = ["fast", "fast", "fast"]  # Fallback
 
         for i, part in enumerate(parts):
             if not part:
@@ -3707,32 +3888,29 @@ def writecaption_element():
                 ActionChains(driver).send_keys(char).perform()
                 time.sleep(random.uniform(min_d, max_d))
 
-
     # --------------------------------------------------------------------- #
     # 3. 5 BEHAVIORS (SPEED PROFILES ONLY)
     # --------------------------------------------------------------------- #
     def b1_s_f_s(el, text):
-        print("  [1] Slow-Fast-Slow | Profile: ['slow', 'fast', 'slow']")
+        print("  [1] Slow-Fast-Slow | Profile: ['slow', 'fast', 'slow']")
         type_with_speed(el, text, ["slow", "fast", "slow"])
 
     def b2_f_s_f(el, text):
-        print("  [2] Fast-Slow-Fast | Profile: ['fast', 'slow', 'fast']")
+        print("  [2] Fast-Slow-Fast | Profile: ['fast', 'slow', 'fast']")
         type_with_speed(el, text, ["fast", "slow", "fast"])
 
     def b3_s_s_f(el, text):
-        print("  [3] Slow-Slow-Fast | Profile: ['slow', 'slow', 'fast']")
+        print("  [3] Slow-Slow-Fast | Profile: ['slow', 'slow', 'fast']")
         type_with_speed(el, text, ["slow", "slow", "fast"])
 
     def b4_f_s_s(el, text):
-        print("  [4] Fast-Slow-Slow | Profile: ['fast', 'slow', 'slow']")
+        print("  [4] Fast-Slow-Slow | Profile: ['fast', 'slow', 'slow']")
         type_with_speed(el, text, ["fast", "slow", "slow"])
 
     def b5_f_f_s(el, text):
-        print("  [5] Fast-Fast-Slow | Profile: ['fast', 'fast', 'slow']")
+        print("  [5] Fast-Fast-Slow | Profile: ['fast', 'fast', 'slow']")
         type_with_speed(el, text, ["fast", "fast", "slow"])
     
-    # Removed b6_paste_direct completely
-
     # Behavior registry (5 typing profiles)
     behaviors = [
         ("s_f_s", b1_s_f_s),
@@ -3742,7 +3920,7 @@ def writecaption_element():
         ("f_f_s", b5_f_f_s),
     ]
     behavior_order = [b[0] for b in behaviors]
-    MAX_BEHAVIORS = len(behavior_order) # Now 5
+    MAX_BEHAVIORS = len(behavior_order)  # Now 5
 
     # --------------------------------------------------------------------- #
     # 4. LOAD laststate.json
@@ -3753,9 +3931,9 @@ def writecaption_element():
 
     if os.path.exists(laststate_path):
         try:
-            with open(laststate_path, 'r') as f:
+            with open(laststate_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Filter out behaviors that are no longer supported (like paste_direct)
+                # Filter out behaviors that are no longer supported
                 used = data.get("write_caption_previous_behaviors", [])
                 used_behaviors = [s for s in used if s in behavior_order]
                 last_used_behavior = data.get("caption_last_used")
@@ -3778,37 +3956,36 @@ def writecaption_element():
                 next_behavior_key = key
                 break
     else:
-        # All 5 used, start cycling based on the last used one
+        # All 5 used, cycle based on last used
         if last_used_behavior and last_used_behavior in behavior_order:
-            # Find the index of the last used behavior
             last_index = behavior_order.index(last_used_behavior)
-            # Calculate the index of the next behavior in the cycle (wrap around)
             next_index = (last_index + 1) % MAX_BEHAVIORS
             next_behavior_key = behavior_order[next_index]
         else:
-            # Fallback to the first behavior
             next_behavior_key = behavior_order[0]
 
     chosen_func = dict(behaviors)[next_behavior_key]
     print(f"USING: {next_behavior_key.upper()}")
 
     # --------------------------------------------------------------------- #
-    # 6. Test candidates
+    # 6. Test candidates – now with case-insensitive caption checking
     # --------------------------------------------------------------------- #
     working_element = None
+    selected_caption_lower = selected_caption.lower()
+
     for i, el in enumerate(candidates):
         try:
             if not el.is_displayed():
                 continue
 
-            print(f"  [{i}] Testing → {next_behavior_key}")
+            print(f"  [{i}] Testing → {next_behavior_key}")
 
             current = driver.execute_script(
                 "return arguments[0].textContent || arguments[0].innerText || '';", el
             ).strip()
 
-            if selected_caption.lower() in current.lower():
-                print(f"  [{i}] Already present.")
+            if selected_caption_lower in current.lower():
+                print(f"  [{i}] Already present.")
                 working_element = el
                 writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
@@ -3821,8 +3998,8 @@ def writecaption_element():
                 "return arguments[0].textContent || arguments[0].innerText || '';", el
             ).strip()
 
-            if selected_caption.lower() in final.lower():
-                print(f"  SUCCESS! Composer locked.")
+            if selected_caption_lower in final.lower():
+                print(f"  SUCCESS! Composer locked.")
                 working_element = el
                 writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
@@ -3831,15 +4008,14 @@ def writecaption_element():
                 if next_behavior_key not in used_behaviors:
                     used_behaviors.append(next_behavior_key)
                 else:
-                    # Move to end if already present (acts as a timestamp)
                     used_behaviors.remove(next_behavior_key)
                     used_behaviors.append(next_behavior_key)
-                used_behaviors = used_behaviors[-MAX_BEHAVIORS:] # Keep last MAX_BEHAVIORS only
+                used_behaviors = used_behaviors[-MAX_BEHAVIORS:]
 
                 state_data = {}
                 if os.path.exists(laststate_path):
                     try:
-                        with open(laststate_path, 'r') as f:
+                        with open(laststate_path, 'r', encoding='utf-8') as f:
                             state_data = json.load(f)
                     except:
                         pass
@@ -3850,7 +4026,7 @@ def writecaption_element():
                 })
 
                 try:
-                    with open(laststate_path, 'w') as f:
+                    with open(laststate_path, 'w', encoding='utf-8') as f:
                         json.dump(state_data, f, indent=2)
                     print(f"SAVED: {len(used_behaviors)}/{MAX_BEHAVIORS} | Last: {next_behavior_key}")
                 except Exception as e:
@@ -3858,12 +4034,12 @@ def writecaption_element():
 
                 break
             else:
-                # Clear the element if the caption was not correctly written (e.g., failed click/type)
+                # Clear failed input
                 ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
                 ActionChains(driver).send_keys(Keys.DELETE).perform()
 
         except Exception as e:
-            print(f"  [{i}] Error: {e}")
+            print(f"  [{i}] Error: {e}")
 
     # --------------------------------------------------------------------- #
     # 7. Return
@@ -4973,8 +5149,9 @@ def firstbatch():
 
 def secondbatch():  
      #*
+    #toggleaddphoto()
     toggleaddphoto() #*
-    selectgroups()
+    #selectgroups()
     writecaption_element()
     toggleschedule() #*
     update_calendar()
