@@ -51,6 +51,17 @@ from pathlib import Path
 from PIL import ImageFilter
 import imghdr
 import traceback
+import csv
+import random
+import string
+import psutil
+from datetime import datetime, timezone
+import connectwithinfinitydb as db
+import json
+import os
+from datetime import datetime
+import time
+from selenium.webdriver.common.by import By
 
 
 # Global driver and wait objects
@@ -149,7 +160,6 @@ def initialize_driver(mode="headed"):
         print("Ensure your Wi-Fi allows downloading .exe files from Google APIs.")
         raise
 
-
 def load_urls():
     """Load URLs from pageandgroupaccounts.json based on author from pageandgroupauthors.json."""
     json_path = r"C:\xampp\htdocs\serenum\pageandgroupaccounts.json"
@@ -175,16 +185,17 @@ def load_urls():
         print(f"Failed to load URLs from JSON: {str(e)}")
         raise
    
-
 def launch_profile():
     """Navigate to the upload post URL, confirm it, and continuously recheck every 2 seconds."""
     global driver, wait
     try:
         uploadpost_url = load_urls()
+        post_completed = False  # Flag to track if posting is done
+        
         # Initial navigation attempt
         while True:
             current_url = driver.current_url
-            if uploadpost_url in current_url:
+            if uploadpost_url == current_url or (uploadpost_url in current_url and len(uploadpost_url) > len(current_url) * 0.8):
                 print(f"Confirmed: URL is {uploadpost_url}.")
                 wait.until(
                     EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
@@ -226,7 +237,8 @@ def launch_profile():
 
         # Continuous rechecking loop
         last_url = driver.current_url
-        while True:
+        
+        while not post_completed:  # Changed condition
             try:
                 current_url = driver.current_url
                 print("Checking if URL is correct...")
@@ -251,6 +263,22 @@ def launch_profile():
                     firstbatch()
                     secondbatch()
                     uploadedjpgs()
+                    
+                    # Add a flag to indicate posting is done
+                    # You'll need to modify these functions to return a success status
+                    # or check for a confirmation element after posting
+                    try:
+                        # Check if post was successful (look for success message)
+                        success_element = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'post') or contains(text(), 'published')]")),
+                            timeout=10
+                        )
+                        print("Post successful! Exiting launch_profile.")
+                        post_completed = True
+                        break
+                    except:
+                        print("Post may not be complete. Continuing to check...")
+                    
                 else:
                     print(f"URL MISMATCH: {current_url} ≠ {uploadpost_url}")
                     print("Forcing navigation to correct URL...")
@@ -277,25 +305,29 @@ def launch_profile():
                 raise
             except Exception as e:
                 print(f"Error in recheck loop: {str(e)}")
-                overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                if overlay:
-                    print("Overlay detected. Refreshing...")
-                    reset_trackers()
-                    driver.refresh()
-                    time.sleep(2)
-                    continue
+                # Don't refresh if we're already on the correct URL
+                if uploadpost_url not in driver.current_url:
+                    overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
+                    if overlay:
+                        print("Overlay detected. Refreshing...")
+                        reset_trackers()
+                        driver.refresh()
+                        time.sleep(2)
+                        continue
 
-                current_url = driver.current_url
-                if current_url != last_url:
-                    print(f"URL changed during error: {last_url} → {current_url}. Resetting...")
-                    reset_trackers()
-                    last_url = current_url
+                    current_url = driver.current_url
+                    if current_url != last_url:
+                        print(f"URL changed during error: {last_url} → {current_url}. Resetting...")
+                        reset_trackers()
+                        last_url = current_url
 
-                # If still wrong, force correct URL
-                if uploadpost_url not in current_url:
-                    print("Still on wrong URL. Forcing correct one...")
-                    driver.get(uploadpost_url)
-
+                    # If still wrong, force correct URL
+                    if uploadpost_url not in current_url:
+                        print("Still on wrong URL. Forcing correct one...")
+                        driver.get(uploadpost_url)
+                else:
+                    print("On correct URL despite error. Continuing...")
+                
                 time.sleep(2)
 
     except Exception as e:
@@ -305,7 +337,7 @@ def launch_profile():
         print("Browser remains open for debugging.")
         input("Press Enter to close...")  # Optional: pause before crash
         raise
-        
+    
 def reset_trackers():
     """Reset all function trackers to their initial state, excluding update_calendar."""
     # ---- Caption writers ----
@@ -314,8 +346,9 @@ def reset_trackers():
         writecaption_element.last_written_caption = None
     writecaption_element.has_written = False
 
-    # ---- set_webschedule (NEW) ----
-    set_webschedule.has_set = False  # ADD THIS LINE
+    # ---- set_webschedule ----
+    if hasattr(set_webschedule, 'has_set'):
+        set_webschedule.has_set = False
 
     # ---- toggleaddphoto ----
     toggleaddphoto.is_toggled = False
@@ -341,7 +374,7 @@ def reset_trackers():
         "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
         "groups_selected, is_page_selected"
     )
-    
+       
 def manage_group_switch():
     """
     Handles **only** group switching:
@@ -411,353 +444,314 @@ def manage_group_switch():
     except Exception as e:
         print(f"[group] write error: {e}")
         return False
-        
-def fetch_urls() -> list[str]:
-    """
-    Enhanced fetch_urls: Bypasses SSL issues, handles offline caching,
-    and extracts JPG URLs to JSON. Includes detailed debug output.
-    """
-    # ----- CONFIGURATION -----
-    TARGET_URL = "http://fhdrikxsirudr.fwh.is/loadimagesurl.php?i=1"
-    CHROME_BINARY = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    OUTPUT_FILE = r"C:\xampp\htdocs\serenum-csv\files\fetchedjpgsurl.json"
-    WDM_HOME = os.path.join(os.path.expanduser("~"), ".wdm")
-    # -------------------------
 
-    # 1. Setup Chrome Options
-    options = Options()
-    options.binary_location = CHROME_BINARY
+def fetch_jpgsvault_urls():
+    """
+    Modified function to fetch all_urls data from jpgsvault_table
+    Properly handles JSON array format from the database
+    Adds summary counts of unique folder names and their URL counts
+    """
+    import json as json_module  # Rename to avoid conflict with your json variable
+    from collections import defaultdict
     
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    
-    # Disable HTTPS upgrades
-    options.add_argument("--disable-features=HttpsUpgrades")
-    options.add_argument("--disable-features=HttpsOnlyMode")
-    
-    # Ignore certificate errors
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--allow-running-insecure-content")
-    options.add_argument("--disable-web-security")
-    
-    # Anti-detection
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    
-    # Realistic user agent
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-
-    # 2. Driver setup
-    driver_path = None
-    try:
-        print("Attempting to fetch Driver (SSL Bypass Active)...")
-        driver_path = ChromeDriverManager().install()
-    except Exception as e:
-        print(f"Network fetch failed: {e}")
-        print("Searching local .wdm cache for fallback...")
+    # Inner function for manual parsing
+    def manual_parse_urls(urls_field):
+        """
+        Fallback parser for when JSON parsing fails
+        Handles various formats like comma-separated, newline-separated, etc.
+        """
+        urls_list = []
         
-        found_drivers = []
-        for root, _, files in os.walk(WDM_HOME):
-            for file in files:
-                if file.lower() == "chromedriver.exe":
-                    found_drivers.append(os.path.join(root, file))
-        
-        if found_drivers:
-            driver_path = max(found_drivers, key=os.path.getmtime)
-            print(f"Using cached driver: {driver_path}")
+        # Try comma separation first
+        if ',' in urls_field:
+            # Split by comma but be careful with escaped commas
+            parts = urls_field.split(',')
+            for part in parts:
+                part = part.strip()
+                # Remove brackets and quotes
+                part = re.sub(r'^[\[\]"\']+|[\[\]"\']+$', '', part)
+                if part:
+                    urls_list.append(part)
+        elif '\n' in urls_field:
+            # Split by newline
+            for line in urls_field.split('\n'):
+                line = line.strip()
+                if line:
+                    urls_list.append(line)
         else:
-            print("CRITICAL: No driver found online or in cache.")
-            return []
-
-    # 3. Execution
-    driver = None
-    try:
-        service = Service(executable_path=driver_path)
-        driver = webdriver.Chrome(service=service, options=options)
+            # Single URL
+            urls_list.append(urls_field.strip())
         
-        # Hide automation
-        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        driver.set_page_load_timeout(60)
-        
-        print(f"Navigating to: {TARGET_URL}")
-        
-        # Load the page
+        return urls_list
+    
+    def extract_folder_name(url):
+        """
+        Extract folder name from URL pattern: .../jpgs/{folder_name}/...
+        Returns folder name or 'unknown' if not found
+        """
         try:
-            driver.get(TARGET_URL)
-        except Exception as e:
-            print(f"Navigation completed with warning: {e}")
-        
-        # Wait for initial load
-        time.sleep(5)
-        
-        current_url = driver.current_url
-        print(f"Current URL: {current_url}")
-        
-        # Wait for page to be ready
-        print("Waiting for page to load...")
-        max_wait = 30
-        for i in range(max_wait):
-            ready_state = driver.execute_script("return document.readyState")
-            if ready_state == "complete":
-                print("Page fully loaded!")
-                break
-            time.sleep(1)
-        
-        page_title = driver.title
-        print(f"Page title: '{page_title}'")
-        
-        # Get total expected URLs from summary cards
-        print("\n=== CHECKING TOTALS ===")
-        summary_js = """
-        let totals = {};
-        document.querySelectorAll('.card').forEach(card => {
-            let title = card.querySelector('h3')?.textContent;
-            let value = card.querySelector('p')?.textContent;
-            if (title && value) {
-                totals[title] = value;
-            }
-        });
-        return totals;
-        """
-        
-        summary_cards = driver.execute_script(summary_js)
-        expected_total = 0
-        if summary_cards:
-            print("Summary cards found:")
-            for title, value in summary_cards.items():
-                print(f"  {title}: {value}")
-                if "Unique URLs Saved" in title:
-                    expected_total = int(value.replace(',', ''))
-        
-        print(f"\nExpected total URLs: {expected_total}")
-        
-        # CRITICAL: Scroll to load all URLs
-        print("\n=== SCROLLING TO LOAD ALL URLS ===")
-        
-        scroll_js = """
-        // Find the scrollable container (the div with All Saved URLs)
-        function findScrollContainer() {
-            // Look for the div that contains the URLs
-            let allSavedSection = Array.from(document.querySelectorAll('h2')).find(h2 => 
-                h2.textContent.includes('All Saved URLs')
-            );
+            # Look for pattern '/jpgs/' followed by folder name
+            jpgs_pattern = r'/jpgs/([^/]+)/'
+            match = re.search(jpgs_pattern, url)
+            if match:
+                return match.group(1)
             
-            if (allSavedSection) {
-                // The next sibling should be the container with scroll
-                let container = allSavedSection.nextElementSibling;
-                if (container && container.style.maxHeight) {
-                    return container;
-                }
-            }
+            # Alternative pattern without leading slash
+            jpgs_pattern2 = r'jpgs/([^/]+)/'
+            match = re.search(jpgs_pattern2, url)
+            if match:
+                return match.group(1)
             
-            // Fallback: look for any div with overflow auto and many children
-            let containers = Array.from(document.querySelectorAll('div[style*="overflow"]'));
-            for (let container of containers) {
-                if (container.children.length > 10) {
-                    return container;
-                }
-            }
+            return 'unknown'
+        except:
+            return 'unknown'
+    
+    try:
+        print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] Starting fetch from jpgsvault_table...")
+        
+        # Query to get all_urls column from jpgsvault_table
+        query = "SELECT all_urls FROM jpgsvault_table" 
+        result = db.execute_query(query)  # Using the global execute_query function
+        
+        if result.get('status') != 'success':
+            print(f"QUERY ERROR: {result.get('message')}")
+            return []
             
-            return document.documentElement; // Fallback to whole page
-        }
+        rows = result.get('results', [])
         
-        let container = findScrollContainer();
-        console.log('Scrolling container:', container);
+        if not rows:
+            print("WARNING: Database returned 'success' but the results list is empty.")
+            print("Check if the table 'jpgsvault_table' actually has rows in the PHP interface.")
+            return []
         
-        let lastHeight = 0;
-        let scrollAttempts = 0;
-        let maxAttempts = 50; // Safety limit
+        print(f"SUCCESS: Fetched {len(rows)} records from 'jpgsvault_table'")
         
-        function scrollToBottom() {
-            return new Promise((resolve) => {
-                let interval = setInterval(() => {
-                    container.scrollTop = container.scrollHeight;
-                    let newHeight = container.scrollHeight;
-                    
-                    if (newHeight === lastHeight) {
-                        scrollAttempts++;
-                        if (scrollAttempts >= 5) { // No change for 5 attempts
-                            clearInterval(interval);
-                            resolve();
-                        }
-                    } else {
-                        scrollAttempts = 0;
-                        lastHeight = newHeight;
-                    }
-                    
-                    if (scrollAttempts >= maxAttempts) {
-                        clearInterval(interval);
-                        resolve();
-                    }
-                }, 1000);
-            });
-        }
+        # Extract all URLs from the rows
+        all_urls = []
+        seen_urls = set()
+        skipped_count = 0
+        metadata_count = 0
+        expected_total = None  # Will be extracted from metadata
+        urls_list = []  # Initialize for statistics
         
-        return scrollToBottom();
-        """
+        # Dictionary to store folder name counts
+        folder_counts = defaultdict(int)
         
-        print("Scrolling to load all URLs...")
-        driver.execute_script(scroll_js)
-        time.sleep(5)  # Extra wait after scrolling
-        
-        # Now extract URLs with the improved JavaScript that counts properly
-        print("\n=== EXTRACTING URLS ===")
-        
-        extract_js = """
-        function extractAllURLs() {
-            let urls = new Set();
-            let urlCount = 0;
+        for row in rows:
+            # Get the all_urls field from each row
+            urls_field = row.get('all_urls', '')
             
-            // Find the container with all URLs
-            let allSavedSection = Array.from(document.querySelectorAll('h2')).find(h2 => 
-                h2.textContent.includes('All Saved URLs')
-            );
-            
-            if (allSavedSection) {
-                let container = allSavedSection.nextElementSibling;
-                if (container) {
-                    // Get all div.url elements
-                    let urlDivs = container.querySelectorAll('div.url');
-                    console.log('Found ' + urlDivs.length + ' URL divs in container');
-                    
-                    urlDivs.forEach(div => {
-                        let text = div.textContent.trim();
-                        if (text && (text.includes('.jpg') || text.includes('.jpeg'))) {
-                            urls.add(text);
-                        }
-                    });
-                    
-                    urlCount = urlDivs.length;
-                }
-            }
-            
-            // Fallback: scan entire page
-            if (urls.size === 0) {
-                console.log('Falling back to full page scan');
-                document.querySelectorAll('div.url').forEach(div => {
-                    let text = div.textContent.trim();
-                    if (text && (text.includes('.jpg') || text.includes('.jpeg'))) {
-                        urls.add(text);
-                    }
-                });
-            }
-            
-            return {
-                urls: Array.from(urls),
-                count: urls.size,
-                expected: document.querySelector('.card p:last-child')?.textContent || 'unknown'
-            };
-        }
-        
-        return extractAllURLs();
-        """
-        
-        result = driver.execute_script(extract_js)
-        jpg_urls = result.get('urls', [])
-        found_count = result.get('count', 0)
-        
-        print(f"JavaScript found {found_count} URLs")
-        
-        # If we didn't get all URLs, try a more aggressive approach
-        if found_count < expected_total and expected_total > 0:
-            print(f"\n⚠️ Only found {found_count} of {expected_total} URLs. Trying aggressive extraction...")
-            
-            # Scroll again more aggressively
-            for i in range(3):
-                print(f"  Aggressive scroll attempt {i+1}")
-                driver.execute_script("""
-                    let container = document.querySelector('div[style*="overflow"]') || document.documentElement;
-                    container.scrollTop = container.scrollHeight;
-                """)
-                time.sleep(2)
-            
-            # Try extraction again
-            result = driver.execute_script(extract_js)
-            jpg_urls = result.get('urls', [])
-            found_count = result.get('count', 0)
-            print(f"After aggressive scroll: {found_count} URLs")
-        
-        # Remove duplicates and clean up
-        unique_urls = []
-        seen = set()
-        
-        for url in jpg_urls:
-            url = url.strip()
-            url = re.sub(r'[,\s;:]+$', '', url)
-            
-            if url and url not in seen and ('.jpg' in url.lower() or '.jpeg' in url.lower()):
-                # Make sure URL is absolute
-                if url.startswith('/'):
-                    url = 'http://fhdrikxsirudr.fwh.is' + url
-                elif url.startswith('//'):
-                    url = 'http:' + url
+            if urls_field:
+                # Try to parse as JSON array first
+                urls_list = []
                 
-                seen.add(url)
-                unique_urls.append(url)
+                # Check if it looks like a JSON array
+                if urls_field.strip().startswith('[') and urls_field.strip().endswith(']'):
+                    try:
+                        # Parse as JSON array
+                        urls_list = json_module.loads(urls_field)
+                        print(f"Successfully parsed JSON array with {len(urls_list)} items")
+                    except json_module.JSONDecodeError as e:
+                        print(f"JSON parse error: {e}, falling back to manual parsing")
+                        # Fallback to manual parsing if JSON fails
+                        urls_list = manual_parse_urls(urls_field)
+                else:
+                    # Try other formats
+                    urls_list = manual_parse_urls(urls_field)
+                
+                # Process each URL in the list
+                for item in urls_list:
+                    # Skip metadata entries like "total_urls: 9684" and extract expected total
+                    if isinstance(item, str):
+                        item_lower = item.lower().strip()
+                        if item_lower.startswith('total_urls:') or item_lower.startswith('total_urls='):
+                            # Extract the expected total from metadata
+                            try:
+                                # Parse "total_urls: 9317" or "total_urls:9317" or "total_urls=9317"
+                                total_match = re.search(r'\d+', item)
+                                if total_match:
+                                    expected_total = int(total_match.group())
+                                    print(f"📊 Found metadata: {item} -> Expected total: {expected_total}")
+                            except Exception as e:
+                                print(f"Could not parse expected total from '{item}': {e}")
+                            
+                            print(f"Skipping metadata entry: {item}")
+                            metadata_count += 1
+                            continue
+                    
+                    url = str(item).strip()
+                    
+                    # Skip empty strings
+                    if not url:
+                        skipped_count += 1
+                        continue
+                    
+                    # Remove quotes if present (from manual parsing)
+                    url = url.strip('"').strip("'")
+                    
+                    # Fix escaped slashes
+                    url = url.replace('\\/', '/')
+                    
+                    # Remove any leading/trailing brackets or weird characters
+                    url = re.sub(r'^[\["\']+|[\]"\']+$', '', url)
+                    
+                    # Handle the URL construction
+                    original_url = url  # Keep for debugging
+                    
+                    if 'jpgs' in url.lower():
+                        # Find where jpgs starts
+                        jpgs_index = url.lower().find('jpgs')
+                        if jpgs_index != -1:
+                            path_part = url[jpgs_index:]
+                            # Clean up the path
+                            path_part = path_part.replace('\\', '/')
+                            # Replace multiple slashes with single slash
+                            path_part = re.sub(r'/+', '/', path_part)
+                            # Remove any quotes or brackets from path
+                            path_part = re.sub(r'["\'\[\]]', '', path_part)
+                            # Construct clean URL
+                            url = f'http://fhdrikxsirudr.fwh.is/{path_part}'
+                        else:
+                            # If no jpgs found, treat as relative path
+                            url = url.replace('\\', '/')
+                            url = re.sub(r'/+', '/', url)
+                            url = re.sub(r'["\'\[\]]', '', url)
+                            url = f'http://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
+                    elif url.startswith('/'):
+                        url = f'http://fhdrikxsirudr.fwh.is{url}'
+                        url = re.sub(r'/+', '/', url)
+                    elif url.startswith('//'):
+                        url = f'http:{url}'
+                        url = re.sub(r'/+', '/', url)
+                    elif not url.startswith('http'):
+                        # Assume it's a relative path
+                        url = url.replace('\\', '/')
+                        url = re.sub(r'/+', '/', url)
+                        url = re.sub(r'["\'\[\]]', '', url)
+                        url = f'http://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
+                    else:
+                        # Already has http, just clean it
+                        url = re.sub(r'["\'\[\]]', '', url)
+                        url = re.sub(r'/+', '/', url)
+                    
+                    # Extract folder name for summary
+                    folder_name = extract_folder_name(url)
+                    
+                    # Accept ALL URLs regardless of extension
+                    if url and url not in seen_urls:
+                        # Accept the URL regardless of extension
+                        seen_urls.add(url)
+                        all_urls.append(url)
+                        # Increment folder count
+                        folder_counts[folder_name] += 1
+                    elif url in seen_urls:
+                        skipped_count += 1
+                    else:
+                        skipped_count += 1
+                        print(f"DEBUG: Skipped invalid URL: {original_url} -> {url}")
         
-        total = len(unique_urls)
-        print(f"\n✅ Successfully extracted {total} unique JPG URL(s)")
-        if expected_total > 0:
-            percentage = (total / expected_total) * 100
-            print(f"   {percentage:.1f}% of expected total ({expected_total})")
+        total = len(all_urls)
         
-        # Save everything
-        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+        # If expected_total wasn't found in metadata, use the actual total
+        if expected_total is None:
+            expected_total = total
+            print(f"\n⚠️ No metadata found with expected total, using extracted count: {expected_total}")
         
-        # Save full page source
-        page_dump = os.path.join(os.path.dirname(OUTPUT_FILE), "page_source_debug.html")
-        with open(page_dump, "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        print(f"📄 Full page source saved to: {page_dump}")
+        print(f"\n📊 STATISTICS:")
+        print(f"   - Total items in JSON array: {len(urls_list)}")
+        print(f"   - Metadata entries skipped: {metadata_count}")
+        print(f"   - URLs extracted: {total}")
+        print(f"   - Expected URLs: {expected_total}")
+        print(f"   - Skipped/duplicates: {skipped_count}")
         
-        # Save extracted URLs
-        urls_file = os.path.join(os.path.dirname(OUTPUT_FILE), "extracted_urls.txt")
-        with open(urls_file, "w", encoding="utf-8") as f:
-            for url in unique_urls:
-                f.write(url + "\n")
-        print(f"📄 Extracted URLs saved to: {urls_file}")
+        if total != expected_total:
+            print(f"\n⚠️ WARNING: Extracted {total} URLs but expected {expected_total}")
+            print(f"   Difference: {expected_total - total} URLs missing")
+            
+            # Debug: Check what's in the first few URLs to see the pattern
+            print("\n🔍 First 5 raw URLs from JSON:")
+            for i, item in enumerate(urls_list[:5]):
+                if isinstance(item, str) and not item.startswith('total_urls'):
+                    print(f"   {i+1}. {item}")
+        else:
+            print(f"\n✅ PERFECT MATCH: Extracted all {total} URLs as expected!")
         
-        payload = {
-            "source_url": TARGET_URL,
-            "current_url": current_url,
-            "page_title": page_title,
+        # Print folder summary
+        print(f"\n📁 FOLDER SUMMARY (Unique names and their URL counts):")
+        print(f"{'='*60}")
+        print(f"{'Folder Name':<30} {'URL Count':<10} {'Percentage':<10}")
+        print(f"{'='*60}")
+        
+        # Sort by count descending
+        sorted_folders = sorted(folder_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        for folder_name, count in sorted_folders:
+            percentage = (count / total * 100) if total > 0 else 0
+            print(f"{folder_name:<30} {count:<10} {percentage:.1f}%")
+        
+        print(f"{'='*60}")
+        print(f"{'TOTAL UNIQUE FOLDERS':<30} {len(folder_counts):<10}")
+        print(f"{'TOTAL URLs':<30} {total:<10}")
+        print(f"{'='*60}")
+        
+        print(f"\n✅ Final: {total} unique JPG URL(s) extracted from all_urls column")
+        
+        # Create output in EXACT same format as fetch_urls
+        output_data = {
+            "source_url": "http://fhdrikxsirudr.fwh.is/loadimagesurl.php",
+            "current_url": "http://fhdrikxsirudr.fwh.is/loadimagesurl.php",
+            "page_title": "JPGs Vault Database Export",
             "fetched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z",
             "total_jpgs": total,
             "expected_total": expected_total,
-            "jpg_urls": unique_urls,
+            "jpg_urls": all_urls,
+            "folder_summary": {
+                "total_unique_folders": len(folder_counts),
+                "folders": dict(sorted_folders),
+                "details": [
+                    {
+                        "folder_name": folder_name,
+                        "url_count": count,
+                        "percentage": round((count / total * 100), 2) if total > 0 else 0
+                    }
+                    for folder_name, count in sorted_folders
+                ]
+            },
             "debug": {
-                "summary_cards": summary_cards,
-                "found_via_js": found_count
+                "summary_cards": {"Unique URLs Saved": str(total)},
+                "found_via_js": total,
+                "source": "jpgsvault_table.all_urls",
+                "records_processed": len(rows),
+                "json_array_size": len(urls_list),
+                "metadata_skipped": metadata_count
             }
         }
         
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        # Save to the same output file as fetch_urls uses
+        OUTPUT_FILE = r"C:\xampp\htdocs\serenum\files\fetchedjpgsurl.json"
         
-        print(f"Results saved to {OUTPUT_FILE}")
+        # Save to file
+        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
         
-        if unique_urls:
-            print("\nSample URLs (first 10):")
-            for url in unique_urls[:10]:
-                print(f"  {url}")
+        print(f"\n💾 Data saved to {OUTPUT_FILE}")
         
-        return unique_urls
-
+        if all_urls:
+            print(f"\n📋 Sample URLs (first 10):")
+            for url in all_urls[:10]:
+                # Also show which folder each sample belongs to
+                folder = extract_folder_name(url)
+                print(f"  [{folder}] {url}")
+        
+        return all_urls
+        
     except Exception as e:
-        print(f"❌ FAILED: {e}")
+        print(f"CRITICAL ERROR in fetch process: {e}")
         import traceback
         traceback.print_exc()
         return []
-    finally:
-        if driver:
-            driver.quit()
-            print("Browser session closed.")
-
+       
 def corruptedjpgs():
     """
     Scans ALL .jpg, .jpeg, .png, .gif files in:
@@ -1117,7 +1111,6 @@ def crop_and_moveto_jpgs():
     print(f"Errors: {stats['error']}")
     print(f"{'='*60}")
 
-
 def check_single_url(
     url: str,
     timeout: int = 30,
@@ -1257,8 +1250,8 @@ def markjpgs():
     # ------------------------------------------------------------------ #
     # 2. Paths – UPDATED FOR CURRENT DOMAIN (fhdrikxsirudr.fwh.is)
     # ------------------------------------------------------------------ #
-    current_domain_base = "https://fhdrikxsirudr.fwh.is/jpgs/"
-    legacy_domain_base  = "https://jpgsvault.rf.gd/jpgs/"
+    current_domain_base = "http://fhdrikxsirudr.fwh.is/jpgs/"
+    legacy_domain_base  = "http://jpgsvault.rf.gd/jpgs/"
 
     # Primary base path (current active domain) – lowercased for comparison only
     base_path = (
@@ -1715,8 +1708,6 @@ def orderjpgs():
     else:
         print("No card images processed. Nothing to output.")
 
-
-
 def move_card_needed():
     """
     1. Archives the existing 'card_x.jpg' (the old finished task).
@@ -1774,6 +1765,7 @@ def move_card_needed():
         print(f"  [ERROR] Failed to move and rename: {e}")
 
     print(f"[SUCCESS] System ready for selectmedia().")
+
 def archive_processed_card():
     """
     Specifically looks for 'card_x.jpg' in 'next jpg'.
@@ -1877,8 +1869,8 @@ def update_calendar():
     
     author = pageauthors['author']
     type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
+    post_types = pageauthors['post_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {post_types}")
     
     # Read timeorders.json
     timeorders_path = r"C:\xampp\htdocs\serenum\timeorders.json"
@@ -2006,8 +1998,8 @@ def update_calendar():
         ]
     }
     
-    # Define output path with author, group_types, and type
-    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}calendar.json"
+    # Define output path with author, post_types, and type
+    output_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{post_types}\\{type_value}calendar.json"
     print(f"Writing calendar data to {output_path}")
     
     # Ensure directory exists
@@ -2040,7 +2032,7 @@ def update_timeschedule():
 
     author        = cfg['author']
     type_value    = cfg['type']
-    group_types   = cfg['group_types']
+    post_types   = cfg['post_types']
     cardamount    = int(cfg.get('cardamount', 1))
     schedule_date_str = cfg.get('schedule_date', '').strip()
 
@@ -2090,7 +2082,7 @@ def update_timeschedule():
     # --------------------------------------------------------------------- #
     # 4. Paths
     # --------------------------------------------------------------------- #
-    base_dir = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}"
+    base_dir = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{post_types}"
     schedules_path = os.path.join(base_dir, f"{type_value}schedules.json")
 
     # --------------------------------------------------------------------- #
@@ -2253,14 +2245,14 @@ def randomize_next_schedule_minutes():
 
     author = pageauthors.get('author')
     type_value = pageauthors.get('type')
-    group_types = pageauthors.get('group_types', '')
+    post_types = pageauthors.get('post_types', '')
 
     if not author or not type_value:
         print("[randomize] Missing author or type in config")
         return
 
     # === Build path ===
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{post_types}\\{type_value}schedules.json"
 
     if not os.path.exists(schedules_path):
         print(f"[randomize] schedules.json not found: {schedules_path}")
@@ -2330,7 +2322,7 @@ def check_schedule_time():
     
     print(f"Current date and time: {current_date} {current_time_24hour}")
     
-    # Read pageandgroupauthors.json to get author, type, and group_types
+    # Read pageandgroupauthors.json to get author, type, and post_types
     pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
     print(f"Reading pageandgroupauthors.json from {pageauthors_path}")
     try:
@@ -2345,11 +2337,11 @@ def check_schedule_time():
     
     author = pageauthors['author']
     type_value = pageauthors['type']
-    group_types = pageauthors['group_types']
-    print(f"Author: {author}, Type: {type_value}, Group Types: {group_types}")
+    post_types = pageauthors['post_types']
+    print(f"Author: {author}, Type: {type_value}, Group Types: {post_types}")
     
     # Read schedules.json based on new path structure
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{post_types}\\{type_value}schedules.json"
     print(f"Reading schedules.json from {schedules_path}")
     if not os.path.exists(schedules_path):
         print(f"Error: schedules.json not found at {schedules_path}")
@@ -2393,8 +2385,8 @@ def check_schedule_time():
 def sync_last_schedule_between_groups():
     """
     PURE DATA COPY ONLY.
-    - If group_types == 'uk' → copy others → uk (last_schedule only)
-    - If group_types == 'others' → copy uk → others (last_schedule only)
+    - If post_types == 'uk' → copy others → uk (last_schedule only)
+    - If post_types == 'others' → copy uk → others (last_schedule only)
     Overwrites destination file. No other actions.
     """
     import os
@@ -2409,13 +2401,13 @@ def sync_last_schedule_between_groups():
         return  # Silent fail — pure copy, no noise
 
     author = cfg.get('author')
-    group_types = cfg.get('group_types', '').strip().lower()
-    if group_types not in ['uk', 'others']:
+    post_types = cfg.get('post_types', '').strip().lower()
+    if post_types not in ['uk', 'others']:
         return
 
     # 2. Determine source and dest
-    source_group = 'others' if group_types == 'uk' else 'uk'
-    dest_group = group_types
+    source_group = 'others' if post_types == 'uk' else 'uk'
+    dest_group = post_types
 
     base_dir = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons"
 
@@ -2452,7 +2444,6 @@ def sync_last_schedule_between_groups():
         except:
             pass  # Silent — pure copy
         
-
 def resetgroupswitchandscheduledate():
     """
     Resets the group_switch to 'no' and schedule_date to 'none' in pageandgroupauthors.json.
@@ -2486,1160 +2477,8 @@ def resetgroupswitchandscheduledate():
         print(f"Error writing to JSON file {config_json_path}: {str(e)}")
         return False
 
-def selectgroupss():
-    """Locate and click the dropdown element associated with 'Post to' text, check pageandgroupauthors.json for page, group, and group_types fields, select or unselect page profile under 'Post to Facebook and Instagram' based on page field, and based on group and group_types fields: if group is 'include' and group_types is 'uk', select the three groups with the highest member counts containing 'british', 'uk', 'england', or 'united kingdom' (not in last_selected and not containing 'usa' or 'australia'); if group_types is 'others', select groups not containing these UK terms or containing both UK terms and 'usa' or 'australia'; if group is 'none', unselect all groups; verify selections, save to JSON, and click Save."""
-    global driver, wait
-    
-    # Initialize trackers if not already set
-    if not hasattr(selectgroups, 'is_dropdown_opened'):
-        selectgroups.is_dropdown_opened = False
-    if not hasattr(selectgroups, 'is_see_more_clicked'):
-        selectgroups.is_see_more_clicked = False
-    if not hasattr(selectgroups, 'groups_selected'):
-        selectgroups.groups_selected = False
-    if not hasattr(selectgroups, 'is_page_selected'):
-        selectgroups.is_page_selected = False
-    if not hasattr(selectgroups, 'failed_attempts'):
-        selectgroups.failed_attempts = 0
-
-    # JSON file path for groups
-    json_path = r"C:\xampp\htdocs\serenum\files\groups\uploadgroups.json"
-    
-    # Last state JSON path
-    laststate_path = r"C:\xampp\htdocs\serenum\laststate.json"
-
-    # Check if JSON exists and read last_selected
-    last_selected = []
-    json_exists = os.path.exists(json_path) and os.path.getsize(json_path) > 0
-    if json_exists:
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                last_selected = data.get('groups_selected', {}).get('last_selected', [])
-                print(f"Read last_selected from JSON: {last_selected}")
-        except Exception as e:
-            print(f"Error reading JSON file {json_path}: {str(e)}")
-            last_selected = []
-
-    # Check if function should retry or skip
-    if selectgroups.is_dropdown_opened or selectgroups.is_see_more_clicked or selectgroups.groups_selected:
-        selectgroups.failed_attempts += 1
-        if selectgroups.failed_attempts >= 3:
-            print("selectgroups has failed too many times (3 attempts). Skipping to prevent blocking other functions.")
-            return False
-        print(f"Retry attempt {selectgroups.failed_attempts} due to prior state (is_dropdown_opened={selectgroups.is_dropdown_opened}, is_see_more_clicked={selectgroups.is_see_more_clicked}, groups_selected={selectgroups.groups_selected})")
-
-    # Check pageandgroupauthors.json for page, group, and group_types fields
-    page_config = 'none'
-    group_config = 'none'
-    group_types = 'others'  # Default to 'others' if not specified
-    if os.path.exists(JSON_CONFIG_PATH) and os.path.getsize(JSON_CONFIG_PATH) > 0:
-        try:
-            with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                page_config = config_data.get('page', 'none')
-                group_config = config_data.get('group', 'none')
-                group_types = config_data.get('group_types', 'others').lower()
-                print(f"Read config from {JSON_CONFIG_PATH}: page={page_config}, group={group_config}, group_types={group_types}")
-        except Exception as e:
-            print(f"Error reading JSON file {JSON_CONFIG_PATH}: {str(e)}")
-            page_config = 'none'
-            group_config = 'none'
-            group_types = 'others'
-    else:
-        print(f"JSON file {JSON_CONFIG_PATH} does not exist or is empty. Defaulting page to 'none', group to 'none', group_types to 'others'.")
-
-    # Validate group_types
-    if group_types not in ['uk', 'others']:
-        print(f"Invalid group_types value: '{group_types}'. Defaulting to 'others'.")
-        group_types = 'others'
-
-    # Read last state to determine whether to select highest or average/lowest members
-    last_selection_strategy = None
-    if os.path.exists(laststate_path) and os.path.getsize(laststate_path) > 0:
-        try:
-            with open(laststate_path, 'r', encoding='utf-8') as f:
-                laststate_data = json.load(f)
-                
-            # Initialize last_selected_group if not exists
-            if 'last_selected_group' not in laststate_data:
-                laststate_data['last_selected_group'] = []
-                
-            # Find the last strategy used for this group_type
-            group_type_history = [entry for entry in laststate_data['last_selected_group'] if entry.get('group_type') == group_types]
-            
-            if group_type_history:
-                # Get the most recent strategy for this group_type
-                last_entry = group_type_history[-1]
-                last_strategy = last_entry.get('members', 'highest')
-                
-                # Determine next strategy: alternate between highest and average
-                if last_strategy == 'highest':
-                    last_selection_strategy = 'average'
-                    print(f"Last selection for '{group_types}' groups was 'highest'. This time selecting 'average' members.")
-                else:
-                    last_selection_strategy = 'highest'
-                    print(f"Last selection for '{group_types}' groups was '{last_strategy}'. This time selecting 'highest' members.")
-            else:
-                # First time for this group_type, start with highest
-                last_selection_strategy = 'highest'
-                print(f"First time selecting '{group_types}' groups. Starting with 'highest' members.")
-                
-        except Exception as e:
-            print(f"Error reading laststate.json: {str(e)}. Defaulting to 'highest' selection.")
-            last_selection_strategy = 'highest'
-    else:
-        # File doesn't exist, start with highest
-        last_selection_strategy = 'highest'
-        print(f"laststate.json doesn't exist. Starting with 'highest' selection for '{group_types}' groups.")
-
-    # Define UK-related keywords and exclusionary country names
-    uk_keywords = ['british', 'uk', 'england', 'united kingdom']
-    exclude_countries = ['usa', 'australia']
-
-    # Handle dropdown opening
-    if selectgroups.is_dropdown_opened:
-        print("Dropdown already opened. Skipping dropdown click operation.")
-    else:
-        try:
-            # Locate the container wrapping 'Post to' text
-            post_to_container = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH, 
-                    "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]"
-                ))
-            )
-            print("Found 'Post to' container.")
-
-            # Find the dropdown element within or near the container
-            dropdown = None
-            for attempt in range(3):
-                try:
-                    dropdown = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::select | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::*[@role='combobox'] | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::*[@aria-haspopup='listbox'] | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::div[contains(@class, 'dropdown') or contains(@class, 'select')] | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::button[contains(@aria-label, 'dropdown') or contains(@class, 'dropdown')]"
-                        ))
-                    )
-                    print("Found dropdown element associated with 'Post to'.")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to locate dropdown failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to locate dropdown after 3 attempts. Checking for overlay...")
-                        overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                        if overlay:
-                            print("Detected overlay. Attempting to dismiss...")
-                            try:
-                                close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
-                                close_button.click()
-                                time.sleep(1)
-                                print("Overlay dismissed. Retrying dropdown location...")
-                                continue
-                            except:
-                                print("Could not dismiss overlay. Skipping dropdown click.")
-                                return False
-                    time.sleep(1)
-
-            if not dropdown:
-                print("No dropdown found after retries. Proceeding without opening dropdown.")
-                return False
-
-            # Scroll to the dropdown and click
-            for attempt in range(3):
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView(true);", dropdown)
-                    time.sleep(0.5)
-                    dropdown.click()
-                    print("Clicked dropdown to open the window.")
-                    selectgroups.is_dropdown_opened = True
-                    print("Updated tracker: is_dropdown_opened set to True")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to click dropdown failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to click dropdown after 3 attempts. Proceeding without opening dropdown.")
-                        return False
-                    time.sleep(1)
-            
-            time.sleep(3)  # Pause to ensure dropdown opens
-        except Exception as e:
-            print(f"Failed to process dropdown operation: {str(e)}")
-            return False
-
-    # Handle page profile selection
-    if selectgroups.is_page_selected and page_config == 'none':
-        print("Page profile already selected but page config is 'none'. Attempting to unselect.")
-        try:
-            dropdown_content = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH,
-                    "//div[contains(@class, 'dropdown') or contains(@class, 'menu') or @role='menu' or @role='listbox']"
-                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]"
-                ))
-            )
-            print("Found dropdown content with 'Post to Facebook and Instagram'.")
-
-            page_profile = None
-            for attempt in range(3):
-                try:
-                    page_profile = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::div[contains(@class, 'page') or contains(@class, 'profile') or @role='option' or contains(@class, 'item')][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))] | "
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::li[contains(@class, 'page') or contains(@class, 'profile') or @role='option'][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))]"
-                        )),
-                        dropdown_content
-                    )
-                    tag = page_profile.tag_name
-                    class_attr = page_profile.get_attribute('class') or ''
-                    role = page_profile.get_attribute('role') or ''
-                    text = page_profile.text.strip()[:100]
-                    print(f"Found page profile: Tag={tag}, Class={class_attr}, Role={role}, Text='{text}'")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to locate page profile failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to locate page profile after 3 attempts. Proceeding to group handling.")
-                        break
-                    time.sleep(1)
-
-            if not page_profile:
-                print("No page profile found. Proceeding to group handling.")
-            else:
-                is_selected = False
-                try:
-                    aria_checked = page_profile.get_attribute('aria-checked')
-                    if aria_checked and aria_checked.lower() == 'true':
-                        is_selected = True
-                    else:
-                        checkbox = page_profile.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                        if checkbox and checkbox[0].is_selected():
-                            is_selected = True
-                        else:
-                            class_attr = page_profile.get_attribute('class') or ''
-                            if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                is_selected = True
-                            else:
-                                checkmark = page_profile.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                if checkmark:
-                                    is_selected = True
-                except Exception as sel_e:
-                    print(f"Error checking page selection: {sel_e}")
-
-                if is_selected:
-                    try:
-                        clickable = page_profile.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
-                                   page_profile.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
-                                   [page_profile]
-                        clickable = clickable[0]
-                        tag = clickable.tag_name
-                        class_attr = clickable.get_attribute('class') or ''
-                        role = clickable.get_attribute('role') or ''
-                        data_testid = clickable.get_attribute('data-testid') or ''
-                        print(f"Attempting to unselect page profile: {text}, Tag={tag}, Class={class_attr}, Role={role}, Data-testid={data_testid}")
-
-                        for attempt in range(3):
-                            try:
-                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
-                                time.sleep(1.0)
-                                driver.execute_script("arguments[0].click();", clickable)
-                                time.sleep(1.5)
-
-                                is_selected_now = False
-                                aria_checked = page_profile.get_attribute('aria-checked')
-                                if aria_checked and aria_checked.lower() == 'true':
-                                    is_selected_now = True
-                                else:
-                                    checkbox = page_profile.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                    if checkbox and checkbox[0].is_selected():
-                                        is_selected_now = True
-                                    else:
-                                        class_attr = page_profile.get_attribute('class') or ''
-                                        if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                            is_selected_now = True
-                                        else:
-                                            checkmark = page_profile.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                            if checkmark:
-                                                is_selected_now = True
-
-                                if not is_selected_now:
-                                    print(f"Unselected page profile: {text} (Verified)")
-                                    selectgroups.is_page_selected = False
-                                    print("Updated tracker: is_page_selected set to False")
-                                    break
-                                else:
-                                    print(f"Attempt {attempt + 1} failed to verify unselection for page profile: {text}")
-                            except Exception as click_e:
-                                print(f"Attempt {attempt + 1} failed to unselect page profile {text}: {str(click_e)}")
-                                if attempt == 2:
-                                    print(f"Failed to unselect page profile after retries: {text}")
-                    except Exception as e:
-                        print(f"Failed to process unselection for page profile {text}: {str(e)}")
-                else:
-                    print(f"Page profile {text} is not selected. No unselection needed.")
-                    selectgroups.is_page_selected = False
-                    print("Updated tracker: is_page_selected set to False")
-        except Exception as e:
-            print(f"Failed to locate or process page profile for unselection: {str(e)}")
-            print("Proceeding to group handling despite unselection failure.")
-    elif page_config == 'include' and not selectgroups.is_page_selected:
-        print("Page config is 'include'. Attempting to select page profile.")
-        try:
-            dropdown_content = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH,
-                    "//div[contains(@class, 'dropdown') or contains(@class, 'menu') or @role='menu' or @role='listbox']"
-                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]"
-                ))
-            )
-            print("Found dropdown content with 'Post to Facebook and Instagram'.")
-
-            page_profile = None
-            for attempt in range(3):
-                try:
-                    page_profile = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::div[contains(@class, 'page') or contains(@class, 'profile') or @role='option' or contains(@class, 'item')][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))] | "
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::li[contains(@class, 'page') or contains(@class, 'profile') or @role='option'][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))]"
-                        )),
-                        dropdown_content
-                    )
-                    tag = page_profile.tag_name
-                    class_attr = page_profile.get_attribute('class') or ''
-                    role = page_profile.get_attribute('role') or ''
-                    text = page_profile.text.strip()[:100]
-                    print(f"Found page profile: Tag={tag}, Class={class_attr}, Role={role}, Text='{text}'")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to locate page profile failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to locate page profile after 3 attempts. Proceeding to group handling.")
-                        break
-                    time.sleep(1)
-
-            if page_profile:
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", page_profile)
-                        time.sleep(0.5)
-                        driver.execute_script("arguments[0].click();", page_profile)
-                        print(f"Selected page profile: {text}")
-                        selectgroups.is_page_selected = True
-                        print("Updated tracker: is_page_selected set to True")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to click page profile failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to click page profile after 3 attempts.")
-                    time.sleep(1)
-                
-                time.sleep(1)  # Pause to ensure selection
-        except Exception as e:
-            print(f"Failed to locate or select page profile under 'Post to Facebook and Instagram': {str(e)}")
-            print("Proceeding to group handling despite page selection failure.")
-    else:
-        print(f"Page config is '{page_config}' and is_page_selected is {selectgroups.is_page_selected}. No page selection or unselection needed.")
-
-    # Handle group selection
-    if group_config == 'none':
-        print("Group config is 'none'. Attempting to unselect all groups.")
-        if selectgroups.is_see_more_clicked:
-            print("'See more groups' already clicked. Skipping click operation.")
-        else:
-            try:
-                see_more_groups = None
-                for attempt in range(3):
-                    try:
-                        see_more_groups = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'see more groups')] | "
-                                "//*[contains(@aria-label, 'See more groups') or contains(@aria-label, 'see more groups')]"
-                            ))
-                        )
-                        print("Found 'See more groups' element.")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to locate 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'See more groups' after 3 attempts. Checking for overlay...")
-                            overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                            if overlay:
-                                print("Detected overlay. Attempting to dismiss...")
-                                try:
-                                    close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
-                                    close_button.click()
-                                    time.sleep(1)
-                                    print("Overlay dismissed. Retrying...")
-                                    continue
-                                except:
-                                    print("Could not dismiss overlay. Skipping 'See more groups' click.")
-                                    return False
-                        time.sleep(1)
-
-                if not see_more_groups:
-                    print("No 'See more groups' element found. Proceeding without opening group popup.")
-                    return False
-
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView(true);", see_more_groups)
-                        time.sleep(0.5)
-                        see_more_groups.click()
-                        print("Clicked 'See more groups' to open its window.")
-                        selectgroups.is_see_more_clicked = True
-                        print("Updated tracker: is_see_more_clicked set to True")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to click 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to click 'See more groups' after 3 attempts.")
-                            return False
-                        time.sleep(1)
-                
-                time.sleep(4)  # Pause to allow the popup to fully load
-            except Exception as e:
-                print(f"Failed to process 'See more groups' operation: {str(e)}")
-                return False
-
-        try:
-            popup_window = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH, 
-                    "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
-                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
-                    "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
-                ))
-            )
-            print("Found 'Publish to Facebook groups' popup window.")
-
-            group_elements = popup_window.find_elements(By.XPATH, 
-                ".//div[@data-testid='group_picker_item'] | "
-                ".//div[contains(@class, 'group') or contains(@class, 'group-item') or contains(@class, 'item') or @role='option' or @role='listitem' or contains(@class, 'clickable') or contains(@class, 'selectable')] | "
-                ".//li[contains(@class, 'group') or contains(@class, 'item') or @role='option' or @role='listitem'] | "
-                ".//div[descendant::*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'public group') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'private group')]]"
-            )
-            
-            selected_groups = []
-            group_element_map = {}
-            seen_texts = set()
-            for i, elem in enumerate(group_elements, 1):
-                try:
-                    text = elem.text.strip() or elem.get_attribute('aria-label') or ''
-                    lines = text.split('\n')
-                    group_name = lines[0].strip() if lines else text
-                    if (group_name and 
-                        group_name.lower() not in seen_texts and
-                        not any(phrase in group_name.lower() for phrase in ['publish to facebook groups', 'choose up to three groups', 'close', 'done', 'cancel'])):
-                        seen_texts.add(group_name.lower())
-                        group_element_map[group_name] = elem
-                        
-                        is_selected = False
-                        try:
-                            aria_checked = elem.get_attribute('aria-checked')
-                            if aria_checked and aria_checked.lower() == 'true':
-                                is_selected = True
-                            else:
-                                checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                if checkbox and checkbox[0].is_selected():
-                                    is_selected = True
-                                else:
-                                    class_attr = elem.get_attribute('class') or ''
-                                    if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                        is_selected = True
-                                    else:
-                                        checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                        if checkmark:
-                                            is_selected = True
-                        except Exception as sel_e:
-                            print(f"Error checking selection for group {i}: {sel_e}")
-                        
-                        if is_selected:
-                            selected_groups.append(group_name)
-                            print(f"Group {i}: {group_name} (Selected)")
-                except Exception as e:
-                    print(f"Group {i}: Error extracting text - {str(e)}")
-
-            print(f"Number of selected groups: {len(selected_groups)}")
-            if selected_groups:
-                print(f"Selected groups to unselect: {selected_groups}")
-
-            for group_name in selected_groups:
-                elem = group_element_map.get(group_name)
-                if elem:
-                    try:
-                        clickable = elem.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
-                                   elem.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
-                                   [elem]
-                        clickable = clickable[0]
-                        
-                        tag = clickable.tag_name
-                        class_attr = clickable.get_attribute('class') or ''
-                        role = clickable.get_attribute('role') or ''
-                        data_testid = clickable.get_attribute('data-testid') or ''
-                        print(f"Attempting to unselect group: {group_name}, Tag={tag}, Class={class_attr}, Role={role}, Data-testid={data_testid}")
-
-                        for attempt in range(3):
-                            try:
-                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
-                                time.sleep(1.0)
-                                driver.execute_script("arguments[0].click();", clickable)
-                                time.sleep(1.5)
-                                
-                                is_selected_now = False
-                                aria_checked = elem.get_attribute('aria-checked')
-                                if aria_checked and aria_checked.lower() == 'true':
-                                    is_selected_now = True
-                                else:
-                                    checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                    if checkbox and checkbox[0].is_selected():
-                                        is_selected_now = True
-                                    else:
-                                        class_attr = elem.get_attribute('class') or ''
-                                        if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                            is_selected_now = True
-                                        else:
-                                            checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                            if checkmark:
-                                                is_selected_now = True
-                                
-                                if not is_selected_now:
-                                    print(f"Unselected group: {group_name} (Verified)")
-                                    break
-                                else:
-                                    print(f"Attempt {attempt + 1} failed to verify unselection for group: {group_name}")
-                            except Exception as click_e:
-                                print(f"Attempt {attempt + 1} failed to unselect group {group_name}: {str(click_e)}")
-                                if attempt == 2:
-                                    print(f"Failed to unselect group after retries: {group_name}")
-                    except Exception as e:
-                        print(f"Failed to process unselection for group {group_name}: {str(e)}")
-
-            try:
-                save_button = None
-                for attempt in range(3):
-                    try:
-                        save_button = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                ".//*[text()='Save'][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[contains(@aria-label, 'Save')][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[text()='Cancel']//following::*[text()='Save'][1] | "
-                                ".//div[@role='button' and (text()='Save' or contains(@aria-label, 'Save'))][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))]"
-                            )),
-                            popup_window
-                        )
-                        tag = save_button.tag_name
-                        class_attr = save_button.get_attribute('class') or ''
-                        role = save_button.get_attribute('role') or ''
-                        aria_label = save_button.get_attribute('aria-label') or ''
-                        aria_disabled = save_button.get_attribute('aria-disabled') or ''
-                        text = save_button.text.strip()[:100]
-                        print(f"Found 'Save' button (Attempt {attempt + 1}): Tag={tag}, Class={class_attr}, Role={role}, Aria-label={aria_label}, Aria-disabled={aria_disabled}, Text='{text}'")
-                        break
-                    except (TimeoutException, StaleElementReferenceException) as e:
-                        print(f"Attempt {attempt + 1} to locate 'Save' button failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'Save' button after retries.")
-                            return False
-                        time.sleep(1)
-
-                if save_button and aria_disabled.lower() == 'true':
-                    print("Save button is disabled. Cannot proceed with click.")
-                    return False
-                
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", save_button)
-                        time.sleep(0.7)
-                        driver.execute_script("arguments[0].click();", save_button)
-                        print(f"Clicked 'Save' button to confirm no group selections (Attempt {attempt + 1}).")
-                        break
-                    except Exception as click_e:
-                        print(f"Attempt {attempt + 1} to click 'Save' button failed: {str(click_e)}")
-                        if attempt == 2:
-                            print("Failed to click 'Save' button after retries.")
-                            return False
-                
-                try:
-                    time.sleep(3)
-                    popup_still_present = driver.find_elements(By.XPATH, 
-                        "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
-                        "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
-                        "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
-                    )
-                    if not popup_still_present:
-                        print("Popup window closed successfully.")
-                    else:
-                        print("Popup window did not close after clicking Save.")
-                        return False
-                except Exception as e:
-                    print(f"Error verifying popup closure: {str(e)}")
-                    return False
-                
-                json_data = {
-                    "groups_selected": {
-                        "last_selected": last_selected,
-                        "current_selected": {
-                            "1st": "",
-                            "2nd": "",
-                            "3rd": ""
-                        },
-                        "status": "no groups selected"
-                    }
-                }
-                try:
-                    if not json_exists:
-                        print(f"JSON file does not exist. Creating {json_path}")
-                        os.makedirs(os.path.dirname(json_path), exist_ok=True)
-                        with open(json_path, 'w', encoding='utf-8') as f:
-                            json.dump(json_data, f, indent=4)
-                        print("Created JSON file with no groups selected.")
-                    else:
-                        with open(json_path, 'r', encoding='utf-8') as f:
-                            existing_data = json.load(f)
-                        existing_data['groups_selected']['current_selected'] = json_data['groups_selected']['current_selected']
-                        existing_data['groups_selected']['status'] = "no groups selected"
-                        with open(json_path, 'w', encoding='utf-8') as f:
-                            json.dump(existing_data, f, indent=4)
-                        print("Updated JSON file with no groups selected.")
-                except Exception as e:
-                    print(f"Error writing to JSON file: {str(e)}")
-
-                selectgroups.groups_selected = True
-                selectgroups.failed_attempts = 0  # Reset failed attempts on success
-                print("Updated tracker: groups_selected set to True, failed_attempts reset to 0")
-                return True
-
-            except Exception as e:
-                print(f"Failed to locate or click 'Save' button: {str(e)}")
-                return False
-
-        except Exception as e:
-            print(f"Failed to locate popup window or process groups: {str(e)}")
-            return False
-
-    elif group_config == 'include':
-        print(f"Group config is 'include' with group_types '{group_types}'. Proceeding with group selection.")
-        if selectgroups.is_see_more_clicked:
-            print("'See more groups' already clicked. Skipping click operation.")
-        else:
-            try:
-                see_more_groups = None
-                for attempt in range(3):
-                    try:
-                        see_more_groups = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'see more groups')] | "
-                                "//*[contains(@aria-label, 'See more groups') or contains(@aria-label, 'see more groups')]"
-                            ))
-                        )
-                        print("Found 'See more groups' element.")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to locate 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'See more groups' after 3 attempts. Checking for overlay...")
-                            overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                            if overlay:
-                                print("Detected overlay. Attempting to dismiss...")
-                                try:
-                                    close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
-                                    close_button.click()
-                                    time.sleep(1)
-                                    print("Overlay dismissed. Retrying...")
-                                    continue
-                                except:
-                                    print("Could not dismiss overlay. Skipping 'See more groups' click.")
-                                    return False
-                        time.sleep(1)
-
-                if not see_more_groups:
-                    print("No 'See more groups' element found. Proceeding without opening group popup.")
-                    return False
-
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView(true);", see_more_groups)
-                        time.sleep(0.5)
-                        see_more_groups.click()
-                        print("Clicked 'See more groups' to open its window.")
-                        selectgroups.is_see_more_clicked = True
-                        print("Updated tracker: is_see_more_clicked set to True")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to click 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to click 'See more groups' after 3 attempts.")
-                            return False
-                        time.sleep(1)
-                
-                time.sleep(4)  # Pause to allow the popup to fully load
-            except Exception as e:
-                print(f"Failed to process 'See more groups' operation: {str(e)}")
-                return False
-
-        if selectgroups.groups_selected:
-            print("Groups already selected. Skipping selection operation.")
-            selectgroups.failed_attempts = 0  # Reset failed attempts if groups already selected
-            print("Updated tracker: failed_attempts reset to 0")
-            return True
-
-        try:
-            popup_window = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH, 
-                    "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
-                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
-                    "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
-                ))
-            )
-            print("Found 'Publish to Facebook groups' popup window.")
-
-            group_elements = popup_window.find_elements(By.XPATH, 
-                ".//div[@data-testid='group_picker_item'] | "
-                ".//div[contains(@class, 'group') or contains(@class, 'group-item') or contains(@class, 'item') or @role='option' or @role='listitem' or contains(@class, 'clickable') or contains(@class, 'selectable')] | "
-                ".//li[contains(@class, 'group') or contains(@class, 'item') or @role='option' or @role='listitem'] | "
-                ".//div[descendant::*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'public group') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'private group')]]"
-            )
-            
-            group_data = []
-            group_element_map = {}
-            selected_groups = []
-            seen_texts = set()
-            for i, elem in enumerate(group_elements, 1):
-                try:
-                    text = elem.text.strip() or elem.get_attribute('aria-label') or ''
-                    lines = text.split('\n')
-                    group_name = lines[0].strip() if lines else text
-                    member_count = 0
-                    if len(lines) > 1:
-                        member_text = lines[1].strip()
-                        match = re.search(r'(\d+[\d,]*)\s*members', member_text)
-                        if match:
-                            member_count = int(match.group(1).replace(',', ''))
-                    
-                    if (group_name and 
-                        group_name.lower() not in seen_texts and
-                        not any(phrase in group_name.lower() for phrase in ['publish to facebook groups', 'choose up to three groups', 'close', 'done', 'cancel'])):
-                        seen_texts.add(group_name.lower())
-                        group_data.append((group_name, member_count, elem))
-                        group_element_map[group_name] = elem
-                        
-                        is_selected = False
-                        try:
-                            aria_checked = elem.get_attribute('aria-checked')
-                            if aria_checked and aria_checked.lower() == 'true':
-                                is_selected = True
-                            else:
-                                checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                if checkbox and checkbox[0].is_selected():
-                                    is_selected = True
-                                else:
-                                    class_attr = elem.get_attribute('class') or ''
-                                    if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                        is_selected = True
-                                    else:
-                                        checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                        if checkmark:
-                                            is_selected = True
-                        except Exception as sel_e:
-                            print(f"Error checking selection for group {i}: {sel_e}")
-                        
-                        if is_selected:
-                            selected_groups.append(group_name)
-                            print(f"Group {i}: {group_name} ({member_count} members, Selected)")
-                        else:
-                            print(f"Group {i}: {group_name} ({member_count} members)")
-                except Exception as e:
-                    print(f"Group {i}: Error extracting text - {str(e)}")
-            
-            group_count = len(group_data)
-            print(f"Total groups found in popup: {group_count}")
-            print(f"Number of selected groups: {len(selected_groups)}")
-
-            filtered_group_data = []
-            if group_types == 'uk':
-                print("Filtering groups containing UK keywords (british, uk, england, united kingdom) and excluding groups with 'usa' or 'australia'")
-                for group_name, member_count, elem in group_data:
-                    name_lower = group_name.lower()
-                    has_uk_keyword = any(keyword in name_lower for keyword in uk_keywords)
-                    has_exclude_country = any(country in name_lower for country in exclude_countries)
-                    if has_uk_keyword and not has_exclude_country:
-                        filtered_group_data.append((group_name, member_count, elem))
-            else:  # group_types == 'others'
-                print("Filtering groups: excluding pure UK groups (british, uk, england, united kingdom without usa or australia), including groups with both UK keywords and 'usa' or 'australia', or no UK keywords")
-                for group_name, member_count, elem in group_data:
-                    name_lower = group_name.lower()
-                    has_uk_keyword = any(keyword in name_lower for keyword in uk_keywords)
-                    has_exclude_country = any(country in name_lower for country in exclude_countries)
-                    if not has_uk_keyword or (has_uk_keyword and has_exclude_country):
-                        filtered_group_data.append((group_name, member_count, elem))
-            
-            print(f"Number of filtered groups ({group_types}): {len(filtered_group_data)}")
-            if filtered_group_data:
-                print(f"Filtered groups ({group_types}):")
-                for i, (name, count, _) in enumerate(filtered_group_data, 1):
-                    print(f"{i}. {name}: {count} members")
-
-            # Sort filtered groups by member count based on strategy
-            if last_selection_strategy == 'highest':
-                # Sort descending for highest member counts
-                filtered_group_data.sort(key=lambda x: x[1], reverse=True)
-                print(f"Filtered groups sorted by highest member count ({group_types}):")
-            else:
-                # For 'average' strategy, we'll select groups around the median
-                filtered_group_data.sort(key=lambda x: x[1])
-                print(f"Filtered groups sorted by lowest member count ({group_types}):")
-            
-            for i, (name, count, _) in enumerate(filtered_group_data, 1):
-                print(f"{i}. {name}: {count} members")
-
-            # Select groups based on strategy
-            target_groups = []
-            
-            if last_selection_strategy == 'highest':
-                # Select top 3 highest member count groups
-                for group_name, _, _ in filtered_group_data:
-                    if group_name not in last_selected and len(target_groups) < 3:
-                        target_groups.append(group_name)
-            else:
-                # Select groups around the median (average strategy)
-                if len(filtered_group_data) >= 3:
-                    # Find median index
-                    median_idx = len(filtered_group_data) // 2
-                    
-                    # Select groups around median: median-1, median, median+1
-                    candidate_indices = [median_idx-1, median_idx, median_idx+1]
-                    
-                    for idx in candidate_indices:
-                        if 0 <= idx < len(filtered_group_data):
-                            group_name = filtered_group_data[idx][0]
-                            if group_name not in last_selected and len(target_groups) < 3:
-                                target_groups.append(group_name)
-                    
-                    # If we still need groups, fill with other median-adjacent groups
-                    if len(target_groups) < 3:
-                        offset = 2
-                        while len(target_groups) < 3 and offset < len(filtered_group_data):
-                            for direction in [-1, 1]:
-                                idx = median_idx + (direction * offset)
-                                if 0 <= idx < len(filtered_group_data):
-                                    group_name = filtered_group_data[idx][0]
-                                    if group_name not in last_selected and group_name not in target_groups and len(target_groups) < 3:
-                                        target_groups.append(group_name)
-                            offset += 1
-                else:
-                    # If less than 3 groups, just select all
-                    for group_name, _, _ in filtered_group_data:
-                        if group_name not in last_selected and len(target_groups) < 3:
-                            target_groups.append(group_name)
-            
-            if not target_groups:
-                print(f"No eligible {group_types} groups available (all filtered groups in last_selected).")
-                return False
-            
-            print(f"Target groups to select (not in last_selected, {group_types}, strategy: {last_selection_strategy}): {target_groups}")
-
-            current_selected = []
-            for group_name in selected_groups:
-                if group_name in target_groups:
-                    current_selected.append(group_name)
-                    print(f"Keeping pre-selected group in target: {group_name}")
-                else:
-                    elem = group_element_map.get(group_name)
-                    if elem:
-                        try:
-                            clickable = elem.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
-                                       elem.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
-                                       [elem]
-                            clickable = clickable[0]
-                            
-                            tag = clickable.tag_name
-                            class_attr = clickable.get_attribute('class') or ''
-                            role = clickable.get_attribute('role') or ''
-                            data_testid = clickable.get_attribute('data-testid') or ''
-                            print(f"Attempting to unselect group: {group_name}, Tag={tag}, Class={class_attr}, Role={role}, Data-testid={data_testid}")
-
-                            for attempt in range(3):
-                                try:
-                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
-                                    time.sleep(1.0)
-                                    driver.execute_script("arguments[0].click();", clickable)
-                                    time.sleep(1.5)
-                                    
-                                    is_selected_now = False
-                                    aria_checked = elem.get_attribute('aria-checked')
-                                    if aria_checked and aria_checked.lower() == 'true':
-                                        is_selected_now = True
-                                    else:
-                                        checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                        if checkbox and checkbox[0].is_selected():
-                                            is_selected_now = True
-                                        else:
-                                            class_attr = elem.get_attribute('class') or ''
-                                            if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                                is_selected_now = True
-                                            else:
-                                                checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                                if checkmark:
-                                                    is_selected_now = True
-                                    
-                                    if not is_selected_now:
-                                        print(f"Unselected group: {group_name} (Verified)")
-                                        break
-                                    else:
-                                        print(f"Attempt {attempt + 1} failed to verify unselection for group: {group_name}")
-                                except Exception as click_e:
-                                    print(f"Attempt {attempt + 1} failed to unselect group {group_name}: {str(click_e)}")
-                                    if attempt == 2:
-                                        print(f"Failed to unselect group after retries: {group_name}")
-                        except Exception as e:
-                            print(f"Failed to process unselection for group {group_name}: {str(e)}")
-
-            newly_selected = []
-            for group_name in target_groups:
-                if group_name in current_selected:
-                    continue
-                elem = group_element_map.get(group_name)
-                if not elem:
-                    continue
-                try:
-                    clickable = elem.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
-                               elem.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
-                               [elem]
-                    clickable = clickable[0]
-                    
-                    tag = clickable.tag_name
-                    class_attr = clickable.get_attribute('class') or ''
-                    role = clickable.get_attribute('role') or ''
-                    data_testid = clickable.get_attribute('data-testid') or ''
-                    print(f"Attempting to click group: {group_name}, Tag={tag}, Class={class_attr}, Role={role}, Data-testid={data_testid}")
-
-                    for attempt in range(3):
-                        try:
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
-                            time.sleep(1.0)
-                            driver.execute_script("arguments[0].click();", clickable)
-                            time.sleep(1.5)
-                            
-                            is_selected_now = False
-                            aria_checked = elem.get_attribute('aria-checked')
-                            if aria_checked and aria_checked.lower() == 'true':
-                                is_selected_now = True
-                            else:
-                                checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                if checkbox and checkbox[0].is_selected():
-                                    is_selected_now = True
-                                else:
-                                    class_attr = elem.get_attribute('class') or ''
-                                    if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
-                                        is_selected_now = True
-                                    else:
-                                        checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                        if checkmark:
-                                            is_selected_now = True
-                            
-                            if is_selected_now:
-                                newly_selected.append(group_name)
-                                current_selected.append(group_name)
-                                print(f"Selected group: {group_name} (Verified)")
-                                break
-                            else:
-                                print(f"Attempt {attempt + 1} failed to verify selection for group: {group_name}")
-                        except Exception as click_e:
-                            print(f"Attempt {attempt + 1} failed to click group {group_name}: {str(click_e)}")
-                            if attempt == 2:
-                                print(f"Failed to select group after retries: {group_name}")
-                except Exception as e:
-                    print(f"Failed to process group {group_name}: {str(e)}")
-            
-            if newly_selected:
-                print(f"Newly selected groups: {', '.join(newly_selected)}")
-            else:
-                print("No additional groups were selected.")
-            
-            print(f"Final number of selected groups: {len(current_selected)}")
-            if current_selected:
-                print(f"Final selected groups: {', '.join(current_selected)}")
-
-            json_data = {
-                "groups_selected": {
-                    "last_selected": last_selected,
-                    "current_selected": {
-                        "1st": current_selected[0] if len(current_selected) > 0 else "",
-                        "2nd": current_selected[1] if len(current_selected) > 1 else "",
-                        "3rd": current_selected[2] if len(current_selected) > 2 else ""
-                    },
-                    "status": f"selection verified ({group_types})"
-                }
-            }
-
-            try:
-                if not json_exists:
-                    print(f"JSON file does not exist. Creating {json_path}")
-                    os.makedirs(os.path.dirname(json_path), exist_ok=True)
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(json_data, f, indent=4)
-                    print(f"Created JSON file with current_selected: {json_data['groups_selected']['current_selected']}")
-                else:
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        existing_data = json.load(f)
-                    existing_data['groups_selected']['current_selected'] = json_data['groups_selected']['current_selected']
-                    existing_data['groups_selected']['status'] = f"selection verified ({group_types})"
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(existing_data, f, indent=4)
-                    print(f"Updated JSON file with current_selected: {json_data['groups_selected']['current_selected']}")
-            except Exception as e:
-                print(f"Error writing to JSON file: {str(e)}")
-
-            # Update laststate.json with this selection strategy
-            try:
-                if os.path.exists(laststate_path) and os.path.getsize(laststate_path) > 0:
-                    with open(laststate_path, 'r', encoding='utf-8') as f:
-                        laststate_data = json.load(f)
-                else:
-                    laststate_data = {
-                        "setwebschedule_previous_input": [
-                            "mm_hh_date",
-                            "mm_date_hh",
-                            "date_hh_mm",
-                            "date_mm_hh",
-                            "hh_date_mm",
-                            "hh_mm_date"
-                        ],
-                        "last_used": "hh_mm_date",
-                        "write_caption_previous_behaviors": [
-                            "f_f_s",
-                            "s_f_s",
-                            "f_s_f",
-                            "s_s_f",
-                            "f_s_s"
-                        ],
-                        "caption_last_used": "f_s_s",
-                        "toggleaddphoto_last_region": [
-                            1536.0,
-                            960.0
-                        ]
-                    }
-                
-                # Initialize last_selected_group if not exists
-                if 'last_selected_group' not in laststate_data:
-                    laststate_data['last_selected_group'] = []
-                
-                # Add current selection record
-                new_entry = {
-                    "group_type": group_types,
-                    "members": last_selection_strategy,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                laststate_data['last_selected_group'].append(new_entry)
-                
-                # Keep only the last 10 entries to prevent file from growing too large
-                if len(laststate_data['last_selected_group']) > 10:
-                    laststate_data['last_selected_group'] = laststate_data['last_selected_group'][-10:]
-                
-                # Write back to file
-                os.makedirs(os.path.dirname(laststate_path), exist_ok=True)
-                with open(laststate_path, 'w', encoding='utf-8') as f:
-                    json.dump(laststate_data, f, indent=4)
-                
-                print(f"Updated laststate.json with selection record: {group_types} - {last_selection_strategy}")
-                
-            except Exception as e:
-                print(f"Error updating laststate.json: {str(e)}")
-
-            try:
-                save_button = None
-                for attempt in range(3):
-                    try:
-                        save_button = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                ".//*[text()='Save'][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[contains(@aria-label, 'Save')][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[text()='Cancel']//following::*[text()='Save'][1] | "
-                                ".//div[@role='button' and (text()='Save' or contains(@aria-label, 'Save'))][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))]"
-                            )),
-                            popup_window
-                        )
-                        tag = save_button.tag_name
-                        class_attr = save_button.get_attribute('class') or ''
-                        role = save_button.get_attribute('role') or ''
-                        aria_label = save_button.get_attribute('aria-label') or ''
-                        aria_disabled = save_button.get_attribute('aria-disabled') or ''
-                        text = save_button.text.strip()[:100]
-                        print(f"Found 'Save' button (Attempt {attempt + 1}): Tag={tag}, Class={class_attr}, Role={role}, Aria-label={aria_label}, Aria-disabled={aria_disabled}, Text='{text}'")
-                        break
-                    except (TimeoutException, StaleElementReferenceException) as e:
-                        print(f"Attempt {attempt + 1} to locate 'Save' button failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'Save' button after retries.")
-                            return False
-                        time.sleep(1)
-
-                if save_button and aria_disabled.lower() == 'true':
-                    print("Save button is disabled. Cannot proceed with click.")
-                    return False
-                
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", save_button)
-                        time.sleep(0.7)
-                        driver.execute_script("arguments[0].click();", save_button)
-                        print(f"Clicked 'Save' button to confirm group selections (Attempt {attempt + 1}).")
-                        break
-                    except Exception as click_e:
-                        print(f"Attempt {attempt + 1} to click 'Save' button failed: {str(click_e)}")
-                        if attempt == 2:
-                            print("Failed to click 'Save' button after retries.")
-                            return False
-                
-                try:
-                    time.sleep(1)
-                    popup_still_present = driver.find_elements(By.XPATH, 
-                        "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
-                        "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
-                        "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
-                    )
-                    if not popup_still_present:
-                        print("Popup window closed successfully.")
-                    else:
-                        print("Popup window did not close after clicking Save.")
-                        return False
-                except Exception as e:
-                    print(f"Error verifying popup closure: {str(e)}")
-                    return False
-                
-            except Exception as e:
-                print(f"Failed to locate or click 'Save' button: {str(e)}")
-                return False
-
-            if group_count == 0:
-                print("No group elements found in the popup.")
-                return False
-            
-            selectgroups.groups_selected = True
-            selectgroups.failed_attempts = 0  # Reset failed attempts on success
-            print("Updated tracker: groups_selected set to True, failed_attempts reset to 0")
-            return True
-
-        except Exception as e:
-            print(f"Failed to locate popup window or process groups: {str(e)}")
-            return False
-    else:
-        print(f"Invalid group config: '{group_config}'. Defaulting to no group selection.")
-        return False
-
 def selectgroups():
-    """Locate and click the dropdown element associated with 'Post to' text, check pageandgroupauthors.json for page, group, and group_types fields, select or unselect page profile under 'Post to Facebook and Instagram' based on page field, and based on group and group_types fields: if group is 'include' and group_types is 'uk', select the three groups with the highest member counts containing 'british', 'uk', 'england', or 'united kingdom' (not in last_selected and not containing 'usa' or 'australia'); if group_types is 'others', select groups not containing these UK terms or containing both UK terms and 'usa' or 'australia'; if group is 'none', unselect all groups; verify selections, save to JSON, and click Save."""
+    """Locate and click the dropdown element associated with 'Post to' text, check pageandgroupauthors.json for page, group, and group_types fields, select or unselect page profile under 'Post to Facebook and Instagram' based on page field, and based on group and group_types fields: if group is 'include', select the groups listed in group_types array (case-insensitive, ignoring spaces and special characters). If group is 'none', unselect all groups. Verify selections, save to JSON, and click Save."""
     global driver, wait
     
     # Initialize trackers if not already set
@@ -3684,197 +2523,323 @@ def selectgroups():
     # Check pageandgroupauthors.json for page, group, and group_types fields
     page_config = 'none'
     group_config = 'none'
-    group_types = 'others'  # Default to 'others' if not specified
+    target_group_list = []  # List of target group names to select
+    
     if os.path.exists(JSON_CONFIG_PATH) and os.path.getsize(JSON_CONFIG_PATH) > 0:
         try:
             with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
                 page_config = config_data.get('page', 'none')
                 group_config = config_data.get('group', 'none')
-                raw_group_types = config_data.get('group_types', 'others').lower()
                 
-                # Map various inputs to standardized group_types
-                if raw_group_types in ['uk', 'british', 'england', 'united kingdom', 'scotland', 'wales', 'northern ireland', 'ireland']:
-                    group_types = 'uk'
-                elif raw_group_types in ['usa', 'united states', 'american', 'us', 'america']:
-                    group_types = 'usa'
-                elif raw_group_types in ['australia', 'melbourne', 'sydney', 'aussie', 'australian', 'brisbane', 'perth', 'adelaide']:
-                    group_types = 'australia'
+                # Get group_types - can be list or string
+                raw_group_types = config_data.get('group_types', [])
+                
+                # Handle different formats
+                if isinstance(raw_group_types, list):
+                    target_group_list = raw_group_types
+                elif isinstance(raw_group_types, str):
+                    target_group_list = [raw_group_types]
                 else:
-                    group_types = 'others'
+                    target_group_list = []
+                
+                print(f"Read config from {JSON_CONFIG_PATH}: page={page_config}, group={group_config}, group_types={target_group_list}")
+                
+                # Validate target_group_list
+                if not target_group_list and group_config == 'include':
+                    print("Warning: group is 'include' but group_types list is empty!")
                     
-                print(f"Read config from {JSON_CONFIG_PATH}: page={page_config}, group={group_config}, group_types='{raw_group_types}' (mapped to '{group_types}')")
         except Exception as e:
             print(f"Error reading JSON file {JSON_CONFIG_PATH}: {str(e)}")
             page_config = 'none'
             group_config = 'none'
-            group_types = 'others'
+            target_group_list = []
     else:
-        print(f"JSON file {JSON_CONFIG_PATH} does not exist or is empty. Defaulting page to 'none', group to 'none', group_types to 'others'.")
+        print(f"JSON file {JSON_CONFIG_PATH} does not exist or is empty. Defaulting page to 'none', group to 'none'.")
 
-    # Validate group_types
-    if group_types not in ['uk', 'usa', 'australia', 'others']:
-        print(f"Invalid group_types value: '{group_types}'. Defaulting to 'others'.")
-        group_types = 'others'
+    # Function to normalize group names for comparison
+    def normalize_group_name(name):
+        """Remove spaces, special characters, and convert to lowercase for comparison"""
+        if not name:
+            return ""
+        # Convert to lowercase
+        normalized = name.lower()
+        # Remove special characters (keep alphanumeric)
+        normalized = re.sub(r'[^a-z0-9]', '', normalized)
+        return normalized
 
-    # Read last state to determine whether to select highest or average/lowest members
-    last_selection_strategy = None
-    if os.path.exists(laststate_path) and os.path.getsize(laststate_path) > 0:
+    # Pre-normalize target group list
+    normalized_targets = {}
+    for target in target_group_list:
+        norm = normalize_group_name(target)
+        normalized_targets[norm] = target
+        print(f"Target group: '{target}' normalized to: '{norm}'")
+
+    # ==================== SUB-FUNCTIONS ====================   
+    def toggle_dropdown():
+        """Open the dropdown associated with 'Post to' text"""
+        if selectgroups.is_dropdown_opened:
+            print("Dropdown already opened. Skipping dropdown click operation.")
+            return True
+        
         try:
-            with open(laststate_path, 'r', encoding='utf-8') as f:
-                laststate_data = json.load(f)
-                
-            # Initialize last_selected_group if not exists
-            if 'last_selected_group' not in laststate_data:
-                laststate_data['last_selected_group'] = []
-                
-            # Find the last strategy used for this group_type
-            group_type_history = [entry for entry in laststate_data['last_selected_group'] if entry.get('group_type') == group_types]
+            print("Looking for 'Post to' section and dropdown...")
             
-            if group_type_history:
-                # Get the most recent strategy for this group_type
-                last_entry = group_type_history[-1]
-                last_strategy = last_entry.get('members', 'highest')
+            # First, find the visible 'Post to' text element
+            post_to_label = None
+            try:
+                # Find visible element containing 'Post to' (not script)
+                elements = driver.find_elements(By.XPATH, 
+                    "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to') and not(self::script) and not(self::style)]")
                 
-                # Determine next strategy: alternate between highest and average
-                if last_strategy == 'highest':
-                    last_selection_strategy = 'average'
-                    print(f"Last selection for '{group_types}' groups was 'highest'. This time selecting 'average' members.")
-                else:
-                    last_selection_strategy = 'highest'
-                    print(f"Last selection for '{group_types}' groups was '{last_strategy}'. This time selecting 'highest' members.")
-            else:
-                # First time for this group_type, start with highest
-                last_selection_strategy = 'highest'
-                print(f"First time selecting '{group_types}' groups. Starting with 'highest' members.")
-                
-        except Exception as e:
-            print(f"Error reading laststate.json: {str(e)}. Defaulting to 'highest' selection.")
-            last_selection_strategy = 'highest'
-    else:
-        # File doesn't exist, start with highest
-        last_selection_strategy = 'highest'
-        print(f"laststate.json doesn't exist. Starting with 'highest' selection for '{group_types}' groups.")
-
-    # Define keywords for different country groups
-    uk_keywords = ['british', 'uk', 'england', 'united kingdom', 'scotland', 'wales', 'northern ireland', 'ireland', 'english', 'britain']
-    usa_keywords = ['usa', 'united states', 'american', 'us', 'america', 'u.s.a', 'u.s.', 'states']
-    australia_keywords = ['australia', 'melbourne', 'sydney', 'aussie', 'australian', 'brisbane', 'perth', 'adelaide', 'canberra', 'queensland', 'victoria']
-
-    # Handle dropdown opening
-    if selectgroups.is_dropdown_opened:
-        print("Dropdown already opened. Skipping dropdown click operation.")
-    else:
-        try:
-            # Locate the container wrapping 'Post to' text
-            post_to_container = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH, 
-                    "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]"
-                ))
-            )
-            print("Found 'Post to' container.")
-
-            # Find the dropdown element within or near the container
-            dropdown = None
-            for attempt in range(3):
-                try:
-                    dropdown = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::select | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::*[@role='combobox'] | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::*[@aria-haspopup='listbox'] | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::div[contains(@class, 'dropdown') or contains(@class, 'select')] | "
-                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to')]//following::button[contains(@aria-label, 'dropdown') or contains(@class, 'dropdown')]"
-                        ))
-                    )
-                    print("Found dropdown element associated with 'Post to'.")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to locate dropdown failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to locate dropdown after 3 attempts. Checking for overlay...")
-                        overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                        if overlay:
-                            print("Detected overlay. Attempting to dismiss...")
-                            try:
-                                close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
-                                close_button.click()
-                                time.sleep(1)
-                                print("Overlay dismissed. Retrying dropdown location...")
-                                continue
-                            except:
-                                print("Could not dismiss overlay. Skipping dropdown click.")
-                                return False
-                    time.sleep(1)
-
-            if not dropdown:
-                print("No dropdown found after retries. Proceeding without opening dropdown.")
-                return False
-
-            # Scroll to the dropdown and click
-            for attempt in range(3):
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView(true);", dropdown)
-                    time.sleep(0.5)
-                    dropdown.click()
-                    print("Clicked dropdown to open the window.")
-                    selectgroups.is_dropdown_opened = True
-                    print("Updated tracker: is_dropdown_opened set to True")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to click dropdown failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to click dropdown after 3 attempts. Proceeding without opening dropdown.")
-                        return False
-                    time.sleep(1)
-            
-            time.sleep(3)  # Pause to ensure dropdown opens
-        except Exception as e:
-            print(f"Failed to process dropdown operation: {str(e)}")
-            return False
-
-    # Handle page profile selection
-    if selectgroups.is_page_selected and page_config == 'none':
-        print("Page profile already selected but page config is 'none'. Attempting to unselect.")
-        try:
-            dropdown_content = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH,
-                    "//div[contains(@class, 'dropdown') or contains(@class, 'menu') or @role='menu' or @role='listbox']"
-                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]"
-                ))
-            )
-            print("Found dropdown content with 'Post to Facebook and Instagram'.")
-
-            page_profile = None
-            for attempt in range(3):
-                try:
-                    page_profile = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::div[contains(@class, 'page') or contains(@class, 'profile') or @role='option' or contains(@class, 'item')][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))] | "
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::li[contains(@class, 'page') or contains(@class, 'profile') or @role='option'][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))]"
-                        )),
-                        dropdown_content
-                    )
-                    tag = page_profile.tag_name
-                    class_attr = page_profile.get_attribute('class') or ''
-                    role = page_profile.get_attribute('role') or ''
-                    text = page_profile.text.strip()[:100]
-                    print(f"Found page profile: Tag={tag}, Class={class_attr}, Role={role}, Text='{text}'")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to locate page profile failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to locate page profile after 3 attempts. Proceeding to group handling.")
+                for elem in elements:
+                    if elem.is_displayed():
+                        post_to_label = elem
+                        print(f"✓ Found visible 'Post to' label: <{post_to_label.tag_name}>")
                         break
+            except Exception as e:
+                print(f"Error finding label: {e}")
+            
+            if not post_to_label:
+                print("✗ Could not find 'Post to' label")
+                return False
+            
+            # NEW APPROACH: Look for the dropdown by its actual characteristics
+            dropdown = None
+            
+            # Method 1: Look for the div that shows the current selection (e.g., "Jena26" or "Public")
+            # This is usually the clickable element that opens the dropdown
+            print("Method 1: Looking for clickable element with text (current selection)...")
+            try:
+                # Find all clickable divs with non-empty text in the same general area
+                potential_dropdowns = driver.find_elements(By.XPATH, 
+                    "//div[@role='button' and string-length(normalize-space(text())) > 0] | "
+                    "//div[@role='combobox' and string-length(normalize-space(text())) > 0] | "
+                    "//div[contains(@class, 'x1i10hfl') and string-length(normalize-space(text())) > 0]")
+                
+                for elem in potential_dropdowns:
+                    if elem.is_displayed() and elem.is_enabled():
+                        # Check if it's near the 'Post to' label (within reasonable distance)
+                        try:
+                            label_y = post_to_label.location['y']
+                            elem_y = elem.location['y']
+                            # Dropdown should be within 100 pixels vertically from the label
+                            if abs(elem_y - label_y) < 100:
+                                dropdown = elem
+                                print(f"✓ Found dropdown with text: '{elem.text[:50]}' (y={elem_y}, label y={label_y})")
+                                break
+                        except:
+                            pass
+            except Exception as e:
+                print(f"  Method 1 failed: {e}")
+            
+            # Method 2: Find the parent container that holds both label and dropdown by going up more levels
+            if not dropdown:
+                print("Method 2: Searching parent containers at multiple levels...")
+                try:
+                    # Try different parent levels (1-5)
+                    for level in range(1, 6):
+                        try:
+                            parent = post_to_label.find_element(By.XPATH, f"./ancestor::div[{level}]")
+                            # Look for any clickable element within this parent
+                            clickable = parent.find_elements(By.XPATH, 
+                                ".//div[@role='button'] | .//div[@role='combobox'] | .//div[contains(@class, 'x1i10hfl')]")
+                            
+                            for elem in clickable:
+                                if elem.is_displayed() and elem.is_enabled() and elem != post_to_label:
+                                    # Check if it has text or is likely the dropdown
+                                    if elem.text.strip() or 'combobox' in elem.get_attribute('role'):
+                                        dropdown = elem
+                                        print(f"✓ Found dropdown in parent level {level}: text='{elem.text[:30]}'")
+                                        break
+                            if dropdown:
+                                break
+                        except:
+                            continue
+                except Exception as e:
+                    print(f"  Method 2 failed: {e}")
+            
+            # Method 3: Look for the element immediately after 'Post to' in the DOM
+            if not dropdown:
+                print("Method 3: Looking for adjacent element after 'Post to'...")
+                try:
+                    # Find the next sibling or following div
+                    next_element = post_to_label.find_element(By.XPATH, 
+                        "./following-sibling::div[1] | ./following::div[contains(@class, 'x1i10hfl')][1]")
+                    if next_element and next_element.is_displayed():
+                        dropdown = next_element
+                        print(f"✓ Found adjacent dropdown: <{next_element.tag_name}> text='{next_element.text[:30]}'")
+                except:
+                    pass
+            
+            # Method 4: Direct search for Facebook's audience selector
+            if not dropdown:
+                print("Method 4: Looking for Facebook's audience selector directly...")
+                try:
+                    # Facebook often has aria-label for audience selector
+                    dropdown = driver.find_element(By.XPATH, 
+                        "//div[@aria-label='Post to' and @role='combobox'] | "
+                        "//div[@aria-label='Audience' and @role='combobox'] | "
+                        "//div[contains(@aria-label, 'audience') and @role='combobox']")
+                    if dropdown and dropdown.is_displayed():
+                        print("✓ Found dropdown via aria-label")
+                except:
+                    pass
+            
+            # Method 5: Look for any combobox on the page and check if it's relevant
+            if not dropdown:
+                print("Method 5: Checking all comboboxes on page...")
+                try:
+                    comboboxes = driver.find_elements(By.XPATH, "//div[@role='combobox']")
+                    for cb in comboboxes:
+                        if cb.is_displayed() and cb.is_enabled():
+                            # Check if it's in the top half of the page (where Post to usually is)
+                            if cb.location['y'] < 400:
+                                dropdown = cb
+                                print(f"✓ Found combobox at y={cb.location['y']}, text='{cb.text[:30]}'")
+                                break
+                except:
+                    pass
+            
+            # Method 6: Last resort - look for any div with specific Facebook class patterns
+            if not dropdown:
+                print("Method 6: Looking for Facebook dropdown by class patterns...")
+                try:
+                    # Facebook's dropdown trigger has specific classes
+                    dropdowns = driver.find_elements(By.XPATH, 
+                        "//div[contains(@class, 'x1i10hfl') and contains(@class, 'x1qjc9v5') and contains(@class, 'x1ypdohk')]")
+                    for dd in dropdowns:
+                        if dd.is_displayed() and dd.is_enabled():
+                            dropdown = dd
+                            print(f"✓ Found dropdown by Facebook classes")
+                            break
+                except:
+                    pass
+            
+            if not dropdown:
+                print("✗ Could not find dropdown using any method")
+                
+                # Final debug: Print all clickable elements on the page
+                print("\n=== DEBUG: All clickable elements on page (first 10) ===")
+                all_clickable = driver.find_elements(By.XPATH, 
+                    "//div[@role='button'] | //div[@role='combobox'] | //button")
+                for idx, elem in enumerate(all_clickable[:10]):
+                    try:
+                        print(f"{idx+1}. <{elem.tag_name}> role='{elem.get_attribute('role')}' text='{elem.text[:30]}' y={elem.location['y']}")
+                    except:
+                        print(f"{idx+1}. [Unable to read]")
+                return False
+            
+            # Print element details before clicking
+            print("\n" + "="*60)
+            print("ELEMENT TO BE CLICKED:")
+            print("="*60)
+            try:
+                print(f"• Tag name: <{dropdown.tag_name}>")
+                element_id = dropdown.get_attribute('id')
+                if element_id:
+                    print(f"• ID: {element_id}")
+                element_class = dropdown.get_attribute('class')
+                if element_class:
+                    class_preview = element_class[:100] + "..." if len(element_class) > 100 else element_class
+                    print(f"• Class: {class_preview}")
+                element_role = dropdown.get_attribute('role')
+                if element_role:
+                    print(f"• Role: {element_role}")
+                element_aria = dropdown.get_attribute('aria-label')
+                if element_aria:
+                    print(f"• Aria-label: {element_aria}")
+                element_text = dropdown.text.strip()
+                if element_text:
+                    print(f"• Text: '{element_text}'")
+                print(f"• Is displayed: {dropdown.is_displayed()}")
+                print(f"• Is enabled: {dropdown.is_enabled()}")
+                location = dropdown.location
+                print(f"• Location: (x={location['x']}, y={location['y']})")
+            except Exception as e:
+                print(f"  Could not get all details: {str(e)}")
+            print("="*60 + "\n")
+            
+            # Click the dropdown
+            for attempt in range(3):
+                try:
+                    # Scroll into view
+                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", dropdown)
+                    time.sleep(0.5)
+                    
+                    # Try normal click
+                    dropdown.click()
+                    print(f"✓ Successfully clicked on element: <{dropdown.tag_name}>")
+                    print("✓ Dropdown opened successfully.")
+                    selectgroups.is_dropdown_opened = True
+                    time.sleep(2)
+                    return True
+                    
+                except Exception as e:
+                    print(f"✗ Click attempt {attempt + 1} failed: {str(e)}")
+                    if attempt == 2:
+                        # Try JavaScript click as last resort
+                        try:
+                            driver.execute_script("arguments[0].click();", dropdown)
+                            print(f"✓ Successfully clicked via JavaScript: <{dropdown.tag_name}>")
+                            selectgroups.is_dropdown_opened = True
+                            time.sleep(2)
+                            return True
+                        except Exception as js_e:
+                            print(f"✗ JavaScript click also failed: {str(js_e)}")
+                            return False
                     time.sleep(1)
+            
+            return False
+            
+        except Exception as e:
+            print(f"✗ Failed to process dropdown operation: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def handle_page_selection(page_config):
+        """Handle page profile selection/unselection based on config"""
+        if selectgroups.is_page_selected and page_config == 'none':
+            print("Page profile already selected but page config is 'none'. Attempting to unselect.")
+            try:
+                dropdown_content = wait.until(
+                    EC.presence_of_element_located((
+                        By.XPATH,
+                        "//div[contains(@class, 'dropdown') or contains(@class, 'menu') or @role='menu' or @role='listbox']"
+                        "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]"
+                    ))
+                )
+                print("Found dropdown content with 'Post to Facebook and Instagram'.")
 
-            if not page_profile:
-                print("No page profile found. Proceeding to group handling.")
-            else:
+                page_profile = None
+                for attempt in range(3):
+                    try:
+                        page_profile = wait.until(
+                            EC.element_to_be_clickable((
+                                By.XPATH,
+                                ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::div[contains(@class, 'page') or contains(@class, 'profile') or @role='option' or contains(@class, 'item')][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))] | "
+                                ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::li[contains(@class, 'page') or contains(@class, 'profile') or @role='option'][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))]"
+                            )),
+                            dropdown_content
+                        )
+                        tag = page_profile.tag_name
+                        class_attr = page_profile.get_attribute('class') or ''
+                        role = page_profile.get_attribute('role') or ''
+                        text = page_profile.text.strip()[:100]
+                        print(f"Found page profile: Tag={tag}, Class={class_attr}, Role={role}, Text='{text}'")
+                        break
+                    except Exception as e:
+                        print(f"Attempt {attempt + 1} to locate page profile failed: {str(e)}")
+                        if attempt == 2:
+                            print("Failed to locate page profile after 3 attempts. Proceeding to group handling.")
+                            break
+                        time.sleep(1)
+
+                if not page_profile:
+                    print("No page profile found. Proceeding to group handling.")
+                    return True
+                
                 is_selected = False
                 try:
                     aria_checked = page_profile.get_attribute('aria-checked')
@@ -3948,130 +2913,147 @@ def selectgroups():
                     print(f"Page profile {text} is not selected. No unselection needed.")
                     selectgroups.is_page_selected = False
                     print("Updated tracker: is_page_selected set to False")
-        except Exception as e:
-            print(f"Failed to locate or process page profile for unselection: {str(e)}")
-            print("Proceeding to group handling despite unselection failure.")
-    elif page_config == 'include' and not selectgroups.is_page_selected:
-        print("Page config is 'include'. Attempting to select page profile.")
-        try:
-            dropdown_content = wait.until(
-                EC.presence_of_element_located((
-                    By.XPATH,
-                    "//div[contains(@class, 'dropdown') or contains(@class, 'menu') or @role='menu' or @role='listbox']"
-                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]"
-                ))
-            )
-            print("Found dropdown content with 'Post to Facebook and Instagram'.")
-
-            page_profile = None
-            for attempt in range(3):
-                try:
-                    page_profile = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::div[contains(@class, 'page') or contains(@class, 'profile') or @role='option' or contains(@class, 'item')][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))] | "
-                            ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::li[contains(@class, 'page') or contains(@class, 'profile') or @role='option'][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))]"
-                        )),
-                        dropdown_content
-                    )
-                    tag = page_profile.tag_name
-                    class_attr = page_profile.get_attribute('class') or ''
-                    role = page_profile.get_attribute('role') or ''
-                    text = page_profile.text.strip()[:100]
-                    print(f"Found page profile: Tag={tag}, Class={class_attr}, Role={role}, Text='{text}'")
-                    break
-                except Exception as e:
-                    print(f"Attempt {attempt + 1} to locate page profile failed: {str(e)}")
-                    if attempt == 2:
-                        print("Failed to locate page profile after 3 attempts. Proceeding to group handling.")
-                        break
-                    time.sleep(1)
-
-            if page_profile:
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", page_profile)
-                        time.sleep(0.5)
-                        driver.execute_script("arguments[0].click();", page_profile)
-                        print(f"Selected page profile: {text}")
-                        selectgroups.is_page_selected = True
-                        print("Updated tracker: is_page_selected set to True")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to click page profile failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to click page profile after 3 attempts.")
-                    time.sleep(1)
+                    
+            except Exception as e:
+                print(f"Failed to locate or process page profile for unselection: {str(e)}")
+                print("Proceeding to group handling despite unselection failure.")
                 
-                time.sleep(1)  # Pause to ensure selection
-        except Exception as e:
-            print(f"Failed to locate or select page profile under 'Post to Facebook and Instagram': {str(e)}")
-            print("Proceeding to group handling despite page selection failure.")
-    else:
-        print(f"Page config is '{page_config}' and is_page_selected is {selectgroups.is_page_selected}. No page selection or unselection needed.")
-
-    # Handle group selection
-    if group_config == 'none':
-        print("Group config is 'none'. Attempting to unselect all groups.")
-        if selectgroups.is_see_more_clicked:
-            print("'See more groups' already clicked. Skipping click operation.")
-        else:
+        elif page_config == 'include' and not selectgroups.is_page_selected:
+            print("Page config is 'include'. Attempting to select page profile.")
             try:
-                see_more_groups = None
+                dropdown_content = wait.until(
+                    EC.presence_of_element_located((
+                        By.XPATH,
+                        "//div[contains(@class, 'dropdown') or contains(@class, 'menu') or @role='menu' or @role='listbox']"
+                        "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]"
+                    ))
+                )
+                print("Found dropdown content with 'Post to Facebook and Instagram'.")
+
+                page_profile = None
                 for attempt in range(3):
                     try:
-                        see_more_groups = wait.until(
+                        page_profile = wait.until(
                             EC.element_to_be_clickable((
                                 By.XPATH,
-                                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'see more groups')] | "
-                                "//*[contains(@aria-label, 'See more groups') or contains(@aria-label, 'see more groups')]"
-                            ))
+                                ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::div[contains(@class, 'page') or contains(@class, 'profile') or @role='option' or contains(@class, 'item')][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))] | "
+                                ".//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'post to facebook and instagram')]//following::li[contains(@class, 'page') or contains(@class, 'profile') or @role='option'][not(contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'instagram') and not(contains(@class, 'instagram')))]"
+                            )),
+                            dropdown_content
                         )
-                        print("Found 'See more groups' element.")
+                        tag = page_profile.tag_name
+                        class_attr = page_profile.get_attribute('class') or ''
+                        role = page_profile.get_attribute('role') or ''
+                        text = page_profile.text.strip()[:100]
+                        print(f"Found page profile: Tag={tag}, Class={class_attr}, Role={role}, Text='{text}'")
                         break
                     except Exception as e:
-                        print(f"Attempt {attempt + 1} to locate 'See more groups' failed: {str(e)}")
+                        print(f"Attempt {attempt + 1} to locate page profile failed: {str(e)}")
                         if attempt == 2:
-                            print("Failed to locate 'See more groups' after 3 attempts. Checking for overlay...")
-                            overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                            if overlay:
-                                print("Detected overlay. Attempting to dismiss...")
-                                try:
-                                    close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
-                                    close_button.click()
-                                    time.sleep(1)
-                                    print("Overlay dismissed. Retrying...")
-                                    continue
-                                except:
-                                    print("Could not dismiss overlay. Skipping 'See more groups' click.")
-                                    return False
+                            print("Failed to locate page profile after 3 attempts. Proceeding to group handling.")
+                            break
                         time.sleep(1)
 
-                if not see_more_groups:
-                    print("No 'See more groups' element found. Proceeding without opening group popup.")
-                    return False
-
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView(true);", see_more_groups)
-                        time.sleep(0.5)
-                        see_more_groups.click()
-                        print("Clicked 'See more groups' to open its window.")
-                        selectgroups.is_see_more_clicked = True
-                        print("Updated tracker: is_see_more_clicked set to True")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to click 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to click 'See more groups' after 3 attempts.")
-                            return False
+                if page_profile:
+                    for attempt in range(3):
+                        try:
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", page_profile)
+                            time.sleep(0.5)
+                            driver.execute_script("arguments[0].click();", page_profile)
+                            print(f"Selected page profile: {text}")
+                            selectgroups.is_page_selected = True
+                            print("Updated tracker: is_page_selected set to True")
+                            break
+                        except Exception as e:
+                            print(f"Attempt {attempt + 1} to click page profile failed: {str(e)}")
+                            if attempt == 2:
+                                print("Failed to click page profile after 3 attempts.")
                         time.sleep(1)
-                
-                time.sleep(4)  # Pause to allow the popup to fully load
+                    
+                    time.sleep(1)  # Pause to ensure selection
             except Exception as e:
-                print(f"Failed to process 'See more groups' operation: {str(e)}")
+                print(f"Failed to locate or select page profile under 'Post to Facebook and Instagram': {str(e)}")
+                print("Proceeding to group handling despite page selection failure.")
+        else:
+            print(f"Page config is '{page_config}' and is_page_selected is {selectgroups.is_page_selected}. No page selection or unselection needed.")
+        
+        return True
+
+    def click_see_more_groups():
+        """Click the 'See more groups' button to open the groups popup"""
+        if selectgroups.is_see_more_clicked:
+            print("'See more groups' already clicked. Skipping click operation.")
+            return True
+        
+        try:
+            see_more_groups = None
+            for attempt in range(3):
+                try:
+                    see_more_groups = wait.until(
+                        EC.element_to_be_clickable((
+                            By.XPATH,
+                            "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'see more groups')] | "
+                            "//*[contains(@aria-label, 'See more groups') or contains(@aria-label, 'see more groups')]"
+                        ))
+                    )
+                    print("Found 'See more groups' element.")
+                    break
+                except Exception as e:
+                    print(f"Attempt {attempt + 1} to locate 'See more groups' failed: {str(e)}")
+                    if attempt == 2:
+                        print("Failed to locate 'See more groups' after 3 attempts. Checking for overlay...")
+                        overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
+                        if overlay:
+                            print("Detected overlay. Attempting to dismiss...")
+                            try:
+                                close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
+                                close_button.click()
+                                time.sleep(1)
+                                print("Overlay dismissed. Retrying...")
+                                continue
+                            except:
+                                print("Could not dismiss overlay. Skipping 'See more groups' click.")
+                                return False
+                    time.sleep(1)
+
+            if not see_more_groups:
+                print("No 'See more groups' element found. Proceeding without opening group popup.")
                 return False
 
+            for attempt in range(3):
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView(true);", see_more_groups)
+                    time.sleep(0.5)
+                    see_more_groups.click()
+                    print("Clicked 'See more groups' to open its window.")
+                    selectgroups.is_see_more_clicked = True
+                    print("Updated tracker: is_see_more_clicked set to True")
+                    break
+                except Exception as e:
+                    print(f"Attempt {attempt + 1} to click 'See more groups' failed: {str(e)}")
+                    if attempt == 2:
+                        print("Failed to click 'See more groups' after 3 attempts.")
+                        return False
+                    time.sleep(1)
+            
+            time.sleep(4)  # Pause to allow the popup to fully load
+            return True
+        except Exception as e:
+            print(f"Failed to process 'See more groups' operation: {str(e)}")
+            return False
+
+    def handle_groups(group_config, target_group_list, normalized_targets, json_path, json_exists, last_selected):
+        """Handle group selection/unselection based on config"""
+        if group_config == 'none':
+            return handle_unselect_all_groups(json_path, json_exists, last_selected)
+        elif group_config == 'include':
+            return handle_select_target_groups(target_group_list, normalized_targets, json_path, json_exists, last_selected)
+        else:
+            print(f"Invalid group config: '{group_config}'. Defaulting to no group selection.")
+            return False
+
+    def handle_unselect_all_groups(json_path, json_exists, last_selected):
+        """Unselect all groups and save to JSON"""
         try:
             popup_window = wait.until(
                 EC.presence_of_element_located((
@@ -4090,20 +3072,39 @@ def selectgroups():
                 ".//div[descendant::*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'public group') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'private group')]]"
             )
             
+            # Print header for groups list
+            print("\n" + "="*80)
+            print("ALL GROUPS FOUND IN POPUP WINDOW (in order as seen):")
+            print("="*80)
+            
             selected_groups = []
             group_element_map = {}
             seen_texts = set()
+            group_number = 0
+            
             for i, elem in enumerate(group_elements, 1):
                 try:
                     text = elem.text.strip() or elem.get_attribute('aria-label') or ''
                     lines = text.split('\n')
                     group_name = lines[0].strip() if lines else text
+                    
+                    # Extract member count
+                    member_count = 0
+                    if len(lines) > 1:
+                        member_text = lines[1].strip()
+                        match = re.search(r'(\d+[\d,]*)\s*members', member_text)
+                        if match:
+                            member_count = int(match.group(1).replace(',', ''))
+                    
                     if (group_name and 
                         group_name.lower() not in seen_texts and
                         not any(phrase in group_name.lower() for phrase in ['publish to facebook groups', 'choose up to three groups', 'close', 'done', 'cancel'])):
+                        
                         seen_texts.add(group_name.lower())
                         group_element_map[group_name] = elem
+                        group_number += 1
                         
+                        # Check if selected
                         is_selected = False
                         try:
                             aria_checked = elem.get_attribute('aria-checked')
@@ -4122,13 +3123,28 @@ def selectgroups():
                                         if checkmark:
                                             is_selected = True
                         except Exception as sel_e:
-                            print(f"Error checking selection for group {i}: {sel_e}")
+                            print(f"Error checking selection for group {group_number}: {sel_e}")
+                        
+                        selection_status = "✓ SELECTED" if is_selected else "○ NOT SELECTED"
+                        
+                        # Print group information
+                        print(f"\n{group_number}. {group_name}")
+                        print(f"   Members: {member_count:,}" if member_count > 0 else "   Members: Unknown")
+                        print(f"   Status: {selection_status}")
+                        print(f"   Raw text: {text[:200]}..." if len(text) > 200 else f"   Raw text: {text}")
                         
                         if is_selected:
                             selected_groups.append(group_name)
-                            print(f"Group {i}: {group_name} (Selected)")
+                            
                 except Exception as e:
                     print(f"Group {i}: Error extracting text - {str(e)}")
+            
+            print("\n" + "="*80)
+            print(f"SUMMARY: Total groups found: {group_number}")
+            print(f"Selected groups: {len(selected_groups)}")
+            if selected_groups:
+                print(f"Selected group names: {', '.join(selected_groups)}")
+            print("="*80 + "\n")
 
             print(f"Number of selected groups: {len(selected_groups)}")
             if selected_groups:
@@ -4185,174 +3201,21 @@ def selectgroups():
                     except Exception as e:
                         print(f"Failed to process unselection for group {group_name}: {str(e)}")
 
-            try:
-                save_button = None
-                for attempt in range(3):
-                    try:
-                        save_button = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                ".//*[text()='Save'][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[contains(@aria-label, 'Save')][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[text()='Cancel']//following::*[text()='Save'][1] | "
-                                ".//div[@role='button' and (text()='Save' or contains(@aria-label, 'Save'))][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))]"
-                            )),
-                            popup_window
-                        )
-                        tag = save_button.tag_name
-                        class_attr = save_button.get_attribute('class') or ''
-                        role = save_button.get_attribute('role') or ''
-                        aria_label = save_button.get_attribute('aria-label') or ''
-                        aria_disabled = save_button.get_attribute('aria-disabled') or ''
-                        text = save_button.text.strip()[:100]
-                        print(f"Found 'Save' button (Attempt {attempt + 1}): Tag={tag}, Class={class_attr}, Role={role}, Aria-label={aria_label}, Aria-disabled={aria_disabled}, Text='{text}'")
-                        break
-                    except (TimeoutException, StaleElementReferenceException) as e:
-                        print(f"Attempt {attempt + 1} to locate 'Save' button failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'Save' button after retries.")
-                            return False
-                        time.sleep(1)
-
-                if save_button and aria_disabled.lower() == 'true':
-                    print("Save button is disabled. Cannot proceed with click.")
-                    return False
-                
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", save_button)
-                        time.sleep(0.7)
-                        driver.execute_script("arguments[0].click();", save_button)
-                        print(f"Clicked 'Save' button to confirm no group selections (Attempt {attempt + 1}).")
-                        break
-                    except Exception as click_e:
-                        print(f"Attempt {attempt + 1} to click 'Save' button failed: {str(click_e)}")
-                        if attempt == 2:
-                            print("Failed to click 'Save' button after retries.")
-                            return False
-                
-                try:
-                    time.sleep(3)
-                    popup_still_present = driver.find_elements(By.XPATH, 
-                        "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
-                        "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
-                        "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
-                    )
-                    if not popup_still_present:
-                        print("Popup window closed successfully.")
-                    else:
-                        print("Popup window did not close after clicking Save.")
-                        return False
-                except Exception as e:
-                    print(f"Error verifying popup closure: {str(e)}")
-                    return False
-                
-                json_data = {
-                    "groups_selected": {
-                        "last_selected": last_selected,
-                        "current_selected": {
-                            "1st": "",
-                            "2nd": "",
-                            "3rd": ""
-                        },
-                        "status": "no groups selected"
-                    }
-                }
-                try:
-                    if not json_exists:
-                        print(f"JSON file does not exist. Creating {json_path}")
-                        os.makedirs(os.path.dirname(json_path), exist_ok=True)
-                        with open(json_path, 'w', encoding='utf-8') as f:
-                            json.dump(json_data, f, indent=4)
-                        print("Created JSON file with no groups selected.")
-                    else:
-                        with open(json_path, 'r', encoding='utf-8') as f:
-                            existing_data = json.load(f)
-                        existing_data['groups_selected']['current_selected'] = json_data['groups_selected']['current_selected']
-                        existing_data['groups_selected']['status'] = "no groups selected"
-                        with open(json_path, 'w', encoding='utf-8') as f:
-                            json.dump(existing_data, f, indent=4)
-                        print("Updated JSON file with no groups selected.")
-                except Exception as e:
-                    print(f"Error writing to JSON file: {str(e)}")
-
-                selectgroups.groups_selected = True
-                selectgroups.failed_attempts = 0  # Reset failed attempts on success
-                print("Updated tracker: groups_selected set to True, failed_attempts reset to 0")
-                return True
-
-            except Exception as e:
-                print(f"Failed to locate or click 'Save' button: {str(e)}")
-                return False
+            return click_save_button(popup_window, json_path, json_exists, last_selected, current_selected=[])
 
         except Exception as e:
             print(f"Failed to locate popup window or process groups: {str(e)}")
             return False
 
-    elif group_config == 'include':
-        print(f"Group config is 'include' with group_types '{group_types}'. Proceeding with group selection.")
-        if selectgroups.is_see_more_clicked:
-            print("'See more groups' already clicked. Skipping click operation.")
-        else:
-            try:
-                see_more_groups = None
-                for attempt in range(3):
-                    try:
-                        see_more_groups = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'see more groups')] | "
-                                "//*[contains(@aria-label, 'See more groups') or contains(@aria-label, 'see more groups')]"
-                            ))
-                        )
-                        print("Found 'See more groups' element.")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to locate 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'See more groups' after 3 attempts. Checking for overlay...")
-                            overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
-                            if overlay:
-                                print("Detected overlay. Attempting to dismiss...")
-                                try:
-                                    close_button = driver.find_element(By.XPATH, "//button[contains(@aria-label, 'Close') or contains(text(), 'Close') or contains(@class, 'close')]")
-                                    close_button.click()
-                                    time.sleep(1)
-                                    print("Overlay dismissed. Retrying...")
-                                    continue
-                                except:
-                                    print("Could not dismiss overlay. Skipping 'See more groups' click.")
-                                    return False
-                        time.sleep(1)
-
-                if not see_more_groups:
-                    print("No 'See more groups' element found. Proceeding without opening group popup.")
-                    return False
-
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView(true);", see_more_groups)
-                        time.sleep(0.5)
-                        see_more_groups.click()
-                        print("Clicked 'See more groups' to open its window.")
-                        selectgroups.is_see_more_clicked = True
-                        print("Updated tracker: is_see_more_clicked set to True")
-                        break
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} to click 'See more groups' failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to click 'See more groups' after 3 attempts.")
-                            return False
-                        time.sleep(1)
-                
-                time.sleep(4)  # Pause to allow the popup to fully load
-            except Exception as e:
-                print(f"Failed to process 'See more groups' operation: {str(e)}")
-                return False
-
+    def handle_select_target_groups(target_group_list, normalized_targets, json_path, json_exists, last_selected):
+        """Select target groups based on config"""
+        if not target_group_list:
+            print("No target groups specified in group_types. Skipping group selection.")
+            return False
+        
         if selectgroups.groups_selected:
             print("Groups already selected. Skipping selection operation.")
-            selectgroups.failed_attempts = 0  # Reset failed attempts if groups already selected
+            selectgroups.failed_attempts = 0
             print("Updated tracker: failed_attempts reset to 0")
             return True
 
@@ -4374,10 +3237,17 @@ def selectgroups():
                 ".//div[descendant::*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'public group') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'private group')]]"
             )
             
+            # Print header for groups list
+            print("\n" + "="*80)
+            print("ALL GROUPS FOUND IN POPUP WINDOW (in order as seen):")
+            print("="*80)
+            
             group_data = []
             group_element_map = {}
             selected_groups = []
             seen_texts = set()
+            group_number = 0
+            
             for i, elem in enumerate(group_elements, 1):
                 try:
                     text = elem.text.strip() or elem.get_attribute('aria-label') or ''
@@ -4393,10 +3263,12 @@ def selectgroups():
                     if (group_name and 
                         group_name.lower() not in seen_texts and
                         not any(phrase in group_name.lower() for phrase in ['publish to facebook groups', 'choose up to three groups', 'close', 'done', 'cancel'])):
-                        seen_texts.add(group_name.lower())
-                        group_data.append((group_name, member_count, elem))
-                        group_element_map[group_name] = elem
                         
+                        seen_texts.add(group_name.lower())
+                        group_element_map[group_name] = elem
+                        group_number += 1
+                        
+                        # Check if selected
                         is_selected = False
                         try:
                             aria_checked = elem.get_attribute('aria-checked')
@@ -4415,228 +3287,150 @@ def selectgroups():
                                         if checkmark:
                                             is_selected = True
                         except Exception as sel_e:
-                            print(f"Error checking selection for group {i}: {sel_e}")
+                            print(f"Error checking selection for group {group_number}: {sel_e}")
+                        
+                        selection_status = "✓ SELECTED" if is_selected else "○ NOT SELECTED"
+                        
+                        # Print group information
+                        print(f"\n{group_number}. {group_name}")
+                        print(f"   Members: {member_count:,}" if member_count > 0 else "   Members: Unknown")
+                        print(f"   Status: {selection_status}")
+                        print(f"   Raw text: {text[:200]}..." if len(text) > 200 else f"   Raw text: {text}")
                         
                         if is_selected:
                             selected_groups.append(group_name)
-                            print(f"Group {i}: {group_name} ({member_count} members, Selected)")
-                        else:
-                            print(f"Group {i}: {group_name} ({member_count} members)")
+                        
+                        group_data.append((group_name, member_count, elem, is_selected))
+                            
                 except Exception as e:
                     print(f"Group {i}: Error extracting text - {str(e)}")
+            
+            print("\n" + "="*80)
+            print(f"SUMMARY: Total groups found: {group_number}")
+            print(f"Selected groups: {len(selected_groups)}")
+            if selected_groups:
+                print(f"Selected group names: {', '.join(selected_groups)}")
+            print("="*80 + "\n")
             
             group_count = len(group_data)
             print(f"Total groups found in popup: {group_count}")
             print(f"Number of selected groups: {len(selected_groups)}")
 
-            filtered_group_data = []
-            if group_types == 'uk':
-                print("Filtering UK groups: must have UK keywords, must NOT have USA or Australia keywords")
-                for group_name, member_count, elem in group_data:
-                    name_lower = group_name.lower()
-                    has_uk = any(keyword in name_lower for keyword in uk_keywords)
-                    has_usa = any(keyword in name_lower for keyword in usa_keywords)
-                    has_australia = any(keyword in name_lower for keyword in australia_keywords)
-                    
-                    if has_uk and not has_usa and not has_australia:
-                        filtered_group_data.append((group_name, member_count, elem))
-                        print(f"  Pure UK group: {group_name}")
+            # Match groups against target list using normalized comparison
+            print("\n" + "="*80)
+            print("MATCHING TARGET GROUPS:")
+            print("="*80)
             
-            elif group_types == 'usa':
-                print("Filtering USA groups: must have USA keywords, can optionally have UK keywords but NOT Australia keywords")
-                for group_name, member_count, elem in group_data:
-                    name_lower = group_name.lower()
-                    has_usa = any(keyword in name_lower for keyword in usa_keywords)
-                    has_australia = any(keyword in name_lower for keyword in australia_keywords)
-                    has_uk = any(keyword in name_lower for keyword in uk_keywords)
-                    
-                    if has_usa and not has_australia:
-                        if has_uk:
-                            print(f"  USA+UK mixed group: {group_name}")
-                        else:
-                            print(f"  Pure USA group: {group_name}")
-                        filtered_group_data.append((group_name, member_count, elem))
+            matched_groups = []  # List of (original_name, element, member_count)
+            unmatched_targets = list(target_group_list)  # Copy of targets to track unmatched
             
-            elif group_types == 'australia':
-                print("Filtering Australia groups: must have Australia keywords, can optionally have UK keywords but NOT USA keywords")
-                for group_name, member_count, elem in group_data:
-                    name_lower = group_name.lower()
-                    has_australia = any(keyword in name_lower for keyword in australia_keywords)
-                    has_usa = any(keyword in name_lower for keyword in usa_keywords)
-                    has_uk = any(keyword in name_lower for keyword in uk_keywords)
-                    
-                    if has_australia and not has_usa:
-                        if has_uk:
-                            print(f"  Australia+UK mixed group: {group_name}")
-                        else:
-                            print(f"  Pure Australia group: {group_name}")
-                        filtered_group_data.append((group_name, member_count, elem))
-            
-            else:  # group_types == 'others'
-                print("Filtering 'others' groups: Excluding pure UK, USA, and Australia groups, but including mixed groups")
-                for group_name, member_count, elem in group_data:
-                    name_lower = group_name.lower()
-                    has_uk = any(keyword in name_lower for keyword in uk_keywords)
-                    has_usa = any(keyword in name_lower for keyword in usa_keywords)
-                    has_australia = any(keyword in name_lower for keyword in australia_keywords)
-                    
-                    # Exclude pure country groups
-                    is_pure_uk = has_uk and not has_usa and not has_australia
-                    is_pure_usa = has_usa and not has_uk and not has_australia
-                    is_pure_australia = has_australia and not has_uk and not has_usa
-                    
-                    # Include: no country keywords, or mixed country groups
-                    if not is_pure_uk and not is_pure_usa and not is_pure_australia:
-                        if not has_uk and not has_usa and not has_australia:
-                            print(f"  Other (no country): {group_name}")
-                        elif has_uk and (has_usa or has_australia):
-                            print(f"  Mixed UK+other: {group_name}")
-                        elif has_usa and has_australia:
-                            print(f"  Mixed USA+Australia: {group_name}")
-                        else:
-                            print(f"  Other category: {group_name}")
-                        filtered_group_data.append((group_name, member_count, elem))
-            
-            print(f"Number of filtered groups ({group_types}): {len(filtered_group_data)}")
-            if filtered_group_data:
-                print(f"Filtered groups ({group_types}):")
-                for i, (name, count, _) in enumerate(filtered_group_data, 1):
-                    print(f"{i}. {name}: {count} members")
-
-            # Sort filtered groups by member count based on strategy
-            if last_selection_strategy == 'highest':
-                # Sort descending for highest member counts
-                filtered_group_data.sort(key=lambda x: x[1], reverse=True)
-                print(f"Filtered groups sorted by highest member count ({group_types}):")
-            else:
-                # For 'average' strategy, we'll select groups around the median
-                filtered_group_data.sort(key=lambda x: x[1])
-                print(f"Filtered groups sorted by lowest member count ({group_types}):")
-            
-            for i, (name, count, _) in enumerate(filtered_group_data, 1):
-                print(f"{i}. {name}: {count} members")
-
-            # Select groups based on strategy
-            target_groups = []
-            
-            if last_selection_strategy == 'highest':
-                # Select top 3 highest member count groups
-                for group_name, _, _ in filtered_group_data:
-                    if group_name not in last_selected and len(target_groups) < 3:
-                        target_groups.append(group_name)
-            else:
-                # Select groups around the median (average strategy)
-                if len(filtered_group_data) >= 3:
-                    # Find median index
-                    median_idx = len(filtered_group_data) // 2
-                    
-                    # Select groups around median: median-1, median, median+1
-                    candidate_indices = [median_idx-1, median_idx, median_idx+1]
-                    
-                    for idx in candidate_indices:
-                        if 0 <= idx < len(filtered_group_data):
-                            group_name = filtered_group_data[idx][0]
-                            if group_name not in last_selected and len(target_groups) < 3:
-                                target_groups.append(group_name)
-                    
-                    # If we still need groups, fill with other median-adjacent groups
-                    if len(target_groups) < 3:
-                        offset = 2
-                        while len(target_groups) < 3 and offset < len(filtered_group_data):
-                            for direction in [-1, 1]:
-                                idx = median_idx + (direction * offset)
-                                if 0 <= idx < len(filtered_group_data):
-                                    group_name = filtered_group_data[idx][0]
-                                    if group_name not in last_selected and group_name not in target_groups and len(target_groups) < 3:
-                                        target_groups.append(group_name)
-                            offset += 1
+            for group_name, member_count, elem, is_selected in group_data:
+                normalized_group = normalize_group_name(group_name)
+                
+                # Check if this group matches any target
+                for norm_target, original_target in normalized_targets.items():
+                    if normalized_group == norm_target:
+                        print(f"✓ MATCH FOUND: '{group_name}' matches target '{original_target}'")
+                        matched_groups.append((group_name, member_count, elem, is_selected))
+                        if original_target in unmatched_targets:
+                            unmatched_targets.remove(original_target)
+                        break
                 else:
-                    # If less than 3 groups, just select all
-                    for group_name, _, _ in filtered_group_data:
-                        if group_name not in last_selected and len(target_groups) < 3:
-                            target_groups.append(group_name)
+                    print(f"✗ No match: '{group_name}'")
             
-            if not target_groups:
-                print(f"No eligible {group_types} groups available (all filtered groups in last_selected).")
+            print(f"\nMatched groups found: {len(matched_groups)}")
+            print(f"Unmatched targets: {unmatched_targets if unmatched_targets else 'None'}")
+            print("="*80 + "\n")
+            
+            # Determine which groups to select (up to 3, in order of target list)
+            groups_to_select = []
+            for target in target_group_list:
+                if len(groups_to_select) >= 3:
+                    break
+                # Find matched group for this target
+                for group_name, member_count, elem, is_selected in matched_groups:
+                    norm_group = normalize_group_name(group_name)
+                    norm_target = normalize_group_name(target)
+                    if norm_group == norm_target and group_name not in groups_to_select:
+                        groups_to_select.append(group_name)
+                        print(f"Target '{target}' will be selected (matched with '{group_name}')")
+                        break
+                else:
+                    print(f"Target '{target}' not found in available groups - skipping")
+            
+            if not groups_to_select:
+                print("No target groups found in the popup window.")
                 return False
             
-            print(f"Target groups to select (not in last_selected, {group_types}, strategy: {last_selection_strategy}): {target_groups}")
+            print(f"\nFinal groups to select (up to 3): {groups_to_select}")
 
-            current_selected = []
-            for group_name in selected_groups:
-                if group_name in target_groups:
-                    current_selected.append(group_name)
-                    print(f"Keeping pre-selected group in target: {group_name}")
-                else:
-                    elem = group_element_map.get(group_name)
-                    if elem:
-                        try:
-                            clickable = elem.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
-                                       elem.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
-                                       [elem]
-                            clickable = clickable[0]
-                            
-                            tag = clickable.tag_name
-                            class_attr = clickable.get_attribute('class') or ''
-                            role = clickable.get_attribute('role') or ''
-                            data_testid = clickable.get_attribute('data-testid') or ''
-                            print(f"Attempting to unselect group: {group_name}, Tag={tag}, Class={class_attr}, Role={role}, Data-testid={data_testid}")
-
-                            for attempt in range(3):
-                                try:
-                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
-                                    time.sleep(1.0)
-                                    driver.execute_script("arguments[0].click();", clickable)
-                                    time.sleep(1.5)
-                                    
-                                    is_selected_now = False
-                                    aria_checked = elem.get_attribute('aria-checked')
-                                    if aria_checked and aria_checked.lower() == 'true':
+            # Unselect all currently selected groups that are not in our target list
+            for group_name, member_count, elem, is_selected in group_data:
+                if is_selected and group_name not in groups_to_select:
+                    try:
+                        clickable = elem.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
+                                   elem.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
+                                   [elem]
+                        clickable = clickable[0]
+                        
+                        print(f"Attempting to unselect non-target group: {group_name}")
+                        for attempt in range(3):
+                            try:
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
+                                time.sleep(1.0)
+                                driver.execute_script("arguments[0].click();", clickable)
+                                time.sleep(1.5)
+                                
+                                # Verify unselection
+                                is_selected_now = False
+                                aria_checked = elem.get_attribute('aria-checked')
+                                if aria_checked and aria_checked.lower() == 'true':
+                                    is_selected_now = True
+                                else:
+                                    checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
+                                    if checkbox and checkbox[0].is_selected():
                                         is_selected_now = True
                                     else:
-                                        checkbox = elem.find_elements(By.XPATH, ".//input[@type='checkbox']")
-                                        if checkbox and checkbox[0].is_selected():
+                                        class_attr = elem.get_attribute('class') or ''
+                                        if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
                                             is_selected_now = True
                                         else:
-                                            class_attr = elem.get_attribute('class') or ''
-                                            if any(sel_class in class_attr for sel_class in ['selected', 'checked', 'active', 'x1yztbdb', 'x1e558r4']):
+                                            checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
+                                            if checkmark:
                                                 is_selected_now = True
-                                            else:
-                                                checkmark = elem.find_elements(By.XPATH, ".//*[contains(@class, 'checkmark') or contains(@class, 'selected') or contains(@class, 'icon')]")
-                                                if checkmark:
-                                                    is_selected_now = True
-                                    
-                                    if not is_selected_now:
-                                        print(f"Unselected group: {group_name} (Verified)")
-                                        break
-                                    else:
-                                        print(f"Attempt {attempt + 1} failed to verify unselection for group: {group_name}")
-                                except Exception as click_e:
-                                    print(f"Attempt {attempt + 1} failed to unselect group {group_name}: {str(click_e)}")
-                                    if attempt == 2:
-                                        print(f"Failed to unselect group after retries: {group_name}")
-                        except Exception as e:
-                            print(f"Failed to process unselection for group {group_name}: {str(e)}")
+                                
+                                if not is_selected_now:
+                                    print(f"Unselected group: {group_name} (Verified)")
+                                    break
+                                else:
+                                    print(f"Attempt {attempt + 1} failed to verify unselection for group: {group_name}")
+                            except Exception as click_e:
+                                print(f"Attempt {attempt + 1} failed to unselect group {group_name}: {str(click_e)}")
+                    except Exception as e:
+                        print(f"Failed to process unselection for group {group_name}: {str(e)}")
 
-            newly_selected = []
-            for group_name in target_groups:
-                if group_name in current_selected:
-                    continue
-                elem = group_element_map.get(group_name)
+            # Select target groups
+            current_selected = []
+            for group_name in groups_to_select:
+                # Find the element for this group
+                elem = None
+                for g_name, m_count, g_elem, is_sel in group_data:
+                    if g_name == group_name:
+                        elem = g_elem
+                        break
+                
                 if not elem:
+                    print(f"Could not find element for group: {group_name}")
                     continue
+                
                 try:
                     clickable = elem.find_elements(By.XPATH, ".//input[@type='checkbox']") or \
                                elem.find_elements(By.XPATH, ".//label | .//div[@role='checkbox'] | .//div[@data-testid or contains(@class, 'clickable') or contains(@class, 'selectable')]") or \
                                [elem]
                     clickable = clickable[0]
                     
-                    tag = clickable.tag_name
-                    class_attr = clickable.get_attribute('class') or ''
-                    role = clickable.get_attribute('role') or ''
-                    data_testid = clickable.get_attribute('data-testid') or ''
-                    print(f"Attempting to click group: {group_name}, Tag={tag}, Class={class_attr}, Role={role}, Data-testid={data_testid}")
-
+                    print(f"Attempting to select group: {group_name}")
+                    
                     for attempt in range(3):
                         try:
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable)
@@ -4644,6 +3438,7 @@ def selectgroups():
                             driver.execute_script("arguments[0].click();", clickable)
                             time.sleep(1.5)
                             
+                            # Verify selection
                             is_selected_now = False
                             aria_checked = elem.get_attribute('aria-checked')
                             if aria_checked and aria_checked.lower() == 'true':
@@ -4662,7 +3457,6 @@ def selectgroups():
                                             is_selected_now = True
                             
                             if is_selected_now:
-                                newly_selected.append(group_name)
                                 current_selected.append(group_name)
                                 print(f"Selected group: {group_name} (Verified)")
                                 break
@@ -4670,31 +3464,110 @@ def selectgroups():
                                 print(f"Attempt {attempt + 1} failed to verify selection for group: {group_name}")
                         except Exception as click_e:
                             print(f"Attempt {attempt + 1} failed to click group {group_name}: {str(click_e)}")
-                            if attempt == 2:
-                                print(f"Failed to select group after retries: {group_name}")
                 except Exception as e:
                     print(f"Failed to process group {group_name}: {str(e)}")
             
-            if newly_selected:
-                print(f"Newly selected groups: {', '.join(newly_selected)}")
-            else:
-                print("No additional groups were selected.")
-            
-            print(f"Final number of selected groups: {len(current_selected)}")
+            print(f"\nFinal number of selected groups: {len(current_selected)}")
             if current_selected:
                 print(f"Final selected groups: {', '.join(current_selected)}")
 
-            json_data = {
-                "groups_selected": {
-                    "last_selected": last_selected,
-                    "current_selected": {
-                        "1st": current_selected[0] if len(current_selected) > 0 else "",
-                        "2nd": current_selected[1] if len(current_selected) > 1 else "",
-                        "3rd": current_selected[2] if len(current_selected) > 2 else ""
-                    },
-                    "status": f"selection verified ({group_types})"
+            return click_save_button(popup_window, json_path, json_exists, last_selected, current_selected)
+
+        except Exception as e:
+            print(f"Failed to locate popup window or process groups: {str(e)}")
+            return False
+
+    def click_save_button(popup_window, json_path, json_exists, last_selected, current_selected):
+        """Click the Save button and update JSON"""
+        try:
+            save_button = None
+            for attempt in range(3):
+                try:
+                    save_button = wait.until(
+                        EC.element_to_be_clickable((
+                            By.XPATH,
+                            ".//*[text()='Save'][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
+                            ".//*[contains(@aria-label, 'Save')][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
+                            ".//*[text()='Cancel']//following::*[text()='Save'][1] | "
+                            ".//div[@role='button' and (text()='Save' or contains(@aria-label, 'Save'))][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))]"
+                        )),
+                        popup_window
+                    )
+                    tag = save_button.tag_name
+                    class_attr = save_button.get_attribute('class') or ''
+                    role = save_button.get_attribute('role') or ''
+                    aria_label = save_button.get_attribute('aria-label') or ''
+                    aria_disabled = save_button.get_attribute('aria-disabled') or ''
+                    text = save_button.text.strip()[:100]
+                    print(f"Found 'Save' button (Attempt {attempt + 1}): Tag={tag}, Class={class_attr}, Role={role}, Aria-label={aria_label}, Aria-disabled={aria_disabled}, Text='{text}'")
+                    break
+                except (TimeoutException, StaleElementReferenceException) as e:
+                    print(f"Attempt {attempt + 1} to locate 'Save' button failed: {str(e)}")
+                    if attempt == 2:
+                        print("Failed to locate 'Save' button after retries.")
+                        return False
+                    time.sleep(1)
+
+            if save_button and aria_disabled.lower() == 'true':
+                print("Save button is disabled. Cannot proceed with click.")
+                return False
+            
+            for attempt in range(3):
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", save_button)
+                    time.sleep(0.7)
+                    driver.execute_script("arguments[0].click();", save_button)
+                    print(f"Clicked 'Save' button to confirm group selections (Attempt {attempt + 1}).")
+                    break
+                except Exception as click_e:
+                    print(f"Attempt {attempt + 1} to click 'Save' button failed: {str(click_e)}")
+                    if attempt == 2:
+                        print("Failed to click 'Save' button after retries.")
+                        return False
+            
+            try:
+                time.sleep(1)
+                popup_still_present = driver.find_elements(By.XPATH, 
+                    "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
+                    "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
+                    "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
+                )
+                if not popup_still_present:
+                    print("Popup window closed successfully.")
+                else:
+                    print("Popup window did not close after clicking Save.")
+                    return False
+            except Exception as e:
+                print(f"Error verifying popup closure: {str(e)}")
+                return False
+            
+            # Save to JSON
+            if not current_selected:
+                # No groups selected case
+                json_data = {
+                    "groups_selected": {
+                        "last_selected": last_selected,
+                        "current_selected": {
+                            "1st": "",
+                            "2nd": "",
+                            "3rd": ""
+                        },
+                        "status": "no groups selected"
+                    }
                 }
-            }
+            else:
+                # Groups selected case
+                json_data = {
+                    "groups_selected": {
+                        "last_selected": last_selected,
+                        "current_selected": {
+                            "1st": current_selected[0] if len(current_selected) > 0 else "",
+                            "2nd": current_selected[1] if len(current_selected) > 1 else "",
+                            "3rd": current_selected[2] if len(current_selected) > 2 else ""
+                        },
+                        "status": f"selection verified (target groups: {len(current_selected)} selected)"
+                    }
+                }
 
             try:
                 if not json_exists:
@@ -4707,166 +3580,76 @@ def selectgroups():
                     with open(json_path, 'r', encoding='utf-8') as f:
                         existing_data = json.load(f)
                     existing_data['groups_selected']['current_selected'] = json_data['groups_selected']['current_selected']
-                    existing_data['groups_selected']['status'] = f"selection verified ({group_types})"
+                    existing_data['groups_selected']['status'] = json_data['groups_selected']['status']
                     with open(json_path, 'w', encoding='utf-8') as f:
                         json.dump(existing_data, f, indent=4)
                     print(f"Updated JSON file with current_selected: {json_data['groups_selected']['current_selected']}")
             except Exception as e:
                 print(f"Error writing to JSON file: {str(e)}")
-
-            # Update laststate.json with this selection strategy
-            try:
-                if os.path.exists(laststate_path) and os.path.getsize(laststate_path) > 0:
-                    with open(laststate_path, 'r', encoding='utf-8') as f:
-                        laststate_data = json.load(f)
-                else:
-                    laststate_data = {
-                        "setwebschedule_previous_input": [
-                            "mm_hh_date",
-                            "mm_date_hh",
-                            "date_hh_mm",
-                            "date_mm_hh",
-                            "hh_date_mm",
-                            "hh_mm_date"
-                        ],
-                        "last_used": "hh_mm_date",
-                        "write_caption_previous_behaviors": [
-                            "f_f_s",
-                            "s_f_s",
-                            "f_s_f",
-                            "s_s_f",
-                            "f_s_s"
-                        ],
-                        "caption_last_used": "f_s_s",
-                        "toggleaddphoto_last_region": [
-                            1536.0,
-                            960.0
-                        ]
-                    }
-                
-                # Initialize last_selected_group if not exists
-                if 'last_selected_group' not in laststate_data:
-                    laststate_data['last_selected_group'] = []
-                
-                # Add current selection record
-                new_entry = {
-                    "group_type": group_types,
-                    "members": last_selection_strategy,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                laststate_data['last_selected_group'].append(new_entry)
-                
-                # Keep only the last 10 entries to prevent file from growing too large
-                if len(laststate_data['last_selected_group']) > 10:
-                    laststate_data['last_selected_group'] = laststate_data['last_selected_group'][-10:]
-                
-                # Write back to file
-                os.makedirs(os.path.dirname(laststate_path), exist_ok=True)
-                with open(laststate_path, 'w', encoding='utf-8') as f:
-                    json.dump(laststate_data, f, indent=4)
-                
-                print(f"Updated laststate.json with selection record: {group_types} - {last_selection_strategy}")
-                
-            except Exception as e:
-                print(f"Error updating laststate.json: {str(e)}")
-
-            try:
-                save_button = None
-                for attempt in range(3):
-                    try:
-                        save_button = wait.until(
-                            EC.element_to_be_clickable((
-                                By.XPATH,
-                                ".//*[text()='Save'][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[contains(@aria-label, 'Save')][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))] | "
-                                ".//*[text()='Cancel']//following::*[text()='Save'][1] | "
-                                ".//div[@role='button' and (text()='Save' or contains(@aria-label, 'Save'))][not(contains(@class, 'x1q0g3np') or contains(@class, 'x1i10hfl'))]"
-                            )),
-                            popup_window
-                        )
-                        tag = save_button.tag_name
-                        class_attr = save_button.get_attribute('class') or ''
-                        role = save_button.get_attribute('role') or ''
-                        aria_label = save_button.get_attribute('aria-label') or ''
-                        aria_disabled = save_button.get_attribute('aria-disabled') or ''
-                        text = save_button.text.strip()[:100]
-                        print(f"Found 'Save' button (Attempt {attempt + 1}): Tag={tag}, Class={class_attr}, Role={role}, Aria-label={aria_label}, Aria-disabled={aria_disabled}, Text='{text}'")
-                        break
-                    except (TimeoutException, StaleElementReferenceException) as e:
-                        print(f"Attempt {attempt + 1} to locate 'Save' button failed: {str(e)}")
-                        if attempt == 2:
-                            print("Failed to locate 'Save' button after retries.")
-                            return False
-                        time.sleep(1)
-
-                if save_button and aria_disabled.lower() == 'true':
-                    print("Save button is disabled. Cannot proceed with click.")
-                    return False
-                
-                for attempt in range(3):
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", save_button)
-                        time.sleep(0.7)
-                        driver.execute_script("arguments[0].click();", save_button)
-                        print(f"Clicked 'Save' button to confirm group selections (Attempt {attempt + 1}).")
-                        break
-                    except Exception as click_e:
-                        print(f"Attempt {attempt + 1} to click 'Save' button failed: {str(click_e)}")
-                        if attempt == 2:
-                            print("Failed to click 'Save' button after retries.")
-                            return False
-                
-                try:
-                    time.sleep(1)
-                    popup_still_present = driver.find_elements(By.XPATH, 
-                        "//div[contains(@class, 'modal') or @role='dialog' or contains(@class, 'sheet') or contains(@class, 'popover')]"
-                        "[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publish to facebook groups') or "
-                        "contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'choose up to three groups')]"
-                    )
-                    if not popup_still_present:
-                        print("Popup window closed successfully.")
-                    else:
-                        print("Popup window did not close after clicking Save.")
-                        return False
-                except Exception as e:
-                    print(f"Error verifying popup closure: {str(e)}")
-                    return False
-                
-            except Exception as e:
-                print(f"Failed to locate or click 'Save' button: {str(e)}")
-                return False
-
-            if group_count == 0:
-                print("No group elements found in the popup.")
-                return False
             
-            selectgroups.groups_selected = True
-            selectgroups.failed_attempts = 0  # Reset failed attempts on success
-            print("Updated tracker: groups_selected set to True, failed_attempts reset to 0")
             return True
 
         except Exception as e:
-            print(f"Failed to locate popup window or process groups: {str(e)}")
+            print(f"Failed to locate or click 'Save' button: {str(e)}")
             return False
-    else:
-        print(f"Invalid group config: '{group_config}'. Defaulting to no group selection.")
-        return False
 
+    # ==================== MAIN EXECUTION ====================
     
-def switch_groups():
+    def main():
+        """Main execution function that orchestrates all steps"""
+        print("\n" + "="*80)
+        print("STARTING SELECTGROUPS FUNCTION")
+        print("="*80)
+        
+        # Step 1: Toggle dropdown
+        if not toggle_dropdown():
+            print("Failed to open dropdown. Exiting.")
+            return False
+        
+        # Step 2: Handle page selection
+        if not handle_page_selection(page_config):
+            print("Failed to handle page selection. Exiting.")
+            return False
+        
+        # Step 3: Click 'See more groups' if needed
+        if group_config in ['none', 'include']:
+            if not click_see_more_groups():
+                print("Failed to click 'See more groups'. Exiting.")
+                return False
+        
+        # Step 4: Handle groups based on config
+        if not handle_groups(group_config, target_group_list, normalized_targets, json_path, json_exists, last_selected):
+            print("Failed to handle groups. Exiting.")
+            return False
+        
+        # Update trackers
+        selectgroups.groups_selected = True
+        selectgroups.failed_attempts = 0
+        print("Updated tracker: groups_selected set to True, failed_attempts reset to 0")
+        
+        print("="*80)
+        print("SELECTGROUPS FUNCTION COMPLETED SUCCESSFULLY")
+        print("="*80 + "\n")
+        
+        return True
+    
+    # Execute main function
+    return main()
+
+def switch_post_typess():
     """
-    Toggle the 'group_types' field in the JSON config between 'uk' and 'others'.
+    Toggle the 'post_types' field in the JSON config between 'uk' and 'others'.
     If current value is 'uk' → rewrite to 'others'
     If current value is 'others' → rewrite to 'uk'
     If missing or invalid → default to 'others'
     """
     if not os.path.exists(JSON_CONFIG_PATH):
-        print(f"Config file {JSON_CONFIG_PATH} does not exist. Creating with default 'group_types': 'others'.")
-        config_data = {"group_types": "others"}
+        print(f"Config file {JSON_CONFIG_PATH} does not exist. Creating with default 'post_types': 'others'.")
+        config_data = {"post_types": "others"}
         os.makedirs(os.path.dirname(JSON_CONFIG_PATH), exist_ok=True)
         with open(JSON_CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=4)
-        print("Created config with group_types = 'others'")
+        print("Created config with post_types = 'others'")
         return True
 
     try:
@@ -4876,24 +3659,21 @@ def switch_groups():
         print(f"Error reading config {JSON_CONFIG_PATH}: {str(e)}. Initializing with defaults.")
         config_data = {}
 
-    current_type = config_data.get('group_types', 'others').strip().lower()
+    current_type = config_data.get('post_types', 'others').strip().lower()
     
     new_type = 'uk' if current_type == 'others' else 'others'
     
-    config_data['group_types'] = new_type
+    config_data['post_types'] = new_type
 
     try:
         with open(JSON_CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(config_data, f, indent=4)
-        print(f"Successfully toggled group_types: '{current_type}' → '{new_type}'")
+        print(f"Successfully toggled post_types: '{current_type}' → '{new_type}'")
         sync_last_schedule_between_groups()
         return True
     except Exception as e:
         print(f"Failed to write to config {JSON_CONFIG_PATH}: {str(e)}")
         return False
-
-
-
 
 def toggleaddphoto():
     # ---- STATE TRACKER ----
@@ -5054,7 +3834,6 @@ def toggleaddphoto():
 
     except Exception as e:
         print(f"Error in toggleaddphoto(): {e}")
-
 
 def toggleaddphoto_():
     # ---- STATE TRACKER ----
@@ -5367,6 +4146,7 @@ def confirmselectedmedia():
 
     
     # SINGLE confirm_fileisready call
+
 def confirm_fileisready():
     file_name = pyautogui.locateOnScreen(f'{GUI_PATH}\\file_name.png', confidence=0.8)
     pc = pyautogui.locateOnScreen(f'{GUI_PATH}\\pc.png', confidence=0.8)
@@ -5383,25 +4163,105 @@ def confirm_fileisready():
         pyautogui.hotkey('alt', 'f4')
         return False
 
-
+def reset_used_captions_record():
+    """
+    Alternative: Reset the used captions tracking file by emptying it.
+    This keeps the file but removes all contents (sets to empty list).
+    """
+    try:
+        # Load configuration
+        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as json_file:
+            config = json.load(json_file)
+        
+        author = config['author'].strip()
+        author_lower = author.lower()
+        post_types = config.get('post_types', 'others').lower().strip()
+        
+        if post_types not in ['uk', 'others']:
+            post_types = 'others'
+        
+        # Construct the captions file path
+        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({post_types}).json"
+        
+        # Try alternative casing if main file not found
+        if not os.path.exists(json_path):
+            alt_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author_lower}({post_types}).json"
+            if os.path.exists(alt_path):
+                json_path = alt_path
+            else:
+                print(f"❌ Captions file not found: {json_path}")
+                return False
+        
+        # Path to the used captions tracking file
+        used_captions_path = os.path.join(os.path.dirname(json_path), "used_captions.json")
+        
+        # Read current records if file exists
+        count = 0
+        if os.path.exists(used_captions_path):
+            try:
+                with open(used_captions_path, 'r', encoding='utf-8') as f:
+                    used_captions = json.load(f)
+                count = len(used_captions)
+                print(f"📊 Found {count} used caption record(s) in: {used_captions_path}")
+            except Exception as e:
+                print(f"⚠️ Could not read tracking file: {e}")
+        
+        print(f"\n⚠️ This will reset the used captions record for author: {author}")
+        print(f"   Tracking file: {used_captions_path}")
+        
+        if count > 0:
+            print(f"   {count} caption(s) will be available again")
+        else:
+            print("   No records to reset")
+        
+        response = input("\nAre you sure you want to reset the used captions record? (y/n): ")
+        
+        if response.lower() != 'y':
+            print("❌ Operation cancelled")
+            return False
+        
+        # Empty the tracking file (set to empty list)
+        try:
+            with open(used_captions_path, 'w', encoding='utf-8') as f:
+                json.dump([], f, indent=2)
+            print(f"✅ Successfully reset: {used_captions_path}")
+            
+            if count > 0:
+                print(f"📊 Cleared {count} used caption record(s)")
+            else:
+                print("✅ Record already empty - no changes made")
+            
+            print("✅ All captions are now available for use again")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error resetting tracking file: {e}")
+            return False
+        
+    except Exception as e:
+        print(f"❌ Error resetting used captions record: {e}")
+        return False
+      
 def writecaption_ocr():
     """Enter a random caption using GUI automation with OCR text detection, 
-    constructing the JSON path using author and group_types from pageandgroupauthors.json."""
+    constructing the JSON path using author and post_types from pageandgroupauthors.json."""
+    reset_used_captions_record()
     try:
         # Load configuration from JSON
         with open(JSON_CONFIG_PATH, 'r') as json_file:
             config = json.load(json_file)
         author = config['author']
-        group_types = config.get('group_types', 'others').lower()  # Default to 'others' if not found
-        print(f"Read from {JSON_CONFIG_PATH}: author='{author}', group_types='{group_types}'")
+        post_types = config.get('post_types', 'others').lower()  # Default to 'others' if not found
+        captions_state = config.get('captions_state', 'mixed').lower().strip()
+        print(f"Read from {JSON_CONFIG_PATH}: author='{author}', post_types='{post_types}', captions_state='{captions_state}'")
         
-        # Validate group_types
-        if group_types not in ['uk', 'others']:
-            print(f"Invalid group_types value: '{group_types}'. Defaulting to 'others'.")
-            group_types = 'others'
+        # Validate post_types
+        if post_types not in ['uk', 'others']:
+            print(f"Invalid post_types value: '{post_types}'. Defaulting to 'others'.")
+            post_types = 'others'
         
-        # Construct the path to the author's captions JSON file using author and group_types
-        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({group_types}).json"
+        # Construct the path to the author's captions JSON file using author and post_types
+        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({post_types}).json"
         print(f"Constructed JSON path: {json_path}")
         
         # Check if the JSON file exists
@@ -5412,9 +4272,66 @@ def writecaption_ocr():
         with open(json_path, 'r') as file:
             captions = json.load(file)
         
-        # Select a random caption
-        selected_caption = random.choice(captions)['description']
-        print(f"Selected random caption for author '{author}' (group_types '{group_types}', GUI): '{selected_caption}'")
+        # --------------------------------------------------------------------- #
+        # Handle FIXED captions state - track used captions
+        # --------------------------------------------------------------------- #
+        used_captions_path = os.path.join(os.path.dirname(json_path), "used_captions.json")
+        used_captions = []
+        available_captions = []
+        caption_id = None
+        selected_caption = None
+        
+        if captions_state == "fixed":
+            print(f"\n📌 FIXED CAPTIONS MODE ENABLED - Tracking used captions (GUI)")
+            
+            # Load used captions if file exists
+            if os.path.exists(used_captions_path):
+                try:
+                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                        used_captions = json.load(f)
+                    print(f"📊 Loaded {len(used_captions)} used captions from: {used_captions_path}")
+                except Exception as e:
+                    print(f"⚠️ Error loading used_captions.json: {e}")
+                    used_captions = []
+            
+            # Filter out used captions
+            available_captions = []
+            for caption_entry in captions:
+                caption_id_check = caption_entry.get('id') or caption_entry.get('description')
+                if caption_id_check not in used_captions:
+                    available_captions.append(caption_entry)
+            
+            print(f"📊 Total captions: {len(captions)}, Used: {len(used_captions)}, Available: {len(available_captions)}")
+            
+            # Check if all captions have been used
+            if len(available_captions) == 0:
+                print("⚠️ ALL CAPTIONS HAVE BEEN USED! Resetting used captions list...")
+                used_captions = []
+                available_captions = captions.copy()
+                print(f"📊 Reset - Available captions: {len(available_captions)}")
+                
+                # Reset the used_captions.json file
+                try:
+                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                        json.dump([], f, indent=2)
+                    print("✅ Reset used_captions.json")
+                except Exception as e:
+                    print(f"⚠️ Error resetting used_captions.json: {e}")
+            
+            # Select from available captions
+            selected_caption_entry = random.choice(available_captions)
+            selected_caption = selected_caption_entry['description']
+            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
+            
+            print(f"📝 Selected caption (ID: {caption_id[:50] if caption_id else 'N/A'}...): '{selected_caption[:100] if selected_caption else ''}...'")
+            
+        else:
+            # MIXED mode - original behavior
+            print(f"\n🔄 MIXED CAPTIONS MODE - No tracking (GUI)")
+            selected_caption_entry = random.choice(captions)
+            selected_caption = selected_caption_entry['description']
+            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
+            print(f"Selected random caption for author '{author}' (post_types '{post_types}', GUI): '{selected_caption}'")
         
         # Static variable to store the last written caption
         if not hasattr(writecaption_ocr, 'last_written_caption'):
@@ -5503,12 +4420,48 @@ def writecaption_ocr():
                     writecaption_ocr.last_written_caption = selected_caption
                     print(f"Saved caption to last_written_caption (GUI): '{selected_caption}'")
                     time.sleep(1)
+                    
+                    # ---- SAVE USED CAPTION IF IN FIXED MODE ----
+                    if captions_state == "fixed" and caption_id:
+                        try:
+                            # Add the caption ID to used captions
+                            if caption_id not in used_captions:
+                                used_captions.append(caption_id)
+                            
+                            # Save to used_captions.json
+                            with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                json.dump(used_captions, f, indent=2)
+                            print(f"✅ Saved used caption to: {used_captions_path}")
+                            print(f"📊 Total used captions: {len(used_captions)}")
+                        except Exception as e:
+                            print(f"⚠️ Error saving used caption: {e}")
+                    
+                    return True
                 
                 elif current_text == selected_caption or current_text == writecaption_ocr.last_written_caption:
                     print(f"Text '{current_text}' is already correct in the text field (GUI). Skipping write operation.")
                     if current_text == selected_caption:
                         writecaption_ocr.last_written_caption = selected_caption
                         print(f"Updated last_written_caption to match current text (GUI): '{selected_caption}'")
+                        
+                        # Save used caption if in fixed mode and caption wasn't saved before
+                        if captions_state == "fixed" and caption_id:
+                            try:
+                                # Check if already saved
+                                if os.path.exists(used_captions_path):
+                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                                        current_used = json.load(f)
+                                else:
+                                    current_used = []
+                                
+                                if caption_id not in current_used:
+                                    current_used.append(caption_id)
+                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                        json.dump(current_used, f, indent=2)
+                                    print(f"✅ Saved used caption to: {used_captions_path}")
+                                    print(f"📊 Total used captions: {len(current_used)}")
+                            except Exception as e:
+                                print(f"⚠️ Error saving used caption: {e}")
                     return True
                 
                 else:
@@ -5520,6 +4473,25 @@ def writecaption_ocr():
                         pyautogui.write(writecaption_ocr.last_written_caption)
                         print(f"Replaced text with last written caption (GUI): '{writecaption_ocr.last_written_caption}'")
                         time.sleep(1)
+                        
+                        # Save used caption if in fixed mode
+                        if captions_state == "fixed" and caption_id:
+                            try:
+                                # Check if already saved
+                                if os.path.exists(used_captions_path):
+                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                                        current_used = json.load(f)
+                                else:
+                                    current_used = []
+                                
+                                if caption_id not in current_used:
+                                    current_used.append(caption_id)
+                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                        json.dump(current_used, f, indent=2)
+                                    print(f"✅ Saved used caption to: {used_captions_path}")
+                                    print(f"📊 Total used captions: {len(current_used)}")
+                            except Exception as e:
+                                print(f"⚠️ Error saving used caption: {e}")
                     else:
                         pyautogui.hotkey('ctrl', 'a')
                         pyautogui.hotkey('delete')
@@ -5528,6 +4500,25 @@ def writecaption_ocr():
                         writecaption_ocr.last_written_caption = selected_caption
                         print(f"No previous caption saved. Entered new caption (GUI): '{selected_caption}'")
                         time.sleep(1)
+                        
+                        # Save used caption if in fixed mode
+                        if captions_state == "fixed" and caption_id:
+                            try:
+                                # Check if already saved
+                                if os.path.exists(used_captions_path):
+                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                                        current_used = json.load(f)
+                                else:
+                                    current_used = []
+                                
+                                if caption_id not in current_used:
+                                    current_used.append(caption_id)
+                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                        json.dump(current_used, f, indent=2)
+                                    print(f"✅ Saved used caption to: {used_captions_path}")
+                                    print(f"📊 Total used captions: {len(current_used)}")
+                            except Exception as e:
+                                print(f"⚠️ Error saving used caption: {e}")
                 
                 return True
             
@@ -5544,11 +4535,9 @@ def writecaption_ocr():
     except Exception as e:
         print(f"Failed to enter text (GUI): {str(e)}")
         return False
-
-
-
-
+     
 def writecaption_element():
+    reset_used_captions_record()
     # ---- EARLY EXIT ----
     if getattr(writecaption_element, 'has_written', False):
         print("\nCAPTION ALREADY WRITTEN. SKIPPING.")
@@ -5557,7 +4546,7 @@ def writecaption_element():
     print("\nLOCATING COMPOSER (NIGERIA FAST MODE - TYPING ONLY)")
 
     # --------------------------------------------------------------------- #
-    # 0. Load caption
+    # 0. Load caption and config
     # --------------------------------------------------------------------- #
     try:
         # Assuming JSON_CONFIG_PATH, json, os, random, WebDriverWait, EC, By, ActionChains, time, Keys, driver are defined/imported in the scope
@@ -5567,17 +4556,26 @@ def writecaption_element():
         author = config['author'].strip()
         author_lower = author.lower()  # For case-insensitive path construction
         
-        group_types = config.get('group_types', 'others').lower().strip()
-        if group_types not in ['uk', 'others']:
-            group_types = 'others'
+        # Get include_profile_link flag
+        include_profile_link = config.get('include_profile_link', False)
+        
+        # Get tag value
+        tag = config.get('tag', '').strip()
+        
+        # Get captions_state
+        captions_state = config.get('captions_state', 'mixed').lower().strip()
+        
+        post_types = config.get('post_types', 'others').lower().strip()
+        if post_types not in ['uk', 'others']:
+            post_types = 'others'
         
         # Case-insensitive filename construction
-        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({group_types}).json"
+        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({post_types}).json"
         
         # Also try alternative casing variants if main file not found
         if not os.path.exists(json_path):
             # Try lowercase author version
-            alt_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author_lower}({group_types}).json"
+            alt_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author_lower}({post_types}).json"
             if os.path.exists(alt_path):
                 json_path = alt_path
             else:
@@ -5586,8 +4584,99 @@ def writecaption_element():
         with open(json_path, 'r', encoding='utf-8') as f:
             captions = json.load(f)
 
-        selected_caption = random.choice(captions)['description']
+        # --------------------------------------------------------------------- #
+        # 0.1 Handle FIXED captions state - track used captions
+        # --------------------------------------------------------------------- #
+        used_captions_path = os.path.join(os.path.dirname(json_path), "used_captions.json")
+        used_captions = []
+        available_captions = []
+        
+        if captions_state == "fixed":
+            print(f"\n📌 FIXED CAPTIONS MODE ENABLED - Tracking used captions")
+            
+            # Load used captions if file exists
+            if os.path.exists(used_captions_path):
+                try:
+                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                        used_captions = json.load(f)
+                    print(f"📊 Loaded {len(used_captions)} used captions from: {used_captions_path}")
+                except Exception as e:
+                    print(f"⚠️ Error loading used_captions.json: {e}")
+                    used_captions = []
+            
+            # Filter out used captions
+            available_captions = []
+            for caption_entry in captions:
+                caption_id = caption_entry.get('id') or caption_entry.get('description')
+                if caption_id not in used_captions:
+                    available_captions.append(caption_entry)
+            
+            print(f"📊 Total captions: {len(captions)}, Used: {len(used_captions)}, Available: {len(available_captions)}")
+            
+            # Check if all captions have been used
+            if len(available_captions) == 0:
+                print("⚠️ ALL CAPTIONS HAVE BEEN USED! Resetting used captions list...")
+                used_captions = []
+                available_captions = captions.copy()
+                print(f"📊 Reset - Available captions: {len(available_captions)}")
+                
+                # Reset the used_captions.json file
+                try:
+                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                        json.dump([], f, indent=2)
+                    print("✅ Reset used_captions.json")
+                except Exception as e:
+                    print(f"⚠️ Error resetting used_captions.json: {e}")
+            
+            # Select from available captions
+            selected_caption_entry = random.choice(available_captions)
+            selected_caption = selected_caption_entry['description']
+            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
+            
+            print(f"📝 Selected caption (ID: {caption_id[:50]}...): '{selected_caption[:100]}...'")
+            
+        else:
+            # MIXED mode - original behavior
+            print(f"\n🔄 MIXED CAPTIONS MODE - No tracking")
+            selected_caption_entry = random.choice(captions)
+            selected_caption = selected_caption_entry['description']
+            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
+            print(f"Selected caption: '{selected_caption}'")
+        
         print(f"Caption: '{selected_caption}'")
+        
+        # --------------------------------------------------------------------- #
+        # Load profile link if needed
+        # --------------------------------------------------------------------- #
+        profile_link = None
+        if include_profile_link:
+            print("PROFILE LINK ENABLED - Fetching from pageandgroupaccounts.json")
+            try:
+                page_group_path = "C:\\xampp\\htdocs\\serenum\\pageandgroupaccounts.json"
+                if os.path.exists(page_group_path):
+                    with open(page_group_path, 'r', encoding='utf-8') as pg_file:
+                        page_group_data = json.load(pg_file)
+                    
+                    # Case-insensitive matching for author
+                    found = False
+                    for key in page_group_data.keys():
+                        if key.lower() == author_lower:
+                            if 'profile_link' in page_group_data[key]:
+                                profile_link = page_group_data[key]['profile_link']
+                                if isinstance(profile_link, list):
+                                    profile_link = profile_link[0]  # Take first link if it's a list
+                                print(f"✅ Found profile link for '{author}': {profile_link}")
+                                found = True
+                            else:
+                                print(f"⚠️ No profile_link found for '{author}' in pageandgroupaccounts.json")
+                            break
+                    
+                    if not found:
+                        print(f"⚠️ Author '{author}' not found in pageandgroupaccounts.json")
+                else:
+                    print(f"⚠️ pageandgroupaccounts.json not found at: {page_group_path}")
+            except Exception as e:
+                print(f"⚠️ Error loading profile link: {e}")
 
     except Exception as e:
         print(f"JSON error: {e}")
@@ -5738,7 +4827,285 @@ def writecaption_element():
     print(f"USING: {next_behavior_key.upper()}")
 
     # --------------------------------------------------------------------- #
-    # 6. Test candidates – now with case-insensitive caption checking
+    # 6. Helper function to check for mention elements
+    # --------------------------------------------------------------------- #
+    def get_element_text(el):
+        """Get text content from element"""
+        return driver.execute_script(
+            "return arguments[0].textContent || arguments[0].innerText || '';", el
+        ).strip()
+    
+    def check_mention_exists(el, tag):
+        """
+        Check if a mention element exists in the composer.
+        Looks for mention elements (span, a, div with mention-related attributes).
+        """
+        if not tag:
+            return False
+        
+        # Clean tag for comparison
+        tag_clean = tag.lstrip('@').strip()
+        
+        try:
+            # Check for mention elements in the composer
+            mention_xpaths = [
+                # Common mention element patterns
+                ".//span[contains(@class, 'mention')]",
+                ".//a[contains(@class, 'mention')]",
+                ".//div[contains(@class, 'mention')]",
+                ".//span[@data-username]",
+                ".//a[@data-username]",
+                ".//span[contains(@class, 'atwho')]",
+                ".//span[contains(@class, 'Mention')]",
+                ".//span[@data-type='mention']",
+                ".//a[contains(@href, 'profile')]",
+                ".//span[contains(@data-offset-key, 'mention')]",
+                ".//span[contains(@data-text, '@')]",
+                ".//div[contains(@data-type, 'mention')]",
+                ".//span[contains(@class, 'rq0escxv') and contains(@class, 'mentions')]",
+                # Instagram style mentions
+                ".//span[contains(@class, 'Igw0E') and contains(@class, 'mentions')]",
+                ".//span[contains(@data-testid, 'mention')]",
+                ".//span[contains(@role, 'button') and contains(@class, 'mention')]",
+            ]
+            
+            for xpath in mention_xpaths:
+                try:
+                    mentions = el.find_elements(By.XPATH, xpath)
+                    for mention in mentions:
+                        if mention.is_displayed():
+                            # Get mention text or attribute
+                            mention_text = mention.text.strip().lower()
+                            mention_username = mention.get_attribute('data-username') or ''
+                            mention_text_content = mention.get_attribute('textContent') or ''
+                            
+                            # Check if the tag matches
+                            if (tag_clean in mention_text or 
+                                tag_clean in mention_username or 
+                                tag_clean in mention_text_content or
+                                mention_text in tag_clean or
+                                mention_username in tag_clean):
+                                print(f"  ✅ Found mention element: '{mention_text}'")
+                                return True
+                except:
+                    continue
+            
+            # Check for any element that contains @username pattern in the composer
+            try:
+                script = """
+                var elements = arguments[0].getElementsByTagName('*');
+                var tag = arguments[1].toLowerCase();
+                for (var i = 0; i < elements.length; i++) {
+                    var el = elements[i];
+                    var text = el.textContent || el.innerText || '';
+                    if (text && text.toLowerCase().includes(tag)) {
+                        return true;
+                    }
+                }
+                return false;
+                """
+                result = driver.execute_script(script, el, tag_clean)
+                if result:
+                    print(f"  ✅ Found text containing tag in element tree")
+                    return True
+            except:
+                pass
+            
+            return False
+            
+        except Exception as e:
+            print(f"  Error checking mentions: {e}")
+            return False
+    
+    def clear_composer_content(el):
+        """Clear all content from the composer"""
+        try:
+            # Select all and delete
+            ActionChains(driver).click(el).perform()
+            time.sleep(0.1)
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+            time.sleep(0.1)
+            ActionChains(driver).send_keys(Keys.DELETE).perform()
+            time.sleep(0.3)
+            print("  ✅ Composer cleared")
+            return True
+        except Exception as e:
+            print(f"  ❌ Error clearing composer: {e}")
+            return False
+    
+    def add_line_breaks(el, count=5):
+        """Add line breaks using Shift+Enter"""
+        try:
+            ActionChains(driver).click(el).perform()
+            time.sleep(0.2)
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys(Keys.END).key_up(Keys.CONTROL).perform()
+            time.sleep(0.1)
+            
+            print(f"  Adding {count} line breaks...")
+            for line_num in range(1, count + 1):
+                ActionChains(driver).key_down(Keys.SHIFT).send_keys(Keys.ENTER).key_up(Keys.SHIFT).perform()
+                time.sleep(0.05)
+                print(f"    Line break {line_num}/{count} added")
+            return True
+        except Exception as e:
+            print(f"  ❌ Error adding line breaks: {e}")
+            return False
+    
+    def add_tag_with_autocomplete(driver, el, tag, max_attempts=3):
+        """
+        Types a tag, selects suggestion, and confirms it's properly tagged.
+        Uses mention element detection instead of text checking.
+        """
+        if not tag:
+            return True  # No tag to add
+        
+        print(f"  ADDING TAG: {tag}")
+        
+        # Remove @ if present for autocomplete
+        tag_without_at = tag.lstrip('@')
+        
+        for attempt in range(max_attempts):
+            print(f"  Attempt {attempt + 1}/{max_attempts}")
+            
+            try:
+                # Ensure element is focused
+                ActionChains(driver).click(el).perform()
+                time.sleep(0.2)
+                
+                # Move to end of text
+                ActionChains(driver).key_down(Keys.CONTROL).send_keys(Keys.END).key_up(Keys.CONTROL).perform()
+                time.sleep(0.1)
+                
+                # Check if mention already exists
+                if check_mention_exists(el, tag):
+                    print(f"  ✅ Mention already exists: {tag}")
+                    return True
+                
+                # Type the tag with @
+                for char in tag:
+                    ActionChains(driver).send_keys(char).perform()
+                    time.sleep(random.uniform(0.02, 0.05))
+                
+                # Wait for suggestions to load
+                print(f"  Waiting 2 seconds for suggestions to load...")
+                time.sleep(2)
+                
+                # Try to select suggestion
+                suggestion_selected = False
+                
+                # First try clickable suggestions
+                suggestion_xpaths = [
+                    "//div[contains(@class, 'suggestions')]//li",
+                    "//div[contains(@class, 'autocomplete')]//li",
+                    "//ul[contains(@class, 'suggestions')]//li",
+                    "//div[contains(@role, 'listbox')]//li",
+                    "//div[contains(@class, 'menu')]//div[contains(@role, 'option')]",
+                    "//div[contains(@class, 'typeahead')]//li",
+                    "//div[contains(@class, 'dropdown-menu')]//li",
+                    "//div[contains(@class, 'mention-suggestions')]//li",
+                    "//div[@data-testid='typeahead']//li",
+                    "//div[@aria-label='Suggestions']//li",
+                    "//div[contains(@class, 'Igw0E')]//li",
+                    "//div[contains(@class, 'rq0escxv')]//li",
+                ]
+                
+                for xpath in suggestion_xpaths:
+                    try:
+                        suggestions = driver.find_elements(By.XPATH, xpath)
+                        visible_suggestions = [s for s in suggestions if s.is_displayed()]
+                        
+                        if visible_suggestions:
+                            # Try to find matching suggestion
+                            for suggestion in visible_suggestions:
+                                try:
+                                    suggestion_text = suggestion.text.strip().lower()
+                                    if (tag_without_at.lower() in suggestion_text or 
+                                        suggestion_text in tag_without_at.lower()):
+                                        suggestion.click()
+                                        print(f"  ✅ Selected matching suggestion: '{suggestion_text}'")
+                                        suggestion_selected = True
+                                        break
+                                except:
+                                    continue
+                            
+                            # If no match, click first suggestion
+                            if not suggestion_selected:
+                                visible_suggestions[0].click()
+                                print(f"  ✅ Selected first suggestion")
+                                suggestion_selected = True
+                            break
+                    except:
+                        continue
+                
+                # If no clickable suggestions found, try keyboard navigation
+                if not suggestion_selected:
+                    print("  No clickable suggestions found, trying keyboard navigation...")
+                    try:
+                        ActionChains(driver).send_keys(Keys.TAB).perform()
+                        suggestion_selected = True
+                        print("  ✅ Used keyboard navigation")
+                        time.sleep(0.3)
+                    except:
+                        pass
+                
+                # If still no suggestion, press Enter
+                if not suggestion_selected:
+                    print("  No suggestions, pressing Enter...")
+                    ActionChains(driver).send_keys(Keys.ENTER).perform()
+                    time.sleep(0.3)
+                
+                # ---- CONFIRMATION PHASE ----
+                print("  Confirming tag selection...")
+                time.sleep(1)
+                
+                # Check for mention element
+                if check_mention_exists(el, tag):
+                    print(f"  ✅ Tag successfully confirmed as mention: {tag}")
+                    return True
+                
+                # Check if the text contains the tag (fallback if mention detection fails)
+                final_text = get_element_text(el)
+                if tag in final_text:
+                    print(f"  ⚠️ Tag found as text (not mention), but acceptable")
+                    return True
+                
+                print(f"  ⚠️ Tag not properly added. Retrying...")
+                continue
+                    
+            except Exception as e:
+                print(f"  ❌ Error on attempt {attempt + 1}: {e}")
+                continue
+        
+        print(f"  ❌ Failed to add tag after {max_attempts} attempts")
+        return False
+    
+    def add_profile_link_with_typing(el, link):
+        """Add profile link by typing it"""
+        if not link:
+            return True
+        
+        print(f"  ADDING PROFILE LINK: {link}")
+        try:
+            # Ensure element is focused and at end
+            ActionChains(driver).click(el).perform()
+            time.sleep(0.2)
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys(Keys.END).key_up(Keys.CONTROL).perform()
+            time.sleep(0.1)
+            
+            # Type the profile link with medium speed
+            for char in link:
+                ActionChains(driver).send_keys(char).perform()
+                time.sleep(random.uniform(0.02, 0.05))
+            
+            time.sleep(0.3)
+            print(f"  ✅ Profile link added successfully")
+            return True
+        except Exception as e:
+            print(f"  ❌ Error adding profile link: {e}")
+            return False
+
+    # --------------------------------------------------------------------- #
+    # 7. Test candidates – now with proper content verification
     # --------------------------------------------------------------------- #
     working_element = None
     selected_caption_lower = selected_caption.lower()
@@ -5761,6 +5128,7 @@ def writecaption_element():
                 writecaption_element.last_written_caption = selected_caption
                 break
 
+            # Type the caption
             chosen_func(el, selected_caption)
             time.sleep(0.6)
 
@@ -5773,6 +5141,74 @@ def writecaption_element():
                 working_element = el
                 writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
+                
+                # ---- ADD CONTENT IN SEQUENCE ----
+                # 1. Add line breaks
+                if not add_line_breaks(el, 5):
+                    print("  ❌ Failed to add line breaks, clearing and restarting...")
+                    clear_composer_content(el)
+                    continue
+                
+                # 2. Add tag
+                if tag:
+                    tag_success = add_tag_with_autocomplete(driver, el, tag, max_attempts=3)
+                    if not tag_success:
+                        print("  ❌ Failed to add tag, clearing and restarting...")
+                        clear_composer_content(el)
+                        continue
+                
+                # 3. Add profile link
+                if include_profile_link and profile_link:
+                    if not add_profile_link_with_typing(el, profile_link):
+                        print("  ❌ Failed to add profile link, clearing and restarting...")
+                        clear_composer_content(el)
+                        continue
+                
+                # ---- VERIFY ALL CONTENT ----
+                # Get final text
+                final_text = get_element_text(el)
+                print(f"  Final text: '{final_text[:100]}...'")
+                
+                # Verify caption
+                caption_ok = selected_caption_lower in final_text.lower()
+                
+                # Verify tag (check for mention)
+                tag_ok = not tag or check_mention_exists(el, tag)
+                if not tag_ok:
+                    # Fallback: check if tag is in text
+                    tag_ok = tag in final_text
+                
+                # Verify link
+                link_ok = not include_profile_link or not profile_link or (profile_link in final_text)
+                
+                if caption_ok and tag_ok and link_ok:
+                    print("  ✅ All content (caption, tag, profile link) successfully added!")
+                    
+                    # ---- SAVE USED CAPTION IF IN FIXED MODE ----
+                    if captions_state == "fixed":
+                        try:
+                            # Add the caption ID to used captions
+                            if caption_id not in used_captions:
+                                used_captions.append(caption_id)
+                            
+                            # Save to used_captions.json
+                            with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                json.dump(used_captions, f, indent=2)
+                            print(f"✅ Saved used caption to: {used_captions_path}")
+                            print(f"📊 Total used captions: {len(used_captions)}")
+                        except Exception as e:
+                            print(f"⚠️ Error saving used caption: {e}")
+                else:
+                    print("  ⚠️ Some content may not have been added correctly, clearing and restarting...")
+                    if not caption_ok:
+                        print("    - Caption missing")
+                    if not tag_ok:
+                        print("    - Tag missing or not properly tagged")
+                    if not link_ok:
+                        print("    - Profile link missing")
+                    
+                    clear_composer_content(el)
+                    continue
 
                 # SAVE STATE
                 if next_behavior_key not in used_behaviors:
@@ -5812,7 +5248,7 @@ def writecaption_element():
             print(f"  [{i}] Error: {e}")
 
     # --------------------------------------------------------------------- #
-    # 7. Return
+    # 8. Return
     # --------------------------------------------------------------------- #
     if working_element:
         print(f"\nCOMPOSER FOUND | {next_behavior_key.upper()} | NIGERIA FAST MODE")
@@ -5822,9 +5258,8 @@ def writecaption_element():
         # Assuming writecaption_ocr() is defined in the external scope
         writecaption_ocr()
         return None
-
-
-def extract_texts(return_time_value=None, additional_texts=None):
+ 
+def extract_texts_old(return_time_value=None, additional_texts=None):
     """Extract all visible text from the current webpage, construct a time value in the format 'Time: HH:MM',
     and check for additional specified text values.
     
@@ -5870,6 +5305,118 @@ def extract_texts(return_time_value=None, additional_texts=None):
                 minutes = time_components[i+3].zfill(2)  # Pad with leading zero if needed
                 time_value = f"Time: {hours}:{minutes}"
                 break
+        
+        if time_value:
+            print("Time value:", time_value)
+            # Pass the time value to the callback function if provided
+            if callable(return_time_value):
+                return_time_value(time_value)
+        else:
+            print("Time components not found or incomplete.")
+        
+        if additional_texts:
+            print()
+            #print(f"Additional texts checked: {additional_texts}")
+            #print(f"Found texts: {found_texts}")
+        else:
+            print("No additional texts provided for checking.")
+
+        return extractedtexts, time_value, found_texts
+    except Exception as e:
+        print(f"Error extracting texts: {str(e)}")
+        return [], None, []
+
+def extract_texts(return_time_value=None, additional_texts=None):
+    """Extract all visible text from the current webpage, construct a time value in the format 'Time: HH:MM',
+    and check for additional specified text values.
+    
+    Args:
+        return_time_value (callable, optional): A callback function to receive the time value.
+        additional_texts (list, optional): A list of text values to check for in the extracted texts.
+    Returns:
+        tuple: A tuple containing:
+            - extractedtexts (list): List of all extracted non-empty text from the webpage.
+            - time_value (str or None): The constructed time value in 'Time: HH:MM' format, or None if not found.
+            - found_texts (list): List of additional text values that were found in the extracted texts.
+    """
+    global driver
+    try:
+        # Get all elements that contain text
+        elements = driver.find_elements(By.XPATH, "//*[text()]")
+        extractedtexts = []
+        time_components = []
+        found_texts = []
+
+        # Collect all non-empty text
+        for element in elements:
+            text = element.text.strip()
+            if text:  # Only add non-empty text
+                extractedtexts.append(text)
+                # Check for additional specified texts
+                if additional_texts and text in additional_texts:
+                    found_texts.append(text)
+        
+        # Try to find time value in multiple ways
+        time_value = None
+        
+        # Method 1: Look for text that starts with "Time:" and contains time format
+        for text in extractedtexts:
+            if text.startswith("Time:") and ":" in text:
+                # Extract time part after "Time:"
+                time_part = text.replace("Time:", "").strip()
+                # Check if it matches HH:MM format
+                if re.match(r"^\d{1,2}:\d{2}$", time_part):
+                    hours, minutes = time_part.split(":")
+                    hours = hours.zfill(2)
+                    minutes = minutes.zfill(2)
+                    time_value = f"Time: {hours}:{minutes}"
+                    break
+        
+        # Method 2: Look for separate time components (hours, colon, minutes) without "Time input"
+        if not time_value:
+            # Find elements that might contain the time display
+            for text in extractedtexts:
+                if re.match(r"^\d{1,2}:\d{2}$", text):  # Direct HH:MM format
+                    hours, minutes = text.split(":")
+                    hours = hours.zfill(2)
+                    minutes = minutes.zfill(2)
+                    time_value = f"Time: {hours}:{minutes}"
+                    break
+        
+        # Method 3: Look for the pattern with "Time input", hours, ':', minutes (legacy format)
+        if not time_value:
+            # First, collect all potential time-related components (digits and colons)
+            potential_components = []
+            for element in elements:
+                text = element.text.strip()
+                if text and (text == 'Time input' or text == ':' or text.isdigit() or re.match(r"^\d{1,2}:\d{2}$", text)):
+                    potential_components.append(text)
+            
+            # Look for the pattern 'Time input', hours, ':', minutes
+            for i in range(len(potential_components) - 3):
+                if (potential_components[i] == 'Time input' and 
+                    potential_components[i+1].isdigit() and 
+                    len(potential_components[i+1]) <= 2 and
+                    potential_components[i+2] == ':' and 
+                    potential_components[i+3].isdigit() and 
+                    len(potential_components[i+3]) <= 2):
+                    hours = potential_components[i+1].zfill(2)
+                    minutes = potential_components[i+3].zfill(2)
+                    time_value = f"Time: {hours}:{minutes}"
+                    break
+            
+            # Also look for the pattern hours, ':', minutes without 'Time input'
+            if not time_value:
+                for i in range(len(potential_components) - 2):
+                    if (potential_components[i].isdigit() and 
+                        len(potential_components[i]) <= 2 and
+                        potential_components[i+1] == ':' and 
+                        potential_components[i+2].isdigit() and 
+                        len(potential_components[i+2]) <= 2):
+                        hours = potential_components[i].zfill(2)
+                        minutes = potential_components[i+2].zfill(2)
+                        time_value = f"Time: {hours}:{minutes}"
+                        break
         
         if time_value:
             print("Time value:", time_value)
@@ -5978,10 +5525,7 @@ def toggleschedule():
         except Exception as e2:
             print(f"Alternative locator also failed: {str(e2)}")
             raise Exception("Could not locate or toggle 'Set date and time' button")
-
-
-
-
+    
 def set_webschedule():
     """
     Set web schedule using 6 input sequences in STRICT ORDER.
@@ -5997,8 +5541,8 @@ def set_webschedule():
             pageauthors = json.load(f)
         author = pageauthors['author']
         type_value = pageauthors['type']
-        group_types = pageauthors['group_types']
-        print(f"Author: {author} | Type: {type_value} | Group: {group_types}")
+        post_types = pageauthors['post_types']
+        print(f"Author: {author} | Type: {type_value} | Group: {post_types}")
     except FileNotFoundError:
         print("ERROR: pageandgroupauthors.json not found!")
         return
@@ -6007,7 +5551,7 @@ def set_webschedule():
         return
 
     # --- 2. Build schedules.json path ---
-    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{group_types}\\{type_value}schedules.json"
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{post_types}\\{type_value}schedules.json"
     print(f"Reading schedule from: {schedules_path}")
 
     try:
@@ -6315,10 +5859,454 @@ def set_webschedule():
         print(f"ERROR writing laststate.json: {e}")
 
     print("set_webschedule() completed successfully.\n")
-    click_schedule_button()
-    
+    click_upload_post_button()
 
-def click_schedule_button():
+def set_webschedule_old():
+    """
+    Set web schedule using 6 input sequences in STRICT ORDER.
+    Forces full 6-round cycle before any repeat.
+    NEVER repeats last used.
+    Records ONLY its own state in laststate.json (SAFE MERGE).
+    """
+    # --- 1. Read pageandgroupauthors.json ---
+    pageauthors_path = r"C:\xampp\htdocs\serenum\pageandgroupauthors.json"
+    print(f"[{time.strftime('%H:%M:%S')}] Reading pageandgroupauthors.json")
+    try:
+        with open(pageauthors_path, 'r') as f:
+            pageauthors = json.load(f)
+        author = pageauthors['author']
+        type_value = pageauthors['type']
+        post_types = pageauthors['post_types']
+        print(f"Author: {author} | Type: {type_value} | Group: {post_types}")
+    except FileNotFoundError:
+        print("ERROR: pageandgroupauthors.json not found!")
+        return
+    except Exception as e:
+        print(f"ERROR parsing pageandgroupauthors.json: {e}")
+        return
+
+    # --- 2. Build schedules.json path ---
+    schedules_path = f"C:\\xampp\\htdocs\\serenum\\files\\next jpg\\{author}\\jsons\\{post_types}\\{type_value}schedules.json"
+    print(f"Reading schedule from: {schedules_path}")
+
+    try:
+        with open(schedules_path, 'r') as f:
+            json_data = json.load(f)
+    except FileNotFoundError:
+        print(f"ERROR: {type_value}schedules.json not found!")
+        return
+    except json.JSONDecodeError:
+        print("ERROR: Invalid JSON in schedules.json")
+        return
+
+    # --- 3. Extract next_schedule ---
+    next_schedule_list = json_data.get('next_schedule')
+    if not next_schedule_list or len(next_schedule_list) == 0:
+        print("ERROR: No next_schedule found!")
+        return
+
+    next_schedule = next_schedule_list[0]
+    target_date = next_schedule.get('date')
+    target_time_12h = next_schedule.get('time_12hour')
+    target_time_24h = next_schedule.get('time_24hour')
+
+    if not all([target_date, target_time_12h, target_time_24h]):
+        print(f"ERROR: Missing schedule data: {next_schedule}")
+        return
+
+    target_time_12h = target_time_12h.strip().lower()
+    target_time_24h = target_time_24h.strip()
+
+    print(f"Target → Date: {target_date} | Time: {target_time_12h.upper()} ({target_time_24h})")
+
+    # --- 4. Parse times ---
+    match_12h = re.match(r"(\d{1,2}):(\d{2})\s*(am|pm)", target_time_12h, re.IGNORECASE)
+    match_24h = re.match(r"(\d{1,2}):(\d{2})", target_time_24h)
+    if not match_12h or not match_24h:
+        print(f"ERROR: Invalid time format: {target_time_12h} / {target_time_24h}")
+        return
+
+    hour_12h, minute_12h, period = match_12h.groups()
+    period = period.upper()
+    hour_24h, minute_24h = match_24h.groups()
+
+    # --- 5. Generate date formats - CRITICAL FIX: Use US format (MM/DD/YYYY) for input ---
+    def generate_all_date_formats(target_date):
+        # Parse the target_date which comes as DD/MM/YYYY from your JSON
+        day, month, year = target_date.split('/')
+        day_padded = day.zfill(2)
+        day_unpadded = day.lstrip('0')
+        month_padded = month.zfill(2)
+        month_unpadded = month.lstrip('0')
+        year_short = year[-2:]
+
+        month_map = {
+            '01': ('January', 'Jan'), '02': ('February', 'Feb'), '03': ('March', 'Mar'),
+            '04': ('April', 'Apr'), '05': ('May', 'May'), '06': ('June', 'Jun'),
+            '07': ('July', 'Jul'), '08': ('August', 'Aug'), '09': ('September', 'Sep'),
+            '10': ('October', 'Oct'), '11': ('November', 'Nov'), '12': ('December', 'Dec')
+        }
+        full_month, short_month = month_map.get(month, (month, month))
+
+        # IMPORTANT: The input field expects MM/DD/YYYY format (US format)
+        # So we need to generate dates in US format for sending to the input
+        us_formats = {
+            'mm/dd/yyyy': f"{month_padded}/{day_padded}/{year}",      # 04/08/2026
+            'm/dd/yyyy': f"{month_unpadded}/{day_padded}/{year}",     # 4/08/2026
+            'mm/d/yyyy': f"{month_padded}/{day_unpadded}/{year}",     # 04/8/2026
+            'm/d/yyyy': f"{month_unpadded}/{day_unpadded}/{year}",    # 4/8/2026
+            'mm/dd/yy': f"{month_padded}/{day_padded}/{year_short}",  # 04/08/26
+            'm/dd/yy': f"{month_unpadded}/{day_padded}/{year_short}", # 4/08/26
+            'mm/d/yy': f"{month_padded}/{day_unpadded}/{year_short}", # 04/8/26
+            'm/d/yy': f"{month_unpadded}/{day_unpadded}/{year_short}",# 4/8/26
+            'mm-dd-yyyy': f"{month_padded}-{day_padded}-{year}",
+            'mm-dd-yy': f"{month_padded}-{day_padded}-{year_short}",
+        }
+        
+        # Also keep the original formats for comparison with what might be displayed
+        display_formats = {
+            'dd/mm/yyyy': f"{day_padded}/{month_padded}/{year}",
+            'd/mm/yyyy': f"{day_unpadded}/{month_padded}/{year}",
+            'dd/mm/yy': f"{day_padded}/{month_padded}/{year_short}",
+            'd/mm/yy': f"{day_unpadded}/{month_padded}/{year_short}",
+            'dd-mm-yyyy': f"{day_padded}-{month_padded}-{year}",
+            'd-mm-yyyy': f"{day_unpadded}-{month_padded}-{year}",
+            'dd-mm-yy': f"{day_padded}-{month_padded}-{year_short}",
+            'd-mm-yy': f"{day_unpadded}-{month_padded}-{year_short}",
+            'dd month yyyy': f"{day_padded} {full_month} {year}",
+            'd month yyyy': f"{day_unpadded} {full_month} {year}",
+            'dd mon yyyy': f"{day_padded} {short_month} {year}",
+            'd mon yyyy': f"{day_unpadded} {short_month} {year}",
+            'month dd, yyyy': f"{full_month} {day_padded}, {year}",
+            'month d, yyyy': f"{full_month} {day_unpadded}, {year}",
+            'mon dd yyyy': f"{short_month} {day_padded} {year}",
+            'mon d yyyy': f"{short_month} {day_unpadded} {year}",
+        }
+        
+        # Combine both - we'll use US formats for sending, and all formats for comparison
+        all_formats = {**us_formats, **display_formats}
+        
+        return all_formats, us_formats
+
+    all_target_formats, us_formats = generate_all_date_formats(target_date)
+    
+    # The primary format to send to the input (most common US format)
+    primary_date_format = f"{target_date.split('/')[1].zfill(2)}/{target_date.split('/')[0].zfill(2)}/{target_date.split('/')[2]}"
+    print(f"Will send date in US format: {primary_date_format} (input expects mm/dd/yyyy)")
+
+    # --- 6. Wait for Schedule Panel ---
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'schedule')]")
+            )
+        )
+        print("Schedule panel loaded.")
+        time.sleep(2)
+    except TimeoutException:
+        print("ERROR: Schedule panel not found!")
+        return
+
+    # --- 7. Locate Inputs CORRECTLY ---
+    inputs = WebDriverWait(driver, 15).until(
+        EC.presence_of_all_elements_located((By.TAG_NAME, "input"))
+    )
+    print(f"Found {len(inputs)} input fields.")
+    
+    date_input = None
+    hour_input = None
+    minute_input = None
+    am_pm_input = None
+    
+    for inp in inputs:
+        input_aria_label = (inp.get_attribute("aria-label") or "").lower()
+        input_placeholder = (inp.get_attribute("placeholder") or "").lower()
+        input_type = (inp.get_attribute("type") or "").lower()
+        
+        # Identify toggle button (DO NOT CLICK THIS)
+        if input_aria_label == "set date and time" or (input_type == "checkbox" and "set date" in input_aria_label):
+            print(f"✓ Identified TOGGLE BUTTON (will NOT click): aria-label='{input_aria_label}'")
+            continue
+        
+        # Identify actual date input (has mm/dd/yyyy placeholder)
+        elif "mm/dd/yyyy" in input_placeholder or "dd/mm/yyyy" in input_placeholder:
+            date_input = inp
+            print(f"✓ Identified DATE input: placeholder='{input_placeholder}', aria-label='{input_aria_label}'")
+        
+        # Identify hour input
+        elif input_aria_label == "hours" or "hour" in input_aria_label:
+            hour_input = inp
+            print(f"✓ Identified HOUR input: aria-label='{input_aria_label}'")
+        
+        # Identify minute input
+        elif input_aria_label == "minutes" or "minute" in input_aria_label:
+            minute_input = inp
+            print(f"✓ Identified MINUTE input: aria-label='{input_aria_label}'")
+        
+        # Identify AM/PM input
+        elif input_aria_label == "meridiem" or "am" in input_aria_label or "pm" in input_aria_label:
+            am_pm_input = inp
+            print(f"✓ Identified AM/PM input: aria-label='{input_aria_label}'")
+    
+    # Verify we found all required inputs
+    if not all([date_input, hour_input, minute_input]):
+        print("\nERROR: Missing required inputs!")
+        print(f"  Date input found: {date_input is not None}")
+        print(f"  Hour input found: {hour_input is not None}")
+        print(f"  Minute input found: {minute_input is not None}")
+        return
+    
+    print(f"\n✓ All required inputs identified:")
+    print(f"  - Date input: {date_input.get_attribute('id')} (type: {date_input.get_attribute('type')})")
+    print(f"  - Hour input: {hour_input.get_attribute('id')}")
+    print(f"  - Minute input: {minute_input.get_attribute('id')}")
+    if am_pm_input:
+        print(f"  - AM/PM input: {am_pm_input.get_attribute('id')}")
+
+    is_24h_format = am_pm_input is None
+    print(f"Time format: {'24-hour' if is_24h_format else '12-hour'}")
+
+    # --- 8. Check if already correct ---
+    current_date = (driver.execute_script("return arguments[0].value", date_input) or "").strip()
+    _, extracted_time, _ = extract_texts() or ("", "", [])
+
+    date_matches = any(current_date == fmt for fmt in all_target_formats.values())
+    time_matches = False
+
+    if is_24h_format:
+        expected = f"Time: {hour_24h.zfill(2)}:{minute_24h}"
+        time_matches = extracted_time == expected
+    else:
+        exp1 = f"Time: {int(hour_12h):d}:{minute_12h}"
+        exp2 = f"Time: {hour_12h.zfill(2)}:{minute_12h}"
+        time_matches = extracted_time in [exp1, exp2]
+
+    if date_matches and time_matches:
+        print("Schedule already correct. Skipping.")
+        return
+
+    # --- 9. SEQUENCE DEFINITIONS - Use US format for date ---
+    sequences = {
+        "hh_date_mm": [
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("date", date_input, primary_date_format),  # Use US format
+            ("minute", minute_input, minute_24h),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None
+        ],
+        "hh_mm_date": [
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("minute", minute_input, minute_24h),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None,
+            ("date", date_input, primary_date_format)  # Use US format
+        ],
+        "mm_hh_date": [
+            ("minute", minute_input, minute_24h),
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None,
+            ("date", date_input, primary_date_format)  # Use US format
+        ],
+        "mm_date_hh": [
+            ("minute", minute_input, minute_24h),
+            ("date", date_input, primary_date_format),  # Use US format
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None
+        ],
+        "date_hh_mm": [
+            ("date", date_input, primary_date_format),  # Use US format
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("minute", minute_input, minute_24h),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None
+        ],
+        "date_mm_hh": [
+            ("date", date_input, primary_date_format),  # Use US format
+            ("minute", minute_input, minute_24h),
+            ("hour", hour_input, hour_24h.zfill(2) if is_24h_format else (hour_12h.lstrip('0') or '12')),
+            ("period", am_pm_input, period) if not is_24h_format and am_pm_input else None
+        ]
+    }
+
+    # --- 10. FIXED ORDER ---
+    order = [
+        "hh_date_mm",
+        "hh_mm_date",
+        "mm_hh_date",
+        "mm_date_hh",
+        "date_hh_mm",
+        "date_mm_hh"
+    ]
+
+    # --- 11. LOAD laststate.json SAFELY ---
+    laststate_path = r"C:\xampp\htdocs\serenum\laststate.json"
+    used_sequences = []
+    last_used = None
+    full_state = {}
+
+    if os.path.exists(laststate_path):
+        try:
+            with open(laststate_path, 'r') as f:
+                full_state = json.load(f)
+            used = full_state.get("setwebschedule_previous_input", [])
+            used_sequences = [s for s in used if s in order]
+            last_used = full_state.get("last_used")
+            if last_used not in order:
+                last_used = None
+        except Exception as e:
+            print(f"ERROR reading laststate.json: {e}")
+            full_state = {}
+
+    print(f"Used so far: {len(used_sequences)}/6 → {used_sequences}")
+    print(f"Last used: {last_used}")
+
+    # --- 12. PICK NEXT IN STRICT 6-CYCLE ---
+    next_seq_key = None
+    if len(used_sequences) < 6:
+        for seq in order:
+            if seq not in used_sequences:
+                next_seq_key = seq
+                break
+    else:
+        for seq in order:
+            if seq != last_used:
+                next_seq_key = seq
+                break
+        else:
+            next_seq_key = order[0]
+
+    chosen_seq = [s for s in sequences[next_seq_key] if s is not None]
+    seq_names = " → ".join([s[0].capitalize() for s in chosen_seq])
+    print(f"USING #{used_sequences.count(next_seq_key) + 1 if next_seq_key in used_sequences else 1}: {next_seq_key} → {seq_names}")
+
+    # --- 13. EXECUTE SEQUENCE WITH PROPER DATE FORMAT ---
+    for field_name, element, value in chosen_seq:
+        try:
+            print(f"\n{'='*60}")
+            print(f"Processing: {field_name.upper()}")
+            print(f"Will send value: '{value}'")
+            
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            time.sleep(0.3)
+            element.click()
+            print(f"✓ Clicked {field_name}")
+            time.sleep(0.5)
+
+            if field_name == "date":
+                # Clear the date field properly
+                ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+                time.sleep(0.2)
+                ActionChains(driver).send_keys(Keys.DELETE).perform()
+                time.sleep(0.2)
+                
+                # Send the date in US format (MM/DD/YYYY)
+                element.send_keys(value)
+                time.sleep(0.5)
+                
+                # Verify the date was set correctly
+                new_value = element.get_attribute('value')
+                print(f"After setting date, value is: '{new_value}'")
+                
+                # If not set correctly, try JavaScript
+                if new_value != value and not any(new_value == fmt for fmt in us_formats.values()):
+                    print(f"Date not set correctly, trying JavaScript...")
+                    driver.execute_script(f"arguments[0].value = '{value}';", element)
+                    driver.execute_script("arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", element)
+                    driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", element)
+                    time.sleep(0.5)
+                    new_value = element.get_attribute('value')
+                    print(f"After JavaScript, value is: '{new_value}'")
+                
+            elif field_name == "period":
+                element.clear()
+                time.sleep(0.2)
+                ActionChains(driver).send_keys(value).send_keys(Keys.ENTER).perform()
+                print(f"✓ Period set to '{value}'")
+            else:
+                element.clear()
+                time.sleep(0.3)
+                element.send_keys(value)
+                print(f"✓ {field_name} set to '{value}'")
+
+            element.send_keys(Keys.TAB)
+            time.sleep(0.6)
+            print(f"{'='*60}\n")
+            
+        except Exception as e:
+            print(f"❌ Error on {field_name}: {e}")
+            raise
+
+    # --- 14. UPDATE used_sequences ---
+    if next_seq_key not in used_sequences:
+        used_sequences.append(next_seq_key)
+    else:
+        used_sequences.remove(next_seq_key)
+        used_sequences.append(next_seq_key)
+    used_sequences = used_sequences[-6:]
+
+    # --- 15. FINAL VERIFICATION ---
+    time.sleep(2)
+    
+    max_retries = 3
+    for retry in range(max_retries):
+        final_date = (driver.execute_script("return arguments[0].value", date_input) or "").strip()
+        _, final_time, _ = extract_texts() or ("", "", [])
+        
+        print(f"\n{'='*60}")
+        print(f"VERIFICATION (attempt {retry + 1}/{max_retries}):")
+        print(f"Final date: '{final_date}'")
+        print(f"Expected date format (US): {primary_date_format}")
+        print(f"Final time: '{final_time}'")
+        
+        date_matches = any(final_date == fmt for fmt in all_target_formats.values())
+        time_matches = False
+        
+        if is_24h_format:
+            expected = f"Time: {hour_24h.zfill(2)}:{minute_24h}"
+            time_matches = final_time == expected
+        else:
+            exp1 = f"Time: {int(hour_12h):d}:{minute_12h}"
+            exp2 = f"Time: {hour_12h.zfill(2)}:{minute_12h}"
+            time_matches = final_time in [exp1, exp2]
+        
+        if date_matches and time_matches:
+            print(f"✓ SCHEDULE SET: {target_date} @ {target_time_12h.upper()} via {seq_names}")
+            break
+        elif retry < max_retries - 1:
+            print(f"Schedule not set correctly, retrying...")
+            # Try to set date again if it's wrong
+            if final_date != primary_date_format:
+                print(f"Resetting date to: {primary_date_format}")
+                driver.execute_script(f"arguments[0].value = '{primary_date_format}';", date_input)
+                driver.execute_script("arguments[0].dispatchEvent(new Event('change', {bubbles: true}));", date_input)
+                time.sleep(1)
+        else:
+            raise Exception(f"Failed to set schedule after {max_retries} attempts. Date: '{final_date}', Time: '{final_time}'")
+
+    print(f"{'='*60}\n")
+
+    # --- 16. Handle Overlay ---
+    overlays = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay')]")
+    if overlays:
+        print("Overlay detected. Reloading...")
+        reset_trackers()
+        driver.refresh()
+        raise Exception("Overlay after set")
+
+    # --- 17. SAVE STATE ---
+    full_state.update({
+        "setwebschedule_previous_input": used_sequences,
+        "last_used": next_seq_key
+    })
+
+    try:
+        with open(laststate_path, 'w') as f:
+            json.dump(full_state, f, indent=2)
+        print(f"SAVED: {len(used_sequences)}/6 used | Last: {next_seq_key}")
+    except Exception as e:
+        print(f"ERROR writing laststate.json: {e}")
+
+    print("set_webschedule() completed successfully.\n")
+    click_upload_post_button()
+             
+def click_upload_post_button():
     try:
         # Wait for button to be enabled
         btn = WebDriverWait(driver, 20).until(
@@ -6911,29 +6899,34 @@ def moveuploadedurls():
     print("All done. Ready for next batch!")
 
 
+
+    
 def firstbatch():  
-    fetch_urls()
+    fetch_jpgsvault_urls()
     corruptedjpgs()
     markjpgs()
     corruptedjpgs()
     orderjpgs()
 
+def secondbatch_():  
+    #*
+    toggleaddphoto()
+    #toggleaddphoto() #*
+    selectgroups()
+
 def secondbatch():  
     #*
-    #toggleaddphoto()
-    toggleaddphoto() #*
-    #switch_groups()
-    #selectgroups()
+    toggleaddphoto()
+    #toggleaddphoto() #*
+    selectgroups()
     writecaption_element()
     toggleschedule() #*
     update_calendar()
     set_webschedule() #*  
-    #uploadedjpgs() 
-
+    uploadedjpgs()   
     
     
-    
-
+  
 def main():
     try:
         # Initialize WebDriver
@@ -6960,4 +6953,5 @@ def main():
 
 if __name__ == "__main__":
    main()
+   
 
