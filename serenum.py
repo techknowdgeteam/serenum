@@ -71,6 +71,7 @@ wait = None
 # Global JSON configuration path
 JSON_CONFIG_PATH = r'C:\xampp\htdocs\serenum\pageandgroupauthors.json'
 GUI_PATH = r'C:\xampp\htdocs\serenum\files\gui'
+OUTPUT_FILE = r"C:\xampp\htdocs\serenum\files\fetchedjpgsurl.json"
 # Set Tesseract path
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\serenum\pytesseract\tessdata"
@@ -454,6 +455,54 @@ def fetch_jpgsvault_urls():
     import json as json_module  # Rename to avoid conflict with your json variable
     from collections import defaultdict
     
+    # Define OUTPUT_FILE at the beginning
+    
+    
+    # HELPER FUNCTION: Empty the JSON file at the start
+    def empty_json_file():
+        """
+        Empties the JSON output file at the beginning of execution
+        Creates an empty structure or removes the file
+        """
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+            
+            # Write empty JSON structure
+            empty_data = {
+                "source_url": "",
+                "current_url": "",
+                "page_title": "",
+                "fetched_at": "",
+                "total_jpgs": 0,
+                "expected_total": 0,
+                "jpg_urls": [],
+                "folder_summary": {
+                    "total_unique_folders": 0,
+                    "folders": {},
+                    "details": []
+                },
+                "debug": {
+                    "summary_cards": {"Unique URLs Saved": "0"},
+                    "found_via_js": 0,
+                    "source": "jpgsvault_table.all_urls",
+                    "records_processed": 0,
+                    "json_array_size": 0,
+                    "metadata_skipped": 0,
+                    "status": "initializing"
+                }
+            }
+            
+            with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(empty_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] ✅ JSON file emptied/initialized: {OUTPUT_FILE}")
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ WARNING: Could not empty JSON file: {e}")
+            return False
+    
     # Inner function for manual parsing
     def manual_parse_urls(urls_field):
         """
@@ -509,12 +558,17 @@ def fetch_jpgsvault_urls():
     try:
         print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] Starting fetch from jpgsvault_table...")
         
+        # FIRST THING: Empty the JSON file
+        print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] Emptying JSON file before fetching...")
+        empty_json_file()
+        
         # Query to get all_urls column from jpgsvault_table
         query = "SELECT all_urls FROM jpgsvault_table" 
         result = db.execute_query(query)  # Using the global execute_query function
         
         if result.get('status') != 'success':
             print(f"QUERY ERROR: {result.get('message')}")
+            # Even on error, the file is already emptied
             return []
             
         rows = result.get('results', [])
@@ -522,6 +576,7 @@ def fetch_jpgsvault_urls():
         if not rows:
             print("WARNING: Database returned 'success' but the results list is empty.")
             print("Check if the table 'jpgsvault_table' actually has rows in the PHP interface.")
+            # File is already emptied, just return
             return []
         
         print(f"SUCCESS: Fetched {len(rows)} records from 'jpgsvault_table'")
@@ -723,15 +778,12 @@ def fetch_jpgsvault_urls():
                 "source": "jpgsvault_table.all_urls",
                 "records_processed": len(rows),
                 "json_array_size": len(urls_list),
-                "metadata_skipped": metadata_count
+                "metadata_skipped": metadata_count,
+                "status": "completed_successfully"
             }
         }
         
-        # Save to the same output file as fetch_urls uses
-        OUTPUT_FILE = r"C:\xampp\htdocs\serenum\files\fetchedjpgsurl.json"
-        
-        # Save to file
-        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+        # Save to file (overwrites the empty version with actual data)
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
             json.dump(output_data, f, ensure_ascii=False, indent=2)
         
@@ -750,8 +802,39 @@ def fetch_jpgsvault_urls():
         print(f"CRITICAL ERROR in fetch process: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Update the JSON with error status (file was already emptied at start)
+        try:
+            error_data = {
+                "source_url": "",
+                "current_url": "",
+                "page_title": "",
+                "fetched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z",
+                "total_jpgs": 0,
+                "expected_total": 0,
+                "jpg_urls": [],
+                "folder_summary": {
+                    "total_unique_folders": 0,
+                    "folders": {},
+                    "details": []
+                },
+                "debug": {
+                    "summary_cards": {"Unique URLs Saved": "0"},
+                    "found_via_js": 0,
+                    "source": "jpgsvault_table.all_urls",
+                    "records_processed": 0,
+                    "json_array_size": 0,
+                    "metadata_skipped": 0,
+                    "status": f"error: {str(e)}"
+                }
+            }
+            with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(error_data, f, ensure_ascii=False, indent=2)
+        except:
+            pass  # If we can't even write error, just return
+        
         return []
-       
+         
 def corruptedjpgs():
     """
     Scans ALL .jpg, .jpeg, .png, .gif files in:
@@ -6953,5 +7036,4 @@ def main():
 
 if __name__ == "__main__":
    main()
-   
 
