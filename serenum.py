@@ -261,8 +261,9 @@ def launch_profile():
                         print(f"Failed to write progress: {e}")
 
                     print(f"URL correct. Proceeding with post actions...")
-                    firstbatch()
+                    #firstbatch()
                     secondbatch()
+                    time.sleep(1234)
                     uploadedjpgs()
                     
                     # Add a flag to indicate posting is done
@@ -665,25 +666,25 @@ def fetch_jpgsvault_urls():
                             # Remove any quotes or brackets from path
                             path_part = re.sub(r'["\'\[\]]', '', path_part)
                             # Construct clean URL
-                            url = f'http://fhdrikxsirudr.fwh.is/{path_part}'
+                            url = f'https://fhdrikxsirudr.fwh.is/{path_part}'
                         else:
                             # If no jpgs found, treat as relative path
                             url = url.replace('\\', '/')
                             url = re.sub(r'/+', '/', url)
                             url = re.sub(r'["\'\[\]]', '', url)
-                            url = f'http://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
+                            url = f'https://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
                     elif url.startswith('/'):
-                        url = f'http://fhdrikxsirudr.fwh.is{url}'
+                        url = f'https://fhdrikxsirudr.fwh.is{url}'
                         url = re.sub(r'/+', '/', url)
                     elif url.startswith('//'):
-                        url = f'http:{url}'
+                        url = f'https:{url}'
                         url = re.sub(r'/+', '/', url)
                     elif not url.startswith('http'):
                         # Assume it's a relative path
                         url = url.replace('\\', '/')
                         url = re.sub(r'/+', '/', url)
                         url = re.sub(r'["\'\[\]]', '', url)
-                        url = f'http://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
+                        url = f'https://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
                     else:
                         # Already has http, just clean it
                         url = re.sub(r'["\'\[\]]', '', url)
@@ -753,8 +754,8 @@ def fetch_jpgsvault_urls():
         
         # Create output in EXACT same format as fetch_urls
         output_data = {
-            "source_url": "http://fhdrikxsirudr.fwh.is/loadimagesurl.php",
-            "current_url": "http://fhdrikxsirudr.fwh.is/loadimagesurl.php",
+            "source_url": "https://fhdrikxsirudr.fwh.is/loadimagesurl.php",
+            "current_url": "https://fhdrikxsirudr.fwh.is/loadimagesurl.php",
             "page_title": "JPGs Vault Database Export",
             "fetched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z",
             "total_jpgs": total,
@@ -834,7 +835,7 @@ def fetch_jpgsvault_urls():
             pass  # If we can't even write error, just return
         
         return []
-         
+        
 def corruptedjpgs():
     """
     Scans ALL .jpg, .jpeg, .png, .gif files in:
@@ -1333,8 +1334,8 @@ def markjpgs():
     # ------------------------------------------------------------------ #
     # 2. Paths – UPDATED FOR CURRENT DOMAIN (fhdrikxsirudr.fwh.is)
     # ------------------------------------------------------------------ #
-    current_domain_base = "http://fhdrikxsirudr.fwh.is/jpgs/"
-    legacy_domain_base  = "http://jpgsvault.rf.gd/jpgs/"
+    current_domain_base = "https://fhdrikxsirudr.fwh.is/jpgs/"
+    legacy_domain_base  = "https://jpgsvault.rf.gd/jpgs/"
 
     # Primary base path (current active domain) – lowercased for comparison only
     base_path = (
@@ -4297,12 +4298,6 @@ def reset_used_captions_record():
         else:
             print("   No records to reset")
         
-        response = input("\nAre you sure you want to reset the used captions record? (y/n): ")
-        
-        if response.lower() != 'y':
-            print("❌ Operation cancelled")
-            return False
-        
         # Empty the tracking file (set to empty list)
         try:
             with open(used_captions_path, 'w', encoding='utf-8') as f:
@@ -4325,300 +4320,6 @@ def reset_used_captions_record():
         print(f"❌ Error resetting used captions record: {e}")
         return False
       
-def writecaption_ocr():
-    """Enter a random caption using GUI automation with OCR text detection, 
-    constructing the JSON path using author and post_types from pageandgroupauthors.json."""
-    reset_used_captions_record()
-    try:
-        # Load configuration from JSON
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
-        author = config['author']
-        post_types = config.get('post_types', 'others').lower()  # Default to 'others' if not found
-        captions_state = config.get('captions_state', 'mixed').lower().strip()
-        print(f"Read from {JSON_CONFIG_PATH}: author='{author}', post_types='{post_types}', captions_state='{captions_state}'")
-        
-        # Validate post_types
-        if post_types not in ['uk', 'others']:
-            print(f"Invalid post_types value: '{post_types}'. Defaulting to 'others'.")
-            post_types = 'others'
-        
-        # Construct the path to the author's captions JSON file using author and post_types
-        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({post_types}).json"
-        print(f"Constructed JSON path: {json_path}")
-        
-        # Check if the JSON file exists
-        if not os.path.exists(json_path):
-            raise Exception(f"JSON file not found at {json_path}")
-        
-        # Load captions from the author's JSON file
-        with open(json_path, 'r') as file:
-            captions = json.load(file)
-        
-        # --------------------------------------------------------------------- #
-        # Handle FIXED captions state - track used captions
-        # --------------------------------------------------------------------- #
-        used_captions_path = os.path.join(os.path.dirname(json_path), "used_captions.json")
-        used_captions = []
-        available_captions = []
-        caption_id = None
-        selected_caption = None
-        
-        if captions_state == "fixed":
-            print(f"\n📌 FIXED CAPTIONS MODE ENABLED - Tracking used captions (GUI)")
-            
-            # Load used captions if file exists
-            if os.path.exists(used_captions_path):
-                try:
-                    with open(used_captions_path, 'r', encoding='utf-8') as f:
-                        used_captions = json.load(f)
-                    print(f"📊 Loaded {len(used_captions)} used captions from: {used_captions_path}")
-                except Exception as e:
-                    print(f"⚠️ Error loading used_captions.json: {e}")
-                    used_captions = []
-            
-            # Filter out used captions
-            available_captions = []
-            for caption_entry in captions:
-                caption_id_check = caption_entry.get('id') or caption_entry.get('description')
-                if caption_id_check not in used_captions:
-                    available_captions.append(caption_entry)
-            
-            print(f"📊 Total captions: {len(captions)}, Used: {len(used_captions)}, Available: {len(available_captions)}")
-            
-            # Check if all captions have been used
-            if len(available_captions) == 0:
-                print("⚠️ ALL CAPTIONS HAVE BEEN USED! Resetting used captions list...")
-                used_captions = []
-                available_captions = captions.copy()
-                print(f"📊 Reset - Available captions: {len(available_captions)}")
-                
-                # Reset the used_captions.json file
-                try:
-                    with open(used_captions_path, 'w', encoding='utf-8') as f:
-                        json.dump([], f, indent=2)
-                    print("✅ Reset used_captions.json")
-                except Exception as e:
-                    print(f"⚠️ Error resetting used_captions.json: {e}")
-            
-            # Select from available captions
-            selected_caption_entry = random.choice(available_captions)
-            selected_caption = selected_caption_entry['description']
-            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
-            
-            print(f"📝 Selected caption (ID: {caption_id[:50] if caption_id else 'N/A'}...): '{selected_caption[:100] if selected_caption else ''}...'")
-            
-        else:
-            # MIXED mode - original behavior
-            print(f"\n🔄 MIXED CAPTIONS MODE - No tracking (GUI)")
-            selected_caption_entry = random.choice(captions)
-            selected_caption = selected_caption_entry['description']
-            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
-            print(f"Selected random caption for author '{author}' (post_types '{post_types}', GUI): '{selected_caption}'")
-        
-        # Static variable to store the last written caption
-        if not hasattr(writecaption_ocr, 'last_written_caption'):
-            writecaption_ocr.last_written_caption = None
-        
-        # OCR-based text detection
-        print("Searching for 'text' to locate input field")
-        retry_count = 0
-        max_retries = 3
-        save_path = r"C:\xampp\htdocs\serenum\files\gui"
-        
-        while retry_count < max_retries:
-            # Capture screenshot
-            screenshot = ImageGrab.grab()
-            screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
-            
-            # Save screenshot
-            os.makedirs(save_path, exist_ok=True)
-            screenshot_file = os.path.join(save_path, "caption_text_area.png")
-            cv2.imwrite(screenshot_file, screenshot_cv)
-            print(f"Screenshot captured and saved as '{screenshot_file}'")
-            
-            # Image processing
-            gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
-            blur = cv2.GaussianBlur(gray, (5, 5), 0)
-            resized = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                         cv2.THRESH_BINARY, 11, 2)
-            
-            # OCR with improved configuration
-            data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT, config='--psm 3')
-            print("OCR data keys:", data.keys())
-            print("All detected text with positions:")
-            for i, text in enumerate(data["text"]):
-                if text.strip():
-                    print(f"Index {i}: '{text}' (Confidence: {data['conf'][i]}, Left: {data['left'][i]}, Top: {data['top'][i]})")
-            
-            # Search for "text"
-            text_lower = [t.lower() for t in data["text"]]
-            text_index = None
-            for i, text in enumerate(text_lower):
-                if text == "text":
-                    text_index = i
-                    break
-            
-            if text_index is not None:
-                # Get coordinates (adjust for resizing)
-                x = data["left"][text_index] // 1.5
-                y = data["top"][text_index] // 1.5
-                w = data["width"][text_index] // 1.5
-                h = data["height"][text_index] // 1.5
-                center_x = x + w // 2
-                center_y = y + h // 2
-                print(f"Detected: 'text'")
-                print(f"Coordinates: left={x}, top={y}, width={w}, height={h}")
-                print(f"Moving to: ({center_x}, {center_y})")
-                
-                # Click the detected text location (slightly offset to target input field)
-                pyautogui.moveTo(center_x, center_y + 50)  # Offset to click inside the input field
-                time.sleep(0.1)
-                pyautogui.click()
-                print("✅ Clicked on 'text' input field")
-                time.sleep(1)
-                
-                # Proceed with caption input logic
-                # Get current text in text field using GUI
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.5)
-                pyautogui.hotkey('ctrl', 'c')
-                time.sleep(0.5)
-                current_text = pyperclip.paste().strip()
-                print(f"Current text in field (GUI): '{current_text}'")
-                
-                # EXACT SAME LOGIC FOR TEXT VALIDATION & WRITING
-                if not current_text or (current_text != selected_caption and current_text != writecaption_ocr.last_written_caption):
-                    # Clear the text field (Ctrl+A, Delete)
-                    pyautogui.hotkey('ctrl', 'a')
-                    pyautogui.hotkey('delete')
-                    time.sleep(0.5)
-                    
-                    # Enter the selected caption
-                    pyautogui.write(selected_caption)
-                    print(f"Entered text into post field (GUI): '{selected_caption}'")
-                    
-                    # Save the written caption to the static variable
-                    writecaption_ocr.last_written_caption = selected_caption
-                    print(f"Saved caption to last_written_caption (GUI): '{selected_caption}'")
-                    time.sleep(1)
-                    
-                    # ---- SAVE USED CAPTION IF IN FIXED MODE ----
-                    if captions_state == "fixed" and caption_id:
-                        try:
-                            # Add the caption ID to used captions
-                            if caption_id not in used_captions:
-                                used_captions.append(caption_id)
-                            
-                            # Save to used_captions.json
-                            with open(used_captions_path, 'w', encoding='utf-8') as f:
-                                json.dump(used_captions, f, indent=2)
-                            print(f"✅ Saved used caption to: {used_captions_path}")
-                            print(f"📊 Total used captions: {len(used_captions)}")
-                        except Exception as e:
-                            print(f"⚠️ Error saving used caption: {e}")
-                    
-                    return True
-                
-                elif current_text == selected_caption or current_text == writecaption_ocr.last_written_caption:
-                    print(f"Text '{current_text}' is already correct in the text field (GUI). Skipping write operation.")
-                    if current_text == selected_caption:
-                        writecaption_ocr.last_written_caption = selected_caption
-                        print(f"Updated last_written_caption to match current text (GUI): '{selected_caption}'")
-                        
-                        # Save used caption if in fixed mode and caption wasn't saved before
-                        if captions_state == "fixed" and caption_id:
-                            try:
-                                # Check if already saved
-                                if os.path.exists(used_captions_path):
-                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
-                                        current_used = json.load(f)
-                                else:
-                                    current_used = []
-                                
-                                if caption_id not in current_used:
-                                    current_used.append(caption_id)
-                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
-                                        json.dump(current_used, f, indent=2)
-                                    print(f"✅ Saved used caption to: {used_captions_path}")
-                                    print(f"📊 Total used captions: {len(current_used)}")
-                            except Exception as e:
-                                print(f"⚠️ Error saving used caption: {e}")
-                    return True
-                
-                else:
-                    print(f"Text field contains different text (GUI): '{current_text}'. Replacing with saved caption.")
-                    if writecaption_ocr.last_written_caption:
-                        pyautogui.hotkey('ctrl', 'a')
-                        pyautogui.hotkey('delete')
-                        time.sleep(0.5)
-                        pyautogui.write(writecaption_ocr.last_written_caption)
-                        print(f"Replaced text with last written caption (GUI): '{writecaption_ocr.last_written_caption}'")
-                        time.sleep(1)
-                        
-                        # Save used caption if in fixed mode
-                        if captions_state == "fixed" and caption_id:
-                            try:
-                                # Check if already saved
-                                if os.path.exists(used_captions_path):
-                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
-                                        current_used = json.load(f)
-                                else:
-                                    current_used = []
-                                
-                                if caption_id not in current_used:
-                                    current_used.append(caption_id)
-                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
-                                        json.dump(current_used, f, indent=2)
-                                    print(f"✅ Saved used caption to: {used_captions_path}")
-                                    print(f"📊 Total used captions: {len(current_used)}")
-                            except Exception as e:
-                                print(f"⚠️ Error saving used caption: {e}")
-                    else:
-                        pyautogui.hotkey('ctrl', 'a')
-                        pyautogui.hotkey('delete')
-                        time.sleep(0.5)
-                        pyautogui.write(selected_caption)
-                        writecaption_ocr.last_written_caption = selected_caption
-                        print(f"No previous caption saved. Entered new caption (GUI): '{selected_caption}'")
-                        time.sleep(1)
-                        
-                        # Save used caption if in fixed mode
-                        if captions_state == "fixed" and caption_id:
-                            try:
-                                # Check if already saved
-                                if os.path.exists(used_captions_path):
-                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
-                                        current_used = json.load(f)
-                                else:
-                                    current_used = []
-                                
-                                if caption_id not in current_used:
-                                    current_used.append(caption_id)
-                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
-                                        json.dump(current_used, f, indent=2)
-                                    print(f"✅ Saved used caption to: {used_captions_path}")
-                                    print(f"📊 Total used captions: {len(current_used)}")
-                            except Exception as e:
-                                print(f"⚠️ Error saving used caption: {e}")
-                
-                return True
-            
-            else:
-                retry_count += 1
-                print(f"Retry {retry_count}/{max_retries}: No 'text' found")
-                if retry_count == max_retries:
-                    print("Max retries reached. No 'text' input field found.")
-                    return False
-                time.sleep(1)  # Wait before retrying
-        
-        return False
-    
-    except Exception as e:
-        print(f"Failed to enter text (GUI): {str(e)}")
-        return False
-     
 def writecaption_element():
     reset_used_captions_record()
     # ---- EARLY EXIT ----
@@ -4629,23 +4330,87 @@ def writecaption_element():
     print("\nLOCATING COMPOSER (NIGERIA FAST MODE - TYPING ONLY)")
 
     # --------------------------------------------------------------------- #
+    # Helper: Extract caption values from any structure
+    # --------------------------------------------------------------------- #
+    def extract_captions(data):
+        """Extract caption values from various JSON structures."""
+        captions_list = []
+        
+        # Case 1: List of strings
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    captions_list.append(item)
+                elif isinstance(item, dict):
+                    # If list contains dicts, extract values (skip 'id' keys)
+                    for key, value in item.items():
+                        if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                            captions_list.append(value)
+            return captions_list
+        
+        # Case 2: Dictionary
+        elif isinstance(data, dict):
+            # Check if it's a single record with id and caption
+            if 'id' in data:
+                # Skip 'id' key, take the next value
+                for key, value in data.items():
+                    if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                        captions_list.append(value)
+            else:
+                # Take all string values
+                for key, value in data.items():
+                    if isinstance(value, str) and value.strip():
+                        captions_list.append(value)
+                    elif isinstance(value, dict):
+                        # Recursive extraction for nested dicts
+                        captions_list.extend(extract_captions(value))
+                    elif isinstance(value, list):
+                        # Recursive extraction for nested lists
+                        captions_list.extend(extract_captions(value))
+            return captions_list
+        
+        return captions_list
+
+    # --------------------------------------------------------------------- #
+    # Helper: Get caption ID from entry
+    # --------------------------------------------------------------------- #
+    def get_caption_id(entry):
+        """Get a unique identifier for a caption entry (skips 'id' key)."""
+        if isinstance(entry, str):
+            return entry
+        elif isinstance(entry, dict):
+            # Skip 'id' key, use first non-id string value
+            for key, value in entry.items():
+                if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                    return value
+        return None
+
+    # --------------------------------------------------------------------- #
+    # Helper: Get caption description
+    # --------------------------------------------------------------------- #
+    def get_caption_description(entry):
+        """Get the caption text from an entry (skips 'id' key)."""
+        if isinstance(entry, str):
+            return entry
+        elif isinstance(entry, dict):
+            # Skip 'id' key, use first non-id string value
+            for key, value in entry.items():
+                if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                    return value
+        return None
+
+    # --------------------------------------------------------------------- #
     # 0. Load caption and config
     # --------------------------------------------------------------------- #
     try:
-        # Assuming JSON_CONFIG_PATH, json, os, random, WebDriverWait, EC, By, ActionChains, time, Keys, driver are defined/imported in the scope
         with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as json_file:
             config = json.load(json_file)
         
         author = config['author'].strip()
-        author_lower = author.lower()  # For case-insensitive path construction
+        author_lower = author.lower()
         
-        # Get include_profile_link flag
         include_profile_link = config.get('include_profile_link', False)
-        
-        # Get tag value
         tag = config.get('tag', '').strip()
-        
-        # Get captions_state
         captions_state = config.get('captions_state', 'mixed').lower().strip()
         
         post_types = config.get('post_types', 'others').lower().strip()
@@ -4655,9 +4420,7 @@ def writecaption_element():
         # Case-insensitive filename construction
         json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({post_types}).json"
         
-        # Also try alternative casing variants if main file not found
         if not os.path.exists(json_path):
-            # Try lowercase author version
             alt_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author_lower}({post_types}).json"
             if os.path.exists(alt_path):
                 json_path = alt_path
@@ -4665,7 +4428,16 @@ def writecaption_element():
                 raise FileNotFoundError(f"Caption file not found: {json_path}")
 
         with open(json_path, 'r', encoding='utf-8') as f:
-            captions = json.load(f)
+            raw_data = json.load(f)
+        
+        # Extract captions from any structure
+        captions = extract_captions(raw_data)
+        
+        if not captions:
+            print(f"❌ No captions found in {json_path}")
+            return None
+        
+        print(f"✅ Extracted {len(captions)} captions from {json_path}")
 
         # --------------------------------------------------------------------- #
         # 0.1 Handle FIXED captions state - track used captions
@@ -4690,7 +4462,7 @@ def writecaption_element():
             # Filter out used captions
             available_captions = []
             for caption_entry in captions:
-                caption_id = caption_entry.get('id') or caption_entry.get('description')
+                caption_id = get_caption_id(caption_entry)
                 if caption_id not in used_captions:
                     available_captions.append(caption_entry)
             
@@ -4703,7 +4475,6 @@ def writecaption_element():
                 available_captions = captions.copy()
                 print(f"📊 Reset - Available captions: {len(available_captions)}")
                 
-                # Reset the used_captions.json file
                 try:
                     with open(used_captions_path, 'w', encoding='utf-8') as f:
                         json.dump([], f, indent=2)
@@ -4713,17 +4484,17 @@ def writecaption_element():
             
             # Select from available captions
             selected_caption_entry = random.choice(available_captions)
-            selected_caption = selected_caption_entry['description']
-            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
+            selected_caption = get_caption_description(selected_caption_entry)
+            caption_id = get_caption_id(selected_caption_entry)
             
-            print(f"📝 Selected caption (ID: {caption_id[:50]}...): '{selected_caption[:100]}...'")
+            print(f"📝 Selected caption (ID: {caption_id[:50] if caption_id else 'N/A'}...): '{selected_caption[:100] if selected_caption else ''}...'")
             
         else:
             # MIXED mode - original behavior
             print(f"\n🔄 MIXED CAPTIONS MODE - No tracking")
             selected_caption_entry = random.choice(captions)
-            selected_caption = selected_caption_entry['description']
-            caption_id = selected_caption_entry.get('id') or selected_caption_entry.get('description')
+            selected_caption = get_caption_description(selected_caption_entry)
+            caption_id = get_caption_id(selected_caption_entry)
             print(f"Selected caption: '{selected_caption}'")
         
         print(f"Caption: '{selected_caption}'")
@@ -4740,14 +4511,13 @@ def writecaption_element():
                     with open(page_group_path, 'r', encoding='utf-8') as pg_file:
                         page_group_data = json.load(pg_file)
                     
-                    # Case-insensitive matching for author
                     found = False
                     for key in page_group_data.keys():
                         if key.lower() == author_lower:
                             if 'profile_link' in page_group_data[key]:
                                 profile_link = page_group_data[key]['profile_link']
                                 if isinstance(profile_link, list):
-                                    profile_link = profile_link[0]  # Take first link if it's a list
+                                    profile_link = profile_link[0]
                                 print(f"✅ Found profile link for '{author}': {profile_link}")
                                 found = True
                             else:
@@ -4795,13 +4565,8 @@ def writecaption_element():
     # 2. SPEED TYPING ENGINE
     # --------------------------------------------------------------------- #
     def type_with_speed(el, text, speed_profile):
-        """
-        Types the text into the element according to the 3-part speed profile.
-        speed_profile: list of 3 strings ('fast' or 'slow')
-        """
         if not text:
             return
-        # Ensure the element is focused
         ActionChains(driver).click(el).perform()
         time.sleep(random.uniform(0.1, 0.25))
 
@@ -4810,7 +4575,6 @@ def writecaption_element():
             "slow": (0.04, 0.09)
         }
 
-        # Divide text into three parts (p1, p2, p3)
         total_len = len(text)
         p1 = total_len // 3
         p2 = (total_len - p1) // 2
@@ -4818,9 +4582,8 @@ def writecaption_element():
 
         parts = [text[:p1], text[p1:p1+p2], text[p1+p2:]]
 
-        # Ensure speed_profile has 3 elements
         if len(speed_profile) < 3:
-            speed_profile = ["fast", "fast", "fast"]  # Fallback
+            speed_profile = ["fast", "fast", "fast"]
 
         for i, part in enumerate(parts):
             if not part:
@@ -4853,7 +4616,6 @@ def writecaption_element():
         print("  [5] Fast-Fast-Slow | Profile: ['fast', 'fast', 'slow']")
         type_with_speed(el, text, ["fast", "fast", "slow"])
     
-    # Behavior registry (5 typing profiles)
     behaviors = [
         ("s_f_s", b1_s_f_s),
         ("f_s_f", b2_f_s_f),
@@ -4862,7 +4624,7 @@ def writecaption_element():
         ("f_f_s", b5_f_f_s),
     ]
     behavior_order = [b[0] for b in behaviors]
-    MAX_BEHAVIORS = len(behavior_order)  # Now 5
+    MAX_BEHAVIORS = len(behavior_order)
 
     # --------------------------------------------------------------------- #
     # 4. LOAD laststate.json
@@ -4875,7 +4637,6 @@ def writecaption_element():
         try:
             with open(laststate_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Filter out behaviors that are no longer supported
                 used = data.get("write_caption_previous_behaviors", [])
                 used_behaviors = [s for s in used if s in behavior_order]
                 last_used_behavior = data.get("caption_last_used")
@@ -4888,17 +4649,15 @@ def writecaption_element():
     print(f"Last: {last_used_behavior}")
 
     # --------------------------------------------------------------------- #
-    # 5. PICK NEXT BEHAVIOR (STRICT {MAX_BEHAVIORS}-CYCLE)
+    # 5. PICK NEXT BEHAVIOR
     # --------------------------------------------------------------------- #
     next_behavior_key = None
     if len(used_behaviors) < MAX_BEHAVIORS:
-        # Pick the first unused behavior
         for key in behavior_order:
             if key not in used_behaviors:
                 next_behavior_key = key
                 break
     else:
-        # All 5 used, cycle based on last used
         if last_used_behavior and last_used_behavior in behavior_order:
             last_index = behavior_order.index(last_used_behavior)
             next_index = (last_index + 1) % MAX_BEHAVIORS
@@ -4910,29 +4669,21 @@ def writecaption_element():
     print(f"USING: {next_behavior_key.upper()}")
 
     # --------------------------------------------------------------------- #
-    # 6. Helper function to check for mention elements
+    # 6. Helper functions
     # --------------------------------------------------------------------- #
     def get_element_text(el):
-        """Get text content from element"""
         return driver.execute_script(
             "return arguments[0].textContent || arguments[0].innerText || '';", el
         ).strip()
     
     def check_mention_exists(el, tag):
-        """
-        Check if a mention element exists in the composer.
-        Looks for mention elements (span, a, div with mention-related attributes).
-        """
         if not tag:
             return False
         
-        # Clean tag for comparison
         tag_clean = tag.lstrip('@').strip()
         
         try:
-            # Check for mention elements in the composer
             mention_xpaths = [
-                # Common mention element patterns
                 ".//span[contains(@class, 'mention')]",
                 ".//a[contains(@class, 'mention')]",
                 ".//div[contains(@class, 'mention')]",
@@ -4946,7 +4697,6 @@ def writecaption_element():
                 ".//span[contains(@data-text, '@')]",
                 ".//div[contains(@data-type, 'mention')]",
                 ".//span[contains(@class, 'rq0escxv') and contains(@class, 'mentions')]",
-                # Instagram style mentions
                 ".//span[contains(@class, 'Igw0E') and contains(@class, 'mentions')]",
                 ".//span[contains(@data-testid, 'mention')]",
                 ".//span[contains(@role, 'button') and contains(@class, 'mention')]",
@@ -4957,12 +4707,10 @@ def writecaption_element():
                     mentions = el.find_elements(By.XPATH, xpath)
                     for mention in mentions:
                         if mention.is_displayed():
-                            # Get mention text or attribute
                             mention_text = mention.text.strip().lower()
                             mention_username = mention.get_attribute('data-username') or ''
                             mention_text_content = mention.get_attribute('textContent') or ''
                             
-                            # Check if the tag matches
                             if (tag_clean in mention_text or 
                                 tag_clean in mention_username or 
                                 tag_clean in mention_text_content or
@@ -4973,7 +4721,6 @@ def writecaption_element():
                 except:
                     continue
             
-            # Check for any element that contains @username pattern in the composer
             try:
                 script = """
                 var elements = arguments[0].getElementsByTagName('*');
@@ -5001,9 +4748,7 @@ def writecaption_element():
             return False
     
     def clear_composer_content(el):
-        """Clear all content from the composer"""
         try:
-            # Select all and delete
             ActionChains(driver).click(el).perform()
             time.sleep(0.1)
             ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
@@ -5017,7 +4762,6 @@ def writecaption_element():
             return False
     
     def add_line_breaks(el, count=5):
-        """Add line breaks using Shift+Enter"""
         try:
             ActionChains(driver).click(el).perform()
             time.sleep(0.2)
@@ -5035,48 +4779,34 @@ def writecaption_element():
             return False
     
     def add_tag_with_autocomplete(driver, el, tag, max_attempts=3):
-        """
-        Types a tag, selects suggestion, and confirms it's properly tagged.
-        Uses mention element detection instead of text checking.
-        """
         if not tag:
-            return True  # No tag to add
+            return True
         
         print(f"  ADDING TAG: {tag}")
-        
-        # Remove @ if present for autocomplete
         tag_without_at = tag.lstrip('@')
         
         for attempt in range(max_attempts):
             print(f"  Attempt {attempt + 1}/{max_attempts}")
             
             try:
-                # Ensure element is focused
                 ActionChains(driver).click(el).perform()
                 time.sleep(0.2)
-                
-                # Move to end of text
                 ActionChains(driver).key_down(Keys.CONTROL).send_keys(Keys.END).key_up(Keys.CONTROL).perform()
                 time.sleep(0.1)
                 
-                # Check if mention already exists
                 if check_mention_exists(el, tag):
                     print(f"  ✅ Mention already exists: {tag}")
                     return True
                 
-                # Type the tag with @
                 for char in tag:
                     ActionChains(driver).send_keys(char).perform()
                     time.sleep(random.uniform(0.02, 0.05))
                 
-                # Wait for suggestions to load
                 print(f"  Waiting 2 seconds for suggestions to load...")
                 time.sleep(2)
                 
-                # Try to select suggestion
                 suggestion_selected = False
                 
-                # First try clickable suggestions
                 suggestion_xpaths = [
                     "//div[contains(@class, 'suggestions')]//li",
                     "//div[contains(@class, 'autocomplete')]//li",
@@ -5098,7 +4828,6 @@ def writecaption_element():
                         visible_suggestions = [s for s in suggestions if s.is_displayed()]
                         
                         if visible_suggestions:
-                            # Try to find matching suggestion
                             for suggestion in visible_suggestions:
                                 try:
                                     suggestion_text = suggestion.text.strip().lower()
@@ -5111,7 +4840,6 @@ def writecaption_element():
                                 except:
                                     continue
                             
-                            # If no match, click first suggestion
                             if not suggestion_selected:
                                 visible_suggestions[0].click()
                                 print(f"  ✅ Selected first suggestion")
@@ -5120,7 +4848,6 @@ def writecaption_element():
                     except:
                         continue
                 
-                # If no clickable suggestions found, try keyboard navigation
                 if not suggestion_selected:
                     print("  No clickable suggestions found, trying keyboard navigation...")
                     try:
@@ -5131,22 +4858,18 @@ def writecaption_element():
                     except:
                         pass
                 
-                # If still no suggestion, press Enter
                 if not suggestion_selected:
                     print("  No suggestions, pressing Enter...")
                     ActionChains(driver).send_keys(Keys.ENTER).perform()
                     time.sleep(0.3)
                 
-                # ---- CONFIRMATION PHASE ----
                 print("  Confirming tag selection...")
                 time.sleep(1)
                 
-                # Check for mention element
                 if check_mention_exists(el, tag):
                     print(f"  ✅ Tag successfully confirmed as mention: {tag}")
                     return True
                 
-                # Check if the text contains the tag (fallback if mention detection fails)
                 final_text = get_element_text(el)
                 if tag in final_text:
                     print(f"  ⚠️ Tag found as text (not mention), but acceptable")
@@ -5163,19 +4886,16 @@ def writecaption_element():
         return False
     
     def add_profile_link_with_typing(el, link):
-        """Add profile link by typing it"""
         if not link:
             return True
         
         print(f"  ADDING PROFILE LINK: {link}")
         try:
-            # Ensure element is focused and at end
             ActionChains(driver).click(el).perform()
             time.sleep(0.2)
             ActionChains(driver).key_down(Keys.CONTROL).send_keys(Keys.END).key_up(Keys.CONTROL).perform()
             time.sleep(0.1)
             
-            # Type the profile link with medium speed
             for char in link:
                 ActionChains(driver).send_keys(char).perform()
                 time.sleep(random.uniform(0.02, 0.05))
@@ -5188,7 +4908,7 @@ def writecaption_element():
             return False
 
     # --------------------------------------------------------------------- #
-    # 7. Test candidates – now with proper content verification
+    # 7. Test candidates
     # --------------------------------------------------------------------- #
     working_element = None
     selected_caption_lower = selected_caption.lower()
@@ -5211,7 +4931,6 @@ def writecaption_element():
                 writecaption_element.last_written_caption = selected_caption
                 break
 
-            # Type the caption
             chosen_func(el, selected_caption)
             time.sleep(0.6)
 
@@ -5225,14 +4944,11 @@ def writecaption_element():
                 writecaption_element.has_written = True
                 writecaption_element.last_written_caption = selected_caption
                 
-                # ---- ADD CONTENT IN SEQUENCE ----
-                # 1. Add line breaks
                 if not add_line_breaks(el, 5):
                     print("  ❌ Failed to add line breaks, clearing and restarting...")
                     clear_composer_content(el)
                     continue
                 
-                # 2. Add tag
                 if tag:
                     tag_success = add_tag_with_autocomplete(driver, el, tag, max_attempts=3)
                     if not tag_success:
@@ -5240,41 +4956,29 @@ def writecaption_element():
                         clear_composer_content(el)
                         continue
                 
-                # 3. Add profile link
                 if include_profile_link and profile_link:
                     if not add_profile_link_with_typing(el, profile_link):
                         print("  ❌ Failed to add profile link, clearing and restarting...")
                         clear_composer_content(el)
                         continue
                 
-                # ---- VERIFY ALL CONTENT ----
-                # Get final text
                 final_text = get_element_text(el)
                 print(f"  Final text: '{final_text[:100]}...'")
                 
-                # Verify caption
                 caption_ok = selected_caption_lower in final_text.lower()
-                
-                # Verify tag (check for mention)
                 tag_ok = not tag or check_mention_exists(el, tag)
                 if not tag_ok:
-                    # Fallback: check if tag is in text
                     tag_ok = tag in final_text
-                
-                # Verify link
                 link_ok = not include_profile_link or not profile_link or (profile_link in final_text)
                 
                 if caption_ok and tag_ok and link_ok:
-                    print("  ✅ All content (caption, tag, profile link) successfully added!")
+                    print("  ✅ All content successfully added!")
                     
-                    # ---- SAVE USED CAPTION IF IN FIXED MODE ----
                     if captions_state == "fixed":
                         try:
-                            # Add the caption ID to used captions
                             if caption_id not in used_captions:
                                 used_captions.append(caption_id)
                             
-                            # Save to used_captions.json
                             with open(used_captions_path, 'w', encoding='utf-8') as f:
                                 json.dump(used_captions, f, indent=2)
                             print(f"✅ Saved used caption to: {used_captions_path}")
@@ -5293,7 +4997,6 @@ def writecaption_element():
                     clear_composer_content(el)
                     continue
 
-                # SAVE STATE
                 if next_behavior_key not in used_behaviors:
                     used_behaviors.append(next_behavior_key)
                 else:
@@ -5323,7 +5026,6 @@ def writecaption_element():
 
                 break
             else:
-                # Clear failed input
                 ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
                 ActionChains(driver).send_keys(Keys.DELETE).perform()
 
@@ -5338,10 +5040,336 @@ def writecaption_element():
         return working_element
     else:
         print("\nFallback to OCR...")
-        # Assuming writecaption_ocr() is defined in the external scope
         writecaption_ocr()
         return None
- 
+
+def writecaption_ocr():
+    """Enter a random caption using GUI automation with OCR text detection."""
+    reset_used_captions_record()
+    
+    # --------------------------------------------------------------------- #
+    # Helper: Extract caption values from any structure (OCR version)
+    # --------------------------------------------------------------------- #
+    def extract_captions_ocr(data):
+        """Extract caption values from various JSON structures."""
+        captions_list = []
+        
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    captions_list.append(item)
+                elif isinstance(item, dict):
+                    for key, value in item.items():
+                        if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                            captions_list.append(value)
+            return captions_list
+        
+        elif isinstance(data, dict):
+            if 'id' in data:
+                for key, value in data.items():
+                    if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                        captions_list.append(value)
+            else:
+                for key, value in data.items():
+                    if isinstance(value, str) and value.strip():
+                        captions_list.append(value)
+                    elif isinstance(value, dict):
+                        captions_list.extend(extract_captions_ocr(value))
+                    elif isinstance(value, list):
+                        captions_list.extend(extract_captions_ocr(value))
+            return captions_list
+        
+        return captions_list
+
+    # --------------------------------------------------------------------- #
+    # Helper: Get caption ID (OCR version)
+    # --------------------------------------------------------------------- #
+    def get_caption_id_ocr(entry):
+        if isinstance(entry, str):
+            return entry
+        elif isinstance(entry, dict):
+            for key, value in entry.items():
+                if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                    return value
+        return None
+
+    # --------------------------------------------------------------------- #
+    # Helper: Get caption description (OCR version)
+    # --------------------------------------------------------------------- #
+    def get_caption_description_ocr(entry):
+        if isinstance(entry, str):
+            return entry
+        elif isinstance(entry, dict):
+            for key, value in entry.items():
+                if key.lower() != 'id' and isinstance(value, str) and value.strip():
+                    return value
+        return None
+
+    try:
+        with open(JSON_CONFIG_PATH, 'r') as json_file:
+            config = json.load(json_file)
+        
+        author = config['author']
+        post_types = config.get('post_types', 'others').lower()
+        captions_state = config.get('captions_state', 'mixed').lower().strip()
+        print(f"Read from {JSON_CONFIG_PATH}: author='{author}', post_types='{post_types}', captions_state='{captions_state}'")
+        
+        if post_types not in ['uk', 'others']:
+            print(f"Invalid post_types value: '{post_types}'. Defaulting to 'others'.")
+            post_types = 'others'
+        
+        json_path = f"C:\\xampp\\htdocs\\serenum\\files\\captions\\{author}({post_types}).json"
+        print(f"Constructed JSON path: {json_path}")
+        
+        if not os.path.exists(json_path):
+            raise Exception(f"JSON file not found at {json_path}")
+        
+        with open(json_path, 'r') as file:
+            raw_data = json.load(file)
+        
+        # Extract captions from any structure
+        captions = extract_captions_ocr(raw_data)
+        
+        if not captions:
+            print(f"❌ No captions found in {json_path}")
+            return False
+        
+        print(f"✅ Extracted {len(captions)} captions from {json_path}")
+        
+        # --------------------------------------------------------------------- #
+        # Handle FIXED captions state - track used captions
+        # --------------------------------------------------------------------- #
+        used_captions_path = os.path.join(os.path.dirname(json_path), "used_captions.json")
+        used_captions = []
+        available_captions = []
+        caption_id = None
+        selected_caption = None
+        
+        if captions_state == "fixed":
+            print(f"\n📌 FIXED CAPTIONS MODE ENABLED - Tracking used captions (GUI)")
+            
+            if os.path.exists(used_captions_path):
+                try:
+                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                        used_captions = json.load(f)
+                    print(f"📊 Loaded {len(used_captions)} used captions from: {used_captions_path}")
+                except Exception as e:
+                    print(f"⚠️ Error loading used_captions.json: {e}")
+                    used_captions = []
+            
+            available_captions = []
+            for caption_entry in captions:
+                caption_id_check = get_caption_id_ocr(caption_entry)
+                if caption_id_check not in used_captions:
+                    available_captions.append(caption_entry)
+            
+            print(f"📊 Total captions: {len(captions)}, Used: {len(used_captions)}, Available: {len(available_captions)}")
+            
+            if len(available_captions) == 0:
+                print("⚠️ ALL CAPTIONS HAVE BEEN USED! Resetting used captions list...")
+                used_captions = []
+                available_captions = captions.copy()
+                print(f"📊 Reset - Available captions: {len(available_captions)}")
+                
+                try:
+                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                        json.dump([], f, indent=2)
+                    print("✅ Reset used_captions.json")
+                except Exception as e:
+                    print(f"⚠️ Error resetting used_captions.json: {e}")
+            
+            selected_caption_entry = random.choice(available_captions)
+            selected_caption = get_caption_description_ocr(selected_caption_entry)
+            caption_id = get_caption_id_ocr(selected_caption_entry)
+            
+            print(f"📝 Selected caption (ID: {caption_id[:50] if caption_id else 'N/A'}...): '{selected_caption[:100] if selected_caption else ''}...'")
+            
+        else:
+            print(f"\n🔄 MIXED CAPTIONS MODE - No tracking (GUI)")
+            selected_caption_entry = random.choice(captions)
+            selected_caption = get_caption_description_ocr(selected_caption_entry)
+            caption_id = get_caption_id_ocr(selected_caption_entry)
+            print(f"Selected random caption for author '{author}' (post_types '{post_types}', GUI): '{selected_caption}'")
+        
+        if not hasattr(writecaption_ocr, 'last_written_caption'):
+            writecaption_ocr.last_written_caption = None
+        
+        print("Searching for 'text' to locate input field")
+        retry_count = 0
+        max_retries = 3
+        save_path = r"C:\xampp\htdocs\serenum\files\gui"
+        
+        while retry_count < max_retries:
+            screenshot = ImageGrab.grab()
+            screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
+            
+            os.makedirs(save_path, exist_ok=True)
+            screenshot_file = os.path.join(save_path, "caption_text_area.png")
+            cv2.imwrite(screenshot_file, screenshot_cv)
+            print(f"Screenshot captured and saved as '{screenshot_file}'")
+            
+            gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
+            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            resized = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+            thresh = cv2.adaptiveThreshold(resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                         cv2.THRESH_BINARY, 11, 2)
+            
+            data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT, config='--psm 3')
+            print("OCR data keys:", data.keys())
+            print("All detected text with positions:")
+            for i, text in enumerate(data["text"]):
+                if text.strip():
+                    print(f"Index {i}: '{text}' (Confidence: {data['conf'][i]}, Left: {data['left'][i]}, Top: {data['top'][i]})")
+            
+            text_lower = [t.lower() for t in data["text"]]
+            text_index = None
+            for i, text in enumerate(text_lower):
+                if text == "text":
+                    text_index = i
+                    break
+            
+            if text_index is not None:
+                x = data["left"][text_index] // 1.5
+                y = data["top"][text_index] // 1.5
+                w = data["width"][text_index] // 1.5
+                h = data["height"][text_index] // 1.5
+                center_x = x + w // 2
+                center_y = y + h // 2
+                print(f"Detected: 'text'")
+                print(f"Coordinates: left={x}, top={y}, width={w}, height={h}")
+                print(f"Moving to: ({center_x}, {center_y})")
+                
+                pyautogui.moveTo(center_x, center_y + 50)
+                time.sleep(0.1)
+                pyautogui.click()
+                print("✅ Clicked on 'text' input field")
+                time.sleep(1)
+                
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.5)
+                pyautogui.hotkey('ctrl', 'c')
+                time.sleep(0.5)
+                current_text = pyperclip.paste().strip()
+                print(f"Current text in field (GUI): '{current_text}'")
+                
+                if not current_text or (current_text != selected_caption and current_text != writecaption_ocr.last_written_caption):
+                    pyautogui.hotkey('ctrl', 'a')
+                    pyautogui.hotkey('delete')
+                    time.sleep(0.5)
+                    
+                    pyautogui.write(selected_caption)
+                    print(f"Entered text into post field (GUI): '{selected_caption}'")
+                    
+                    writecaption_ocr.last_written_caption = selected_caption
+                    print(f"Saved caption to last_written_caption (GUI): '{selected_caption}'")
+                    time.sleep(1)
+                    
+                    if captions_state == "fixed" and caption_id:
+                        try:
+                            if caption_id not in used_captions:
+                                used_captions.append(caption_id)
+                            
+                            with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                json.dump(used_captions, f, indent=2)
+                            print(f"✅ Saved used caption to: {used_captions_path}")
+                            print(f"📊 Total used captions: {len(used_captions)}")
+                        except Exception as e:
+                            print(f"⚠️ Error saving used caption: {e}")
+                    
+                    return True
+                
+                elif current_text == selected_caption or current_text == writecaption_ocr.last_written_caption:
+                    print(f"Text '{current_text}' is already correct in the text field (GUI). Skipping write operation.")
+                    if current_text == selected_caption:
+                        writecaption_ocr.last_written_caption = selected_caption
+                        print(f"Updated last_written_caption to match current text (GUI): '{selected_caption}'")
+                        
+                        if captions_state == "fixed" and caption_id:
+                            try:
+                                if os.path.exists(used_captions_path):
+                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                                        current_used = json.load(f)
+                                else:
+                                    current_used = []
+                                
+                                if caption_id not in current_used:
+                                    current_used.append(caption_id)
+                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                        json.dump(current_used, f, indent=2)
+                                    print(f"✅ Saved used caption to: {used_captions_path}")
+                                    print(f"📊 Total used captions: {len(current_used)}")
+                            except Exception as e:
+                                print(f"⚠️ Error saving used caption: {e}")
+                    return True
+                
+                else:
+                    print(f"Text field contains different text (GUI): '{current_text}'. Replacing with saved caption.")
+                    if writecaption_ocr.last_written_caption:
+                        pyautogui.hotkey('ctrl', 'a')
+                        pyautogui.hotkey('delete')
+                        time.sleep(0.5)
+                        pyautogui.write(writecaption_ocr.last_written_caption)
+                        print(f"Replaced text with last written caption (GUI): '{writecaption_ocr.last_written_caption}'")
+                        time.sleep(1)
+                        
+                        if captions_state == "fixed" and caption_id:
+                            try:
+                                if os.path.exists(used_captions_path):
+                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                                        current_used = json.load(f)
+                                else:
+                                    current_used = []
+                                
+                                if caption_id not in current_used:
+                                    current_used.append(caption_id)
+                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                        json.dump(current_used, f, indent=2)
+                                    print(f"✅ Saved used caption to: {used_captions_path}")
+                                    print(f"📊 Total used captions: {len(current_used)}")
+                            except Exception as e:
+                                print(f"⚠️ Error saving used caption: {e}")
+                    else:
+                        pyautogui.hotkey('ctrl', 'a')
+                        pyautogui.hotkey('delete')
+                        time.sleep(0.5)
+                        pyautogui.write(selected_caption)
+                        writecaption_ocr.last_written_caption = selected_caption
+                        print(f"No previous caption saved. Entered new caption (GUI): '{selected_caption}'")
+                        time.sleep(1)
+                        
+                        if captions_state == "fixed" and caption_id:
+                            try:
+                                if os.path.exists(used_captions_path):
+                                    with open(used_captions_path, 'r', encoding='utf-8') as f:
+                                        current_used = json.load(f)
+                                else:
+                                    current_used = []
+                                
+                                if caption_id not in current_used:
+                                    current_used.append(caption_id)
+                                    with open(used_captions_path, 'w', encoding='utf-8') as f:
+                                        json.dump(current_used, f, indent=2)
+                                    print(f"✅ Saved used caption to: {used_captions_path}")
+                                    print(f"📊 Total used captions: {len(current_used)}")
+                            except Exception as e:
+                                print(f"⚠️ Error saving used caption: {e}")
+                
+                return True
+            
+            else:
+                retry_count += 1
+                print(f"Retry {retry_count}/{max_retries}: No 'text' found")
+                if retry_count == max_retries:
+                    print("Max retries reached. No 'text' input field found.")
+                    return False
+                time.sleep(1)
+        
+        return False
+    
+    except Exception as e:
+        print(f"Failed to enter text (GUI): {str(e)}")
+        return False
+    
 def extract_texts_old(return_time_value=None, additional_texts=None):
     """Extract all visible text from the current webpage, construct a time value in the format 'Time: HH:MM',
     and check for additional specified text values.
@@ -6524,7 +6552,7 @@ def uploadedjpgs():
             for item in items:
                 if isinstance(item, str):
                     url = item.strip()
-                    if url.lower().startswith(('http://', 'https://')) and url.lower().endswith(('.jpg', '.jpeg')):
+                    if url.lower().startswith(('https://', 'https://')) and url.lower().endswith(('.jpg', '.jpeg')):
                         next_urls.append(url)
                     else:
                         print(f"Skipped invalid URL: {url}")
@@ -6601,7 +6629,7 @@ def uploadedjpgs():
                 candidates = []
 
             for u in candidates:
-                if isinstance(u, str) and u.strip().lower().startswith(('http://', 'https://')):
+                if isinstance(u, str) and u.strip().lower().startswith(('https://', 'https://')):
                     existing_uploaded.append(u.strip())
                     
         except Exception as e:
@@ -6991,13 +7019,11 @@ def firstbatch():
     corruptedjpgs()
     orderjpgs()
 
-def secondbatch_():  
-    #*
-    toggleaddphoto()
-    #toggleaddphoto() #*
-    selectgroups()
-
 def secondbatch():  
+    #*
+    writecaption_element()
+
+def secondbatch_():  
     #*
     toggleaddphoto()
     #toggleaddphoto() #*
