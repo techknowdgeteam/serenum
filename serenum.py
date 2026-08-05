@@ -2390,14 +2390,15 @@ def updated_config_construction():
     Converts configurations to the proper nested format.
     
     IMPORTANT: 
-    - Reads from NEW_CONFIGS and AUTHOR_PATH
-    - Converts all configs to UPDATED_CONFIGS format
+    - Reads from NEW_CONFIGS (list) and AUTHOR_PATH (single object)
+    - Converts all configs to UPDATED_CONFIGS format (list)
     - ALL fields (except status and operation_status) are placed inside dynamic_values nest
-    - ALWAYS adds a status field to every config: 'pending' on success, 'aborted' on errors
+    - PRESERVES existing status and operation_status from AUTHOR_PATH
+    - Does NOT override status - keeps whatever status was set by previous operations
     - PER-CONFIG operation_status with detailed messages about what was processed
     
-    UPDATES status and operation_status in AUTHOR_PATH based on processing results.
-    status = 'pending' if no errors, 'aborted' if any errors encountered.
+    UPDATES operation_status in AUTHOR_PATH based on processing results.
+    Preserves existing status (does not change it).
     operation_status contains professional message explaining any issues.
     """
     
@@ -2424,47 +2425,77 @@ def updated_config_construction():
         except Exception:
             return False
     
-    def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
+    def update_author_operation_status(operation_message, preserve_status=True):
+        """Update operation_status in AUTHOR_PATH while preserving existing status"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+            author_data = load_json_file(AUTHOR_PATH, {})
             
-            if author_data:
-                author_data[-1]['status'] = status_value
+            # If AUTHOR_PATH is a list, handle accordingly
+            if isinstance(author_data, list):
+                if not author_data:
+                    author_data = [{}]
+                # Update operation_status, preserve status
+                if preserve_status and 'status' in author_data[-1]:
+                    # Keep existing status
+                    pass
+                else:
+                    # Only set status if it doesn't exist
+                    if 'status' not in author_data[-1]:
+                        author_data[-1]['status'] = 'pending'
+                
                 author_data[-1]['operation_status'] = operation_message
                 
                 if save_json_file(AUTHOR_PATH, author_data):
                     return True
+                return False
+            
+            # If AUTHOR_PATH is a single object
+            elif isinstance(author_data, dict):
+                # Preserve existing status - don't change it
+                # Only set status if it doesn't exist
+                if 'status' not in author_data:
+                    author_data['status'] = 'pending'
+                
+                author_data['operation_status'] = operation_message
+                
+                if save_json_file(AUTHOR_PATH, author_data):
+                    return True
+                return False
+            
             return False
-        except Exception:
+        except Exception as e:
             return False
     
-    def nest_fields_in_dynamic_values(config, default_status='pending', default_operation_status=''):
+    def nest_fields_in_dynamic_values(config, existing_status=None, existing_operation_status=None):
         """
         Move all fields (except status and operation_status) into dynamic_values nest.
-        ALWAYS ensures status field exists.
-        FORCES overwrite of operation_status with the provided value.
+        PRESERVES existing status if provided.
         """
         if not isinstance(config, dict):
             return config
         
         nested_config = {}
         
-        # Extract status - ALWAYS ensure it exists
-        if 'status' in config and config['status']:
+        # PRESERVE existing status - do NOT change it
+        if existing_status is not None:
+            nested_config['status'] = existing_status
+        elif 'status' in config and config['status']:
             nested_config['status'] = config['status']
         else:
-            nested_config['status'] = default_status
+            # Only set default if no status exists
+            nested_config['status'] = 'pending'
         
-        # ALWAYS use the provided default_operation_status if it exists
-        if default_operation_status:
-            nested_config['operation_status'] = default_operation_status
+        # Handle operation_status
+        if existing_operation_status is not None:
+            nested_config['operation_status'] = existing_operation_status
         elif 'operation_status' in config and config['operation_status']:
             nested_config['operation_status'] = config['operation_status']
         else:
-            nested_config['operation_status'] = ''
+            # Create operation status based on author
+            author_name = config.get('author', '')
+            if not author_name and 'dynamic_values' in config:
+                author_name = config['dynamic_values'].get('author', 'Unknown')
+            nested_config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' processed"
         
         # Collect all other fields into dynamic_values
         dynamic_values = {}
@@ -2489,15 +2520,6 @@ def updated_config_construction():
             if 'dynamic_values' not in nested_config:
                 nested_config['dynamic_values'] = {}
             nested_config['dynamic_values']['author'] = config['author']
-        
-        # Also ensure operation_status inside dynamic_values
-        if 'dynamic_values' in nested_config:
-            if default_operation_status:
-                nested_config['dynamic_values']['operation_status'] = default_operation_status
-            elif 'operation_status' in nested_config:
-                nested_config['dynamic_values']['operation_status'] = nested_config['operation_status']
-            else:
-                nested_config['dynamic_values']['operation_status'] = ''
         
         return nested_config
     
@@ -2533,7 +2555,7 @@ def updated_config_construction():
     config_status_messages = []
     has_critical_errors = False
     
-    # Load NEW_CONFIGS
+    # Load NEW_CONFIGS (should be a list)
     try:
         new_configs = load_json_file(NEW_CONFIGS, [])
         if not isinstance(new_configs, list):
@@ -2545,17 +2567,33 @@ def updated_config_construction():
         errors_encountered.append(error_msg)
         new_configs = []
     
-    # Load AUTHOR_PATH
+    # Load AUTHOR_PATH (single object or list)
     try:
-        author_path_data = load_json_file(AUTHOR_PATH, [])
-        if not isinstance(author_path_data, list):
-            author_path_data = []
-        print(f"📁 Loaded {len(author_path_data)} configs from AUTHOR_PATH")
+        author_path_data = load_json_file(AUTHOR_PATH, {})
+        print(f"📁 Loaded from AUTHOR_PATH")
+        
+        # Debug: show what was loaded
+        if isinstance(author_path_data, dict):
+            author_name = author_path_data.get('author', 'Unknown')
+            status = author_path_data.get('status', 'No status')
+            print(f"   📝 Type: Single config object")
+            print(f"   👤 Author: {author_name}")
+            print(f"   📊 Status: {status}")
+        elif isinstance(author_path_data, list):
+            print(f"   📝 Type: List of {len(author_path_data)} configs")
+            for idx, item in enumerate(author_path_data):
+                if isinstance(item, dict):
+                    author_name = item.get('author', 'Unknown')
+                    status = item.get('status', 'No status')
+                    print(f"   📝 Config {idx+1}: Author={author_name}, Status={status}")
+        else:
+            print(f"   ⚠️ Unknown type: {type(author_path_data)}")
+            
     except Exception as e:
         error_msg = f"Failed to load AUTHOR_PATH: {str(e)}."
         print(f"❌ {error_msg}")
         errors_encountered.append(error_msg)
-        author_path_data = []
+        author_path_data = {}
     
     # ============================================================
     # STEP 2: CONVERT CONFIGURATIONS TO NESTED FORMAT
@@ -2567,44 +2605,55 @@ def updated_config_construction():
     converted_configs = []
     processed_authors = set()
     
-    # Process configs from AUTHOR_PATH
-    for idx, config in enumerate(author_path_data):
-        print(f"\n📝 Processing config {idx + 1}/{len(author_path_data)} from AUTHOR_PATH")
+    # Process AUTHOR_PATH (single config object or list)
+    if isinstance(author_path_data, dict):
+        # Single config object
+        print(f"\n📝 Processing single config from AUTHOR_PATH")
         
         try:
             # Extract author name
-            author_name = config.get('author', '')
-            if not author_name and 'dynamic_values' in config:
-                author_name = config['dynamic_values'].get('author', '')
+            author_name = author_path_data.get('author', '')
+            if not author_name and 'dynamic_values' in author_path_data:
+                author_name = author_path_data['dynamic_values'].get('author', '')
             
             if not author_name:
-                warning_msg = f"Config {idx + 1} in AUTHOR_PATH has no 'author' field. Skipping."
+                warning_msg = "Config in AUTHOR_PATH has no 'author' field. Using 'Unknown'."
                 print(f"   ⚠️ {warning_msg}")
                 warnings_encountered.append(warning_msg)
-                failed_count += 1
-                continue
+                author_name = 'Unknown'
             
             print(f"   👤 Author: {author_name}")
             
+            # PRESERVE existing status - this is critical
+            existing_status = author_path_data.get('status', None)
+            existing_operation_status = author_path_data.get('operation_status', None)
+            
+            print(f"   📊 Preserving status: {existing_status}")
+            if existing_operation_status:
+                print(f"   📝 Preserving operation_status: {existing_operation_status[:80]}...")
+            
             # Check if this config is already in proper nested format
-            if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-                # Already nested - ensure status is set
-                operation_msg = f"updated_config_construction: Configuration for '{author_name}' already in nested format. Status preserved."
+            if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
+                # Already nested - preserve everything
                 nested_config = nest_fields_in_dynamic_values(
-                    config,
-                    default_status=config.get('status', 'pending'),
-                    default_operation_status=operation_msg
+                    author_path_data,
+                    existing_status=existing_status,
+                    existing_operation_status=existing_operation_status
                 )
                 print(f"   ✅ Already in nested format - preserved")
             else:
-                # Convert to nested format
-                operation_msg = f"updated_config_construction: Converting configuration for '{author_name}' to nested format."
+                # Convert to nested format - PRESERVE status
                 nested_config = nest_fields_in_dynamic_values(
-                    config,
-                    default_status='pending',
-                    default_operation_status=operation_msg
+                    author_path_data,
+                    existing_status=existing_status,
+                    existing_operation_status=existing_operation_status
                 )
                 print(f"   ✅ Converted to nested format")
+            
+            # Ensure status is preserved
+            if existing_status:
+                nested_config['status'] = existing_status
+                print(f"   ✅ Status preserved: {existing_status}")
             
             converted_configs.append(nested_config)
             processed_authors.add(author_name)
@@ -2617,7 +2666,7 @@ def updated_config_construction():
             })
             
         except Exception as e:
-            error_msg = f"Config {idx + 1} in AUTHOR_PATH: Error during conversion: {str(e)}"
+            error_msg = f"Config in AUTHOR_PATH: Error during conversion: {str(e)}"
             print(f"   ❌ {error_msg}")
             errors_encountered.append(error_msg)
             failed_count += 1
@@ -2625,26 +2674,93 @@ def updated_config_construction():
             
             # Create error config
             try:
-                author_name_local = author_name if 'author_name' in locals() else f"config_{idx}"
                 error_operation_msg = f"updated_config_construction: ERROR - {error_msg}"
                 error_config = {
                     "status": "aborted",
                     "operation_status": error_operation_msg,
                     "dynamic_values": {
-                        "author": author_name_local,
+                        "author": "Unknown",
                         "error": str(e)
                     }
                 }
                 converted_configs.append(error_config)
                 config_status_messages.append({
-                    'author': author_name_local,
+                    'author': 'Unknown',
                     'status': 'aborted',
                     'message': error_operation_msg
                 })
             except:
                 pass
     
-    # Process remaining configs from NEW_CONFIGS (not in AUTHOR_PATH)
+    elif isinstance(author_path_data, list):
+        # List of configs
+        for idx, config in enumerate(author_path_data):
+            print(f"\n📝 Processing config {idx + 1}/{len(author_path_data)} from AUTHOR_PATH")
+            
+            try:
+                # Extract author name
+                author_name = config.get('author', '')
+                if not author_name and 'dynamic_values' in config:
+                    author_name = config['dynamic_values'].get('author', '')
+                
+                if not author_name:
+                    warning_msg = f"Config {idx + 1} in AUTHOR_PATH has no 'author' field. Skipping."
+                    print(f"   ⚠️ {warning_msg}")
+                    warnings_encountered.append(warning_msg)
+                    failed_count += 1
+                    continue
+                
+                print(f"   👤 Author: {author_name}")
+                
+                # PRESERVE existing status
+                existing_status = config.get('status', None)
+                existing_operation_status = config.get('operation_status', None)
+                
+                print(f"   📊 Preserving status: {existing_status}")
+                
+                # Check if already nested
+                if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+                    nested_config = nest_fields_in_dynamic_values(
+                        config,
+                        existing_status=existing_status,
+                        existing_operation_status=existing_operation_status
+                    )
+                    print(f"   ✅ Already in nested format - preserved")
+                else:
+                    nested_config = nest_fields_in_dynamic_values(
+                        config,
+                        existing_status=existing_status,
+                        existing_operation_status=existing_operation_status
+                    )
+                    print(f"   ✅ Converted to nested format")
+                
+                # Ensure status is preserved
+                if existing_status:
+                    nested_config['status'] = existing_status
+                    print(f"   ✅ Status preserved: {existing_status}")
+                
+                converted_configs.append(nested_config)
+                processed_authors.add(author_name)
+                processed_count += 1
+                
+                config_status_messages.append({
+                    'author': author_name,
+                    'status': nested_config.get('status', 'pending'),
+                    'message': nested_config.get('operation_status', '')
+                })
+                
+            except Exception as e:
+                error_msg = f"Config {idx + 1} in AUTHOR_PATH: Error during conversion: {str(e)}"
+                print(f"   ❌ {error_msg}")
+                errors_encountered.append(error_msg)
+                failed_count += 1
+                has_critical_errors = True
+    
+    else:
+        # AUTHOR_PATH is empty or invalid
+        print("ℹ️ No valid config found in AUTHOR_PATH")
+    
+    # Process configs from NEW_CONFIGS (list) that aren't already processed
     for new_config in new_configs:
         author_name = new_config.get('author', '')
         if not author_name and 'dynamic_values' in new_config:
@@ -2653,13 +2769,14 @@ def updated_config_construction():
         if author_name and author_name not in processed_authors:
             print(f"\n📝 Adding config from NEW_CONFIGS: {author_name}")
             
+            # For NEW_CONFIGS, create operation status
             operation_msg = f"updated_config_construction: Adding configuration for '{author_name}' from NEW_CONFIGS."
             
-            # Convert to nested format
+            # Convert to nested format - NEW_CONFIGS might not have status
             nested_config = nest_fields_in_dynamic_values(
                 new_config,
-                default_status='pending',
-                default_operation_status=operation_msg
+                existing_status='pending',  # New configs start as pending
+                existing_operation_status=operation_msg
             )
             
             converted_configs.append(nested_config)
@@ -2673,40 +2790,37 @@ def updated_config_construction():
             })
             
             print(f"   ✅ Added config for {author_name}")
+        elif author_name:
+            print(f"\n📝 Skipping config from NEW_CONFIGS: {author_name} (already processed from AUTHOR_PATH)")
     
     # ============================================================
-    # STEP 3: ENSURE STATUS EXISTS IN ALL CONFIGS
+    # STEP 3: ENSURE CONSISTENCY (BUT PRESERVE STATUS)
     # ============================================================
     print(f"\n{'='*60}")
-    print("🔧 ENSURING STATUS IN ALL CONFIGS...")
+    print("🔧 ENSURING CONSISTENCY IN ALL CONFIGS...")
     print(f"{'='*60}")
     
-    overall_status = 'aborted' if (has_critical_errors or len(errors_encountered) > 0) else 'pending'
-    
     for i, config in enumerate(converted_configs):
-        # Ensure status exists
+        # Only set status if it doesn't exist - PRESERVE existing
         if 'status' not in config or not config['status']:
-            config['status'] = overall_status
-            print(f"   ✅ Added status '{overall_status}' to config {i + 1}")
+            config['status'] = 'pending'
+            print(f"   ✅ Added default status 'pending' to config {i + 1}")
+        else:
+            print(f"   ✅ Preserved existing status '{config['status']}' for config {i + 1}")
         
         # Ensure operation_status exists
-        current_op_status = config.get('operation_status', '')
-        if not current_op_status or not current_op_status.startswith('updated_config_construction'):
+        if 'operation_status' not in config or not config['operation_status']:
             author_name = config.get('author', '')
             if not author_name and 'dynamic_values' in config:
                 author_name = config['dynamic_values'].get('author', f'config_{i+1}')
-            
-            if config.get('status') == 'aborted':
-                config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' marked as aborted due to errors"
-            else:
-                config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' processed successfully"
-            print(f"   ✅ Updated operation_status for config {i + 1}")
+            config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' processed"
+            print(f"   ✅ Added operation_status for config {i + 1}")
         
-        # Also ensure status in dynamic_values
+        # Also ensure in dynamic_values
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
             if 'status' not in config['dynamic_values']:
                 config['dynamic_values']['status'] = config['status']
-            if 'operation_status' not in config['dynamic_values'] or not config['dynamic_values']['operation_status'].startswith('updated_config_construction'):
+            if 'operation_status' not in config['dynamic_values']:
                 config['dynamic_values']['operation_status'] = config.get('operation_status', '')
     
     print(f"   ✅ All {len(converted_configs)} configs have status and operation_status")
@@ -2724,7 +2838,8 @@ def updated_config_construction():
                 print(f"✅ Converted {len(converted_configs)} configs saved to UPDATED_CONFIGS")
                 print(f"\n📋 PER-CONFIG STATUS SUMMARY:")
                 for status_info in config_status_messages:
-                    print(f"   👤 {status_info['author']}: {status_info['status']}")
+                    status_emoji = '✅' if status_info['status'] == 'completed' or status_info['status'] == 'pending' else '⚠️' if status_info['status'] == 'warning' else '❌'
+                    print(f"   {status_emoji} 👤 {status_info['author']}: {status_info['status']}")
                     print(f"      📝 {status_info['message'][:80]}...")
             else:
                 error_msg = f"Failed to save converted configs to {UPDATED_CONFIGS}."
@@ -2741,7 +2856,7 @@ def updated_config_construction():
         has_critical_errors = True
     
     # ============================================================
-    # STEP 5: UPDATE STATUS IN AUTHOR_PATH
+    # STEP 5: UPDATE OPERATION_STATUS IN AUTHOR_PATH (PRESERVE STATUS)
     # ============================================================
     all_errors = errors_encountered
     detailed_issues = []
@@ -2756,19 +2871,18 @@ def updated_config_construction():
         if len(warnings_encountered) > 3:
             detailed_issues.append(f"... and {len(warnings_encountered) - 3} more warnings")
     
+    # Build operation message - DO NOT change status
     if all_errors or has_critical_errors:
-        status_value = 'aborted'
         operation_msg = f"updated_config_construction: Configuration conversion encountered issues. Details: {'. '.join(detailed_issues)}."
-        print(f"\n⚠️ Setting status to 'aborted'")
-        update_author_status(status_value, operation_msg)
+        print(f"\n⚠️ Updating operation_status (preserving existing status)")
+        update_author_operation_status(operation_msg, preserve_status=True)
     else:
-        status_value = 'pending'
         if warnings_encountered:
             operation_msg = f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. Warnings: " + "; ".join(warnings_encountered)
         else:
             operation_msg = f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations."
-        print(f"\n✅ Setting status to 'pending'")
-        update_author_status(status_value, operation_msg)
+        print(f"\n✅ Updating operation_status (preserving existing status)")
+        update_author_operation_status(operation_msg, preserve_status=True)
     
     # ============================================================
     # STEP 6: DISPLAY LIVE SUMMARY
@@ -2778,9 +2892,9 @@ def updated_config_construction():
     print(f"{'='*60}")
     
     for idx, status_info in enumerate(config_status_messages, 1):
-        status_emoji = '✅' if status_info['status'] == 'pending' else '❌' if status_info['status'] == 'aborted' else '⚠️'
+        status_emoji = '✅' if status_info['status'] in ['pending', 'completed'] else '❌' if status_info['status'] == 'aborted' else '⚠️'
         print(f"\n{status_emoji} Config #{idx} - Author: {status_info['author']}")
-        print(f"   Status: {status_info['status']}")
+        print(f"   Status: {status_info['status']} (PRESERVED)")
         print(f"   Operation: {status_info['message']}")
         if idx < len(config_status_messages):
             print(f"   {'-'*50}")
@@ -2794,11 +2908,10 @@ def updated_config_construction():
     print(f"\n{'='*60}")
     print("✅ CONFIGURATION CONVERTER COMPLETED!")
     print(f"\n📊 Summary:")
-    print(f"  - Processed from AUTHOR_PATH: {len(author_path_data)} configs")
+    print(f"  - Processed from AUTHOR_PATH: 1 config (preserved status)")
     print(f"  - Added from NEW_CONFIGS: {len([c for c in new_configs if c.get('author') not in processed_authors])}")
     print(f"  - Total configs saved: {len(converted_configs)}")
-    print(f"  - Overall status: {overall_status}")
-    print(f"  - Status set to: {status_value}")
+    print(f"  - Statuses preserved (NOT changed)")
     print(f"  - Configs with operation status: {len(config_status_messages)}")
     
     if warnings_encountered:
@@ -2836,6 +2949,11 @@ def update_settings():
     
     Updates operation_status in AUTHOR_PATH based on processing results.
     Contains professional message explaining any issues.
+    
+    PRE-CHECKS:
+    - Validates that there is actual data to update (settings or uploaded_jpgs_url)
+    - Does NOT launch browser if both are empty
+    - Does NOT write empty data to database
     """
     # First reconstruct the configs
     reconstruction_success = updated_config_construction()
@@ -2879,16 +2997,19 @@ def update_settings():
     def update_author_operation_status(operation_message):
         """Update only operation_status in AUTHOR_PATH"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+            author_data = load_json_file(AUTHOR_PATH, {})
             
-            if author_data:
-                # Only update operation_status, remove status if it exists
+            # Handle both dict and list formats
+            if isinstance(author_data, dict):
+                # Single config object
+                author_data['operation_status'] = operation_message
+                # Preserve status - don't delete it
+                if save_json_file(AUTHOR_PATH, author_data):
+                    return True
+            elif isinstance(author_data, list) and author_data:
+                # List of configs
                 author_data[-1]['operation_status'] = operation_message
-                if 'status' in author_data[-1]:
-                    del author_data[-1]['status']
-                
+                # Preserve status - don't delete it
                 if save_json_file(AUTHOR_PATH, author_data):
                     return True
             return False
@@ -3039,6 +3160,67 @@ def update_settings():
         
         return config_data, uploaded_jpgs_data
     
+    def has_meaningful_data(config_data):
+        """
+        Check if config_data has meaningful data (not empty).
+        Returns True if there's actual data to update.
+        """
+        if not config_data:
+            return False
+        
+        # Check if it's a list
+        if isinstance(config_data, list):
+            if not config_data:
+                return False
+            # Check each item
+            for item in config_data:
+                if isinstance(item, dict) and item:
+                    # Remove status and operation_status from consideration
+                    item_copy = item.copy()
+                    item_copy.pop('status', None)
+                    item_copy.pop('operation_status', None)
+                    if item_copy:
+                        return True
+            return False
+        
+        # Check if it's a dict
+        if isinstance(config_data, dict):
+            # Remove status and operation_status from consideration
+            config_copy = config_data.copy()
+            config_copy.pop('status', None)
+            config_copy.pop('operation_status', None)
+            if config_copy:
+                return True
+        
+        return False
+    
+    def has_uploaded_jpgs_data(uploaded_data):
+        """
+        Check if uploaded_jpgs_url data has meaningful content.
+        Returns True if there are actual URLs or data to store.
+        """
+        if not uploaded_data:
+            return False
+        
+        if isinstance(uploaded_data, list):
+            # Check if list has actual URL strings or meaningful data
+            meaningful_items = []
+            for item in uploaded_data:
+                if isinstance(item, str) and item.startswith(('http://', 'https://')):
+                    meaningful_items.append(item)
+                elif isinstance(item, dict) and item:
+                    # Check if dict has meaningful content (not just metadata)
+                    if item.get('folder') or item.get('_timestamp'):
+                        meaningful_items.append(item)
+                    elif item:
+                        meaningful_items.append(item)
+                elif item:  # Any non-empty item
+                    meaningful_items.append(item)
+            
+            return len(meaningful_items) > 0
+        
+        return bool(uploaded_data)
+    
     def save_uploaded_jpgs_to_temp(uploaded_jpgs_data):
         """
         Save uploaded_jpgs_url data to a temporary JSON file
@@ -3076,10 +3258,12 @@ def update_settings():
         
         try:
             # Convert to JSON string - ensure it's always a valid array
-            if uploaded_jpgs_data:
+            if uploaded_jpgs_data and has_uploaded_jpgs_data(uploaded_jpgs_data):
                 uploadedjpgs_json = json.dumps(uploaded_jpgs_data, ensure_ascii=False)
             else:
-                uploadedjpgs_json = '[]'
+                # If no meaningful data, don't update
+                print("📸 [UPLOAD] No meaningful uploaded_jpgs_url data to store")
+                return True, "No data to store (skipped)"
             
             print(f"📸 [UPLOAD] JSON data size: {len(uploadedjpgs_json)} characters")
             
@@ -3191,6 +3375,8 @@ def update_settings():
     uploadedjpgs_processed = False
     uploaded_jpgs_data = None
     temp_file_path = None
+    has_settings_to_update = False
+    has_uploadedjpgs_to_update = False
     
     # Ensure both files exist and are valid
     if not ensure_updated_configs_exists():
@@ -3221,8 +3407,31 @@ def update_settings():
         
         filtered_data, uploaded_jpgs_data = extract_uploaded_jpgs_data(updated_data)
         
-        # Save uploaded_jpgs_url data to temp file
-        if uploaded_jpgs_data is not None:
+        # ============================================================
+        # PRE-CHECK: Validate if there's any data to update
+        # ============================================================
+        print(f"\n{'='*60}")
+        print("🔍 [PRE-CHECK] Validating data to update...")
+        print(f"{'='*60}")
+        
+        # Check if there's meaningful settings data
+        has_settings_to_update = has_meaningful_data(filtered_data)
+        print(f"📋 Settings data: {'✅ Has data' if has_settings_to_update else '❌ Empty/no data'}")
+        
+        # Check if there's meaningful uploaded_jpgs_url data
+        has_uploadedjpgs_to_update = has_uploaded_jpgs_data(uploaded_jpgs_data)
+        print(f"📸 Uploaded JPGs data: {'✅ Has data' if has_uploadedjpgs_to_update else '❌ Empty/no data'}")
+        
+        # If both are empty, abort without launching browser
+        if not has_settings_to_update and not has_uploadedjpgs_to_update:
+            error_msg = "No meaningful data to update. Both settings and uploaded_jpgs_url are empty. Aborting update to prevent writing empty data."
+            print(f"❌ [PRE-CHECK] {error_msg}")
+            errors_encountered.append(error_msg)
+            update_author_operation_status(f"Sorry, the settings update was aborted: {error_msg}")
+            return False
+        
+        # Save uploaded_jpgs_url data to temp file only if it has meaningful data
+        if uploaded_jpgs_data is not None and has_uploadedjpgs_to_update:
             temp_success, temp_file_path = save_uploaded_jpgs_to_temp(uploaded_jpgs_data)
             if not temp_success:
                 error_msg = "Failed to save uploaded_jpgs_url data to temp file"
@@ -3231,19 +3440,19 @@ def update_settings():
                 return False
             print(f"📸 [STAGE 1] Uploaded JPGs data saved to temp ({len(uploaded_jpgs_data) if isinstance(uploaded_jpgs_data, list) else 'unknown'} items)")
         else:
-            print("📸 [STAGE 1] No uploaded_jpgs_url data found in config")
-            # Create empty array for processing
-            uploaded_jpgs_data = []
+            if uploaded_jpgs_data is not None:
+                print("📸 [STAGE 1] No meaningful uploaded_jpgs_url data found - skipping upload")
+            else:
+                print("📸 [STAGE 1] No uploaded_jpgs_url data found in config")
         
-        # Create settings string from filtered data
-        settings_string = json.dumps(filtered_data, ensure_ascii=False, separators=(',', ': '))
-        print(f"📋 [UPDATE] Filtered settings data: {len(settings_string)} characters")
-        print(f"📋 [UPDATE] Preview: {settings_string[:200]}...")
-        
-        if not settings_string or settings_string == '[]' or settings_string == '{}':
-            warning_msg = "UPDATED_CONFIGS contains empty data after filtering. The settings update will write empty data to the database."
-            print(f"⚠️ {warning_msg}")
-            warnings_encountered.append(warning_msg)
+        # Create settings string from filtered data only if it has meaningful data
+        if has_settings_to_update:
+            settings_string = json.dumps(filtered_data, ensure_ascii=False, separators=(',', ': '))
+            print(f"📋 [UPDATE] Filtered settings data: {len(settings_string)} characters")
+            print(f"📋 [UPDATE] Preview: {settings_string[:200]}...")
+        else:
+            settings_string = None
+            print(f"📋 [UPDATE] No meaningful settings data to update - skipping settings update")
         
     except json.JSONDecodeError as e:
         error_msg = f"UPDATED_CONFIGS contains invalid JSON: {str(e)}. The file is corrupted and cannot be read."
@@ -3257,6 +3466,9 @@ def update_settings():
         errors_encountered.append(error_msg)
         update_author_operation_status(f"Sorry, the settings update could not read the configuration: {error_msg}")
         return False
+    
+    # If we get here, we have at least one type of data to update
+    print(f"\n✅ [PRE-CHECK] At least one data source has content - proceeding with update")
     
     # Get phpMyAdmin URL
     phpmyadmin_url = get_phpmyadmin_url()
@@ -3621,7 +3833,7 @@ def update_settings():
             return False, error_msg
     
     # ============================================================
-    # MAIN EXECUTION
+    # MAIN EXECUTION (Only if we have data to update)
     # ============================================================
     try:
         # Step 1: Get or create Edge window
@@ -3681,49 +3893,58 @@ def update_settings():
         hwnd = enforce_window_focus(hwnd)
         
         # ============================================================
-        # STAGE 2: EXECUTE UPDATE QUERY (Filtered Settings)
+        # STAGE 2: EXECUTE UPDATE QUERY (Only if we have settings data)
         # ============================================================
-        print(f"\n{'='*60}")
-        print("📝 [STAGE 2] Updating filtered settings...")
-        print(f"{'='*60}")
-        
-        success, error_msg = execute_update_query(hwnd, settings_string)
-        
-        if not success:
-            if error_msg:
-                errors_encountered.append(error_msg)
-            else:
-                error_msg = "The UPDATE operation failed to execute successfully. Check the database connection and query syntax."
-                errors_encountered.append(error_msg)
+        if has_settings_to_update and settings_string:
+            print(f"\n{'='*60}")
+            print("📝 [STAGE 2] Updating filtered settings...")
+            print(f"{'='*60}")
             
-            update_author_operation_status(f"Sorry, the settings update failed: {error_msg}")
-            try:
-                close_edge_window(hwnd)
-            except:
-                pass
-            return False
+            success, error_msg = execute_update_query(hwnd, settings_string)
+            
+            if not success:
+                if error_msg:
+                    errors_encountered.append(error_msg)
+                else:
+                    error_msg = "The UPDATE operation failed to execute successfully. Check the database connection and query syntax."
+                    errors_encountered.append(error_msg)
+                
+                update_author_operation_status(f"Sorry, the settings update failed: {error_msg}")
+                try:
+                    close_edge_window(hwnd)
+                except:
+                    pass
+                return False
+        else:
+            print(f"\n{'='*60}")
+            print("📝 [STAGE 2] Skipping settings update - no meaningful data")
+            print(f"{'='*60}")
         
         # ============================================================
-        # STAGE 3: Handle uploaded_jpgs_url data (ALWAYS PROCESS)
+        # STAGE 3: Handle uploaded_jpgs_url data (Only if we have data)
         # ============================================================
-        print(f"\n{'='*60}")
-        print("📸 [STAGE 3] Processing uploaded_jpgs_url data...")
-        print(f"{'='*60}")
-        
-        # ALWAYS send data to database - even if empty
-        upload_success, upload_msg = send_uploadedjpgs_to_database(hwnd, uploaded_jpgs_data if uploaded_jpgs_data else [])
-        
-        if not upload_success:
-            errors_encountered.append(upload_msg)
-            update_author_operation_status(f"Sorry, the settings update failed to store uploaded JPGs data: {upload_msg}")
-            try:
-                close_edge_window(hwnd)
-            except:
-                pass
-            return False
+        if has_uploadedjpgs_to_update:
+            print(f"\n{'='*60}")
+            print("📸 [STAGE 3] Processing uploaded_jpgs_url data...")
+            print(f"{'='*60}")
+            
+            upload_success, upload_msg = send_uploadedjpgs_to_database(hwnd, uploaded_jpgs_data)
+            
+            if not upload_success:
+                errors_encountered.append(upload_msg)
+                update_author_operation_status(f"Sorry, the settings update failed to store uploaded JPGs data: {upload_msg}")
+                try:
+                    close_edge_window(hwnd)
+                except:
+                    pass
+                return False
+        else:
+            print(f"\n{'='*60}")
+            print("📸 [STAGE 3] Skipping uploaded_jpgs_url update - no meaningful data")
+            print(f"{'='*60}")
         
         # ============================================================
-        # STAGE 4: Just reload page and confirm (NO SELECT QUERY)
+        # STAGE 4: Reload page and confirm
         # ============================================================
         print(f"\n{'='*60}")
         print("📸 [STAGE 4] Reloading page...")
@@ -3769,6 +3990,13 @@ def update_settings():
         # ============================================================
         # UPDATE ONLY OPERATION_STATUS IN AUTHOR_PATH
         # ============================================================
+        # Build success message with details of what was updated
+        update_details = []
+        if has_settings_to_update:
+            update_details.append("settings updated")
+        if has_uploadedjpgs_to_update:
+            update_details.append(f"uploaded JPGs ({len(uploaded_jpgs_data) if isinstance(uploaded_jpgs_data, list) else 'unknown'} items) stored")
+        
         if warnings_encountered or errors_encountered:
             detailed_issues = []
             
@@ -3783,15 +4011,11 @@ def update_settings():
                 print(f"\n⚠️ Setting operation_status with error message")
                 update_author_operation_status(operation_msg)
             else:
-                operation_msg = f"Settings update completed successfully, but with {len(warnings_encountered)} specific warnings. Warnings: " + "; ".join(warnings_encountered)
+                operation_msg = f"Settings update completed successfully with {len(warnings_encountered)} specific warnings. Updated: {', '.join(update_details)}. Warnings: " + "; ".join(warnings_encountered)
                 print(f"\n✅ Setting operation_status with warning message")
                 update_author_operation_status(operation_msg)
         else:
-            if uploaded_jpgs_data and len(uploaded_jpgs_data) > 0:
-                operation_msg = f"Settings update completed successfully. The settings data was written to the 'serenum_config' table, and {len(uploaded_jpgs_data)} uploaded JPG items were stored in the jpgsvault system."
-            else:
-                operation_msg = f"Settings update completed successfully. The settings data was written to the 'serenum_config' table, and the uploadedjpgs column was updated (empty data)."
-            
+            operation_msg = f"Settings update completed successfully. Updated: {', '.join(update_details)}."
             print(f"\n✅ Setting operation_status with success message")
             update_author_operation_status(operation_msg)
         
@@ -3801,10 +4025,15 @@ def update_settings():
         print(f"\n{'='*60}")
         print("✅ [UPDATE] SETTINGS UPDATED SUCCESSFULLY!")
         
-        if uploaded_jpgs_data and len(uploaded_jpgs_data) > 0:
-            print(f"📸 Uploaded JPGs: {len(uploaded_jpgs_data)} items stored")
+        if has_settings_to_update:
+            print("📋 Settings: Updated successfully")
         else:
-            print("📸 Uploaded JPGs: Empty data stored")
+            print("📋 Settings: No data to update (skipped)")
+        
+        if has_uploadedjpgs_to_update:
+            print(f"📸 Uploaded JPGs: {len(uploaded_jpgs_data) if isinstance(uploaded_jpgs_data, list) else 'unknown'} items stored")
+        else:
+            print("📸 Uploaded JPGs: No data to update (skipped)")
         
         if temp_file_path:
             print(f"📁 Temp file: {temp_file_path}")
@@ -4870,6 +5099,19 @@ def update_timeschedule():
         pass
     except Exception as e:
         error_msg = f"update_timeschedule: ERROR - Failed to randomize minutes: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+
+    # ============================================================
+    # STEP 16: OPTIONAL - RANDOMIZE HOURS
+    # ============================================================
+    try:
+        print("update_timeschedule: Calling randomize_next_schedule_hours()...")
+        randomize_next_schedule_hours()
+    except NameError:
+        pass
+    except Exception as e:
+        error_msg = f"update_timeschedule: ERROR - Failed to randomize hours: {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
@@ -15500,7 +15742,7 @@ def execute_engine():
             print(f"Failed to update author status: {e}")
             return False
 
-    #fetch_settings()
+    fetch_settings()
 
     # ============================================================
     # STEP 1: LOAD CONFIG - No status check
@@ -15557,6 +15799,7 @@ def execute_engine():
             
             # Execute launch_profile
             launch_profile()
+            update_settings()
             
             print(f"execute_engine: DRIVER engine completed.")
             return
@@ -15574,6 +15817,7 @@ def execute_engine():
         try:
             # Call csv_engine which handles the CSV pipeline
             csv_engine()
+            update_settings()
             
             print(f"execute_engine: CSV engine completed.")
             return
@@ -15593,6 +15837,6 @@ def execute_engine():
     #update_settings()
     
 if __name__ == "__main__":
-   execute_engine()
+   fetch_settings()
 
    
