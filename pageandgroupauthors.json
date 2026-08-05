@@ -1,0 +1,798 @@
+{
+  "status": "aborted",
+  "operation_status": "validate_image_urls: ERROR - Only 0 valid URLs remain after removing 118 invalid. Need 100. Not enough valid images!",
+  "engine": "csv",
+  "author": "Silverrose",
+  "account_url": {
+    "Silverrose": "https://business.facebook.com/latest/composer/?page_id=1210000732201103&asset_id=1210000732201103&redirect_session_id=3634c076-0eac-4d28-9a10-8cb4f0c7db6c"
+  },
+  "group": "include",
+  "page": "none",
+  "cardamount": "100",
+  "jpgsurl": {
+    "Silverrose": ""
+  },
+  "author_caption": [
+    {
+      "key-name": "Silverrose",
+      "id": 1,
+      "description": "I know relationships are about more than looks. Would you date a confident woman like me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 2,
+      "description": "I'm not afraid to text first because I believe good things start with a simple hello. Who else feels the same?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 3,
+      "description": "Say YES if you'd enjoy sharing a coffee and a good conversation with me."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 4,
+      "description": "Do you like my dance moves? Maybe they made you smile."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 5,
+      "description": "I believe love goes far beyond appearances. What three words would you use to describe me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 6,
+      "description": "Sometimes I feel unnoticed, but I never stop believing in love. Am I not beautiful enough for someone kind?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 7,
+      "description": "I don't mind making the first move. Would you give a woman like me a chance?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 8,
+      "description": "Say YES if you'd enjoy meeting for coffee and getting to know each other."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 9,
+      "description": "Do you like my dance moves? Which one is your favorite?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 10,
+      "description": "I still believe real love exists. What three words come to mind when you see me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 11,
+      "description": "I'm done with games. Am I not beautiful enough for someone with a kind heart?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 12,
+      "description": "Would you share a coffee with a woman who still believes in love?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 13,
+      "description": "Do you like my dance moves? Be honest, I'd love to know."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 14,
+      "description": "I know love isn't just about appearance. What three words describe me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 15,
+      "description": "Sometimes I feel overlooked, but I still believe the right person exists. Am I not beautiful enough?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 16,
+      "description": "I'd rather be honest than play games. Would you date a confident woman?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 17,
+      "description": "Say YES if you'd enjoy a coffee and a genuine conversation with me."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 18,
+      "description": "Do you like my dance moves, or should I practice a few more?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 19,
+      "description": "I believe love is deeper than appearances. What three words come to mind when you see me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 20,
+      "description": "Even when I feel unnoticed, I never stop believing in love. What do you think?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 21,
+      "description": "I'd happily make the first move if it meant meeting someone genuine."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 22,
+      "description": "Do you like my dance moves? I'd love your honest opinion."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 23,
+      "description": "Love is about kindness, respect, and understanding. Would you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 24,
+      "description": "Say YES if you think coffee and conversation make the perfect first meeting."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 25,
+      "description": "Sometimes I wonder if my smile reaches the right people. What do you think?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 26,
+      "description": "I believe honesty makes every relationship stronger. Would you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 27,
+      "description": "I don't mind saying hello first. Would that make you smile?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 28,
+      "description": "Do you like my dance moves? Which one stands out the most?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 29,
+      "description": "I believe love is built on trust, not perfection. What three words describe me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 30,
+      "description": "Say YES if you'd enjoy getting to know me over coffee."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 31,
+      "description": "I still believe someone out there will appreciate me for who I am."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 32,
+      "description": "Do you like my dance moves, or do you think I should try a different one?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 33,
+      "description": "Love should never be based only on looks. Would you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 34,
+      "description": "Sometimes I feel invisible, but I never lose hope. Am I not beautiful enough?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 35,
+      "description": "I believe confidence starts with being yourself. Would you date someone like me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 36,
+      "description": "Say YES if you'd enjoy a kind conversation with me."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 37,
+      "description": "Do you like my dance moves? I'd love to hear your favorite."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 38,
+      "description": "Real love still exists... at least I believe it does. Do you?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 39,
+      "description": "What three words would you use to describe me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 40,
+      "description": "I still believe a kind heart is more important than a perfect face."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 41,
+      "description": "Would you share a coffee with someone who's genuine and honest?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 42,
+      "description": "Do you like my dance moves? Be honest—I can take it."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 43,
+      "description": "Sometimes I wonder if I'm simply waiting for the right person to notice me."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 44,
+      "description": "I don't mind making the first move if it leads to something real."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 45,
+      "description": "Say YES if you believe kindness is attractive."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 46,
+      "description": "Do you like my dance moves, or did my smile catch your attention first?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 47,
+      "description": "I believe real connections begin with simple conversations."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 48,
+      "description": "What three words come to mind when you see me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 49,
+      "description": "Even after everything, I still believe love is worth believing in."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 50,
+      "description": "Sometimes I wonder if I'm someone's type. What do you think?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 51,
+      "description": "Would you get to know a woman who values honesty and loyalty?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 52,
+      "description": "Do you like my dance moves? Which one feels the most natural?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 53,
+      "description": "I believe the best relationships begin with respect. Do you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 54,
+      "description": "Say YES if you'd enjoy a coffee and a meaningful conversation."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 55,
+      "description": "I don't think love has to be complicated. Do you?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 56,
+      "description": "Am I not beautiful enough to deserve a genuine connection?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 57,
+      "description": "I think confidence comes from being true to yourself. Would you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 58,
+      "description": "Do you like my dance moves? I'd love to know your favorite."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 59,
+      "description": "I believe love grows through trust, patience, and kindness."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 60,
+      "description": "Would you rather have honesty than perfection?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 61,
+      "description": "Sometimes one conversation can change everything. Do you believe that?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 62,
+      "description": "Say YES if you'd enjoy getting to know me better."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 63,
+      "description": "Do you like my dance moves, or was it my smile that caught your eye?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 64,
+      "description": "What three words would best describe me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 65,
+      "description": "I still believe there's someone who will appreciate me just as I am."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 66,
+      "description": "I believe kindness never goes out of style. Do you?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 67,
+      "description": "Would you give someone like me a chance?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 68,
+      "description": "Do you think genuine people are hard to find these days?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 69,
+      "description": "Do you like my dance moves? I'd really like to hear your opinion."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 70,
+      "description": "I still believe the right person values kindness over perfection. Do you?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 71,
+      "description": "Would you enjoy getting to know someone who always tries to see the good in people?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 72,
+      "description": "Do you like my dance moves? They always put me in a good mood."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 73,
+      "description": "I believe the best conversations happen when people are simply themselves. Do you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 74,
+      "description": "If we met today, what would you ask me first?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 75,
+      "description": "I think loyalty is one of the most attractive qualities. Would you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 76,
+      "description": "Do you believe a simple hello can lead to something meaningful?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 77,
+      "description": "Would you rather have a kind heart or a perfect appearance?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 78,
+      "description": "Do you like my dance moves? Which one made you smile the most?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 79,
+      "description": "I still believe honesty is the foundation of every great relationship."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 80,
+      "description": "If you had three words to describe me, what would they be?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 81,
+      "description": "I don't expect perfection, just sincerity. Is that too much to ask?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 82,
+      "description": "Sometimes the smallest conversations leave the biggest memories. Do you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 83,
+      "description": "Do you think kindness is becoming rare these days?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 84,
+      "description": "Do you like my dance moves, or should I keep practicing?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 85,
+      "description": "I believe everyone deserves someone who truly appreciates them."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 86,
+      "description": "What's the first thing you noticed about me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 87,
+      "description": "I think respect is just as important as love. Would you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 88,
+      "description": "Would you give someone a chance based on their heart instead of their past?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 89,
+      "description": "Do you like my dance moves? I'd love to hear your honest opinion."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 90,
+      "description": "I believe genuine people still exist. Are you one of them?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 91,
+      "description": "Would you enjoy spending time with someone who loves meaningful conversations?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 92,
+      "description": "I still smile because I believe good people are out there."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 93,
+      "description": "What quality do you value most in someone?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 94,
+      "description": "Do you like my dance moves? Which one fits me best?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 95,
+      "description": "I think laughter makes every day a little brighter. Do you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 96,
+      "description": "If we sat down for coffee, what would we talk about first?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 97,
+      "description": "I believe trust takes time, but it's always worth it."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 98,
+      "description": "What's one thing that always makes you smile?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 99,
+      "description": "Do you like my dance moves? I had fun making this for you."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 100,
+      "description": "I think being yourself is always the best choice. Do you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 101,
+      "description": "Would you rather have honesty or charm?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 102,
+      "description": "Sometimes a kind word can change someone's entire day."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 103,
+      "description": "What's your idea of a perfect conversation?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 104,
+      "description": "Do you like my dance moves? Be honest—I won't mind."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 105,
+      "description": "I believe every smile has a story behind it. What's yours?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 106,
+      "description": "Do you think first impressions tell the whole story?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 107,
+      "description": "I still believe that kindness never goes out of style."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 108,
+      "description": "If we became friends, what do you think we'd talk about the most?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 109,
+      "description": "Do you like my dance moves, or did my smile catch your attention first?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 110,
+      "description": "I think every new day brings a new opportunity to meet someone wonderful."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 111,
+      "description": "Would you rather meet someone who's genuine or someone who's impressive?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 112,
+      "description": "I believe respect makes every connection stronger."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 113,
+      "description": "What do you notice first when meeting someone?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 114,
+      "description": "Do you like my dance moves? Which one would you rate the highest?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 115,
+      "description": "I think good conversations are more memorable than fancy dates."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 116,
+      "description": "Have you ever met someone who made your day with just a smile?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 117,
+      "description": "I believe patience is one of life's greatest strengths."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 118,
+      "description": "What's something simple that always makes you happy?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 119,
+      "description": "Do you like my dance moves? I hope they made you smile."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 120,
+      "description": "I believe real connections happen naturally. Do you agree?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 121,
+      "description": "What's one thing you never compromise on in a relationship?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 122,
+      "description": "I still believe the best people often appear when you least expect them."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 123,
+      "description": "Would you rather laugh together or sit in comfortable silence?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 124,
+      "description": "Do you like my dance moves? I'd love to know your favorite."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 125,
+      "description": "I think kindness says more than expensive gifts ever could."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 126,
+      "description": "Do you believe it's possible to meet someone special through a simple conversation?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 127,
+      "description": "I enjoy meeting people who are honest and thoughtful."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 128,
+      "description": "If you could ask me one question, what would it be?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 129,
+      "description": "Do you like my dance moves? Maybe they're getting better."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 130,
+      "description": "I think life is better when you have someone to laugh with."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 131,
+      "description": "What does a genuine connection mean to you?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 132,
+      "description": "I believe everyone deserves someone who listens."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 133,
+      "description": "Would you say hello first, or would you wait for me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 134,
+      "description": "Do you like my dance moves? Which one would you try?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 135,
+      "description": "I think being kind is one of the most attractive qualities anyone can have."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 136,
+      "description": "What's one lesson life has taught you about relationships?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 137,
+      "description": "I believe every conversation is a chance to learn something new."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 138,
+      "description": "If you had to compliment me in three words, what would they be?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 139,
+      "description": "Do you like my dance moves? I was having a little fun today."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 140,
+      "description": "I still believe the best relationships begin with friendship."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 141,
+      "description": "Do you think a smile can brighten someone's day?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 142,
+      "description": "I believe there's beauty in keeping life simple."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 143,
+      "description": "What's your favorite way to spend a peaceful afternoon?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 144,
+      "description": "Do you like my dance moves? Tell me what you really think."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 145,
+      "description": "I think honesty and loyalty make the strongest foundation."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 146,
+      "description": "If we talked every day, what would you want to know about me?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 147,
+      "description": "I believe every person deserves to feel appreciated."
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 148,
+      "description": "What's one quality that instantly earns your respect?"
+    },
+    {
+      "key-name": "Silverrose",
+      "id": 149,
+      "description": "Do you like my dance moves? I'd love to hear your thoughts."
+    }
+  ],
+  "captions_state": "fixed",
+  "time_order_type": {
+    "6-posts-per-day": [
+      {
+        "12hours": "12:00 AM",
+        "24hours": "00:00"
+      },
+      {
+        "12hours": "3:00 AM",
+        "24hours": "03:00"
+      },
+      {
+        "12hours": "7:00 AM",
+        "24hours": "07:00"
+      },
+      {
+        "12hours": "12:00 PM",
+        "24hours": "12:00"
+      },
+      {
+        "12hours": "3:00 PM",
+        "24hours": "15:00"
+      },
+      {
+        "12hours": "6:00 PM",
+        "24hours": "18:00"
+      }
+    ]
+  },
+  "time_order": "6-posts-per-day",
+  "tag": "",
+  "group_types": "",
+  "group_switch": "yes",
+  "schedule_date": "05/08/2026 22:00",
+  "schedule_end_date": "31/12/2026 22:00",
+  "post_filter": "others"
+}
