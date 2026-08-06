@@ -2393,7 +2393,8 @@ def updated_config_construction():
     - Reads from NEW_CONFIGS (list) and AUTHOR_PATH (single object)
     - Converts all configs to UPDATED_CONFIGS format (list)
     - ALL fields (except status and operation_status) are placed inside dynamic_values nest
-    - PRESERVES existing status and operation_status from AUTHOR_PATH
+    - PRESERVES existing status and operation_status from AUTHOR_PATH at ROOT LEVEL only
+    - REMOVES status and operation_status from dynamic_values (they should only be at root)
     - Does NOT override status - keeps whatever status was set by previous operations
     - PER-CONFIG operation_status with detailed messages about what was processed
     
@@ -2466,17 +2467,35 @@ def updated_config_construction():
         except Exception as e:
             return False
     
+    def clean_dynamic_values(dynamic_values):
+        """
+        Clean dynamic_values by removing status and operation_status.
+        Returns cleaned dictionary.
+        """
+        if not isinstance(dynamic_values, dict):
+            return dynamic_values
+        
+        # Create a copy to avoid modifying the original
+        cleaned = dynamic_values.copy()
+        
+        # Remove status and operation_status from dynamic_values
+        cleaned.pop('status', None)
+        cleaned.pop('operation_status', None)
+        
+        return cleaned
+    
     def nest_fields_in_dynamic_values(config, existing_status=None, existing_operation_status=None):
         """
         Move all fields (except status and operation_status) into dynamic_values nest.
         PRESERVES existing status if provided.
+        REMOVES status and operation_status from dynamic_values.
         """
         if not isinstance(config, dict):
             return config
         
         nested_config = {}
         
-        # PRESERVE existing status - do NOT change it
+        # PRESERVE existing status at ROOT LEVEL ONLY
         if existing_status is not None:
             nested_config['status'] = existing_status
         elif 'status' in config and config['status']:
@@ -2485,7 +2504,7 @@ def updated_config_construction():
             # Only set default if no status exists
             nested_config['status'] = 'pending'
         
-        # Handle operation_status
+        # Handle operation_status at ROOT LEVEL ONLY
         if existing_operation_status is not None:
             nested_config['operation_status'] = existing_operation_status
         elif 'operation_status' in config and config['operation_status']:
@@ -2505,11 +2524,16 @@ def updated_config_construction():
             if key not in excluded_fields:
                 dynamic_values[key] = value
         
-        # If there was already a dynamic_values, merge it
+        # If there was already a dynamic_values, merge it (but clean it first)
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-            for key, value in config['dynamic_values'].items():
+            # Clean the existing dynamic_values first
+            cleaned_existing = clean_dynamic_values(config['dynamic_values'])
+            for key, value in cleaned_existing.items():
                 if key not in dynamic_values:
                     dynamic_values[key] = value
+        
+        # CRITICAL: Remove any status or operation_status that might have been in dynamic_values
+        dynamic_values = clean_dynamic_values(dynamic_values)
         
         # Only add dynamic_values if there are fields to nest
         if dynamic_values:
@@ -2579,6 +2603,11 @@ def updated_config_construction():
             print(f"   📝 Type: Single config object")
             print(f"   👤 Author: {author_name}")
             print(f"   📊 Status: {status}")
+            
+            # Check if status exists in dynamic_values (needs cleaning)
+            if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
+                if 'status' in author_path_data['dynamic_values'] or 'operation_status' in author_path_data['dynamic_values']:
+                    print(f"   ⚠️ Found status/operation_status in dynamic_values - will be cleaned")
         elif isinstance(author_path_data, list):
             print(f"   📝 Type: List of {len(author_path_data)} configs")
             for idx, item in enumerate(author_path_data):
@@ -2586,6 +2615,10 @@ def updated_config_construction():
                     author_name = item.get('author', 'Unknown')
                     status = item.get('status', 'No status')
                     print(f"   📝 Config {idx+1}: Author={author_name}, Status={status}")
+                    # Check for status in dynamic_values
+                    if 'dynamic_values' in item and isinstance(item['dynamic_values'], dict):
+                        if 'status' in item['dynamic_values'] or 'operation_status' in item['dynamic_values']:
+                            print(f"      ⚠️ Found status/operation_status in dynamic_values - will be cleaned")
         else:
             print(f"   ⚠️ Unknown type: {type(author_path_data)}")
             
@@ -2600,6 +2633,7 @@ def updated_config_construction():
     # ============================================================
     print(f"\n{'='*60}")
     print("🔄 CONVERTING CONFIGURATIONS TO NESTED FORMAT...")
+    print("🧹 REMOVING status/operation_status FROM dynamic_values...")
     print(f"{'='*60}")
     
     converted_configs = []
@@ -2628,19 +2662,26 @@ def updated_config_construction():
             existing_status = author_path_data.get('status', None)
             existing_operation_status = author_path_data.get('operation_status', None)
             
-            print(f"   📊 Preserving status: {existing_status}")
+            # Check if status exists in dynamic_values (it shouldn't, but we'll clean it)
+            if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
+                if 'status' in author_path_data['dynamic_values']:
+                    print(f"   🧹 Found status in dynamic_values - will be removed")
+                if 'operation_status' in author_path_data['dynamic_values']:
+                    print(f"   🧹 Found operation_status in dynamic_values - will be removed")
+            
+            print(f"   📊 Preserving status (root): {existing_status}")
             if existing_operation_status:
-                print(f"   📝 Preserving operation_status: {existing_operation_status[:80]}...")
+                print(f"   📝 Preserving operation_status (root): {existing_operation_status[:80]}...")
             
             # Check if this config is already in proper nested format
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
-                # Already nested - preserve everything
+                # Already nested - preserve everything but CLEAN dynamic_values
                 nested_config = nest_fields_in_dynamic_values(
                     author_path_data,
                     existing_status=existing_status,
                     existing_operation_status=existing_operation_status
                 )
-                print(f"   ✅ Already in nested format - preserved")
+                print(f"   ✅ Already in nested format - cleaned and preserved")
             else:
                 # Convert to nested format - PRESERVE status
                 nested_config = nest_fields_in_dynamic_values(
@@ -2650,10 +2691,15 @@ def updated_config_construction():
                 )
                 print(f"   ✅ Converted to nested format")
             
-            # Ensure status is preserved
+            # Ensure status is preserved at root level
             if existing_status:
                 nested_config['status'] = existing_status
-                print(f"   ✅ Status preserved: {existing_status}")
+                print(f"   ✅ Status preserved at root: {existing_status}")
+            
+            # Ensure no status/operation_status in dynamic_values
+            if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
+                nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
+                print(f"   🧹 Confirmed: no status/operation_status in dynamic_values")
             
             converted_configs.append(nested_config)
             processed_authors.add(author_name)
@@ -2716,7 +2762,14 @@ def updated_config_construction():
                 existing_status = config.get('status', None)
                 existing_operation_status = config.get('operation_status', None)
                 
-                print(f"   📊 Preserving status: {existing_status}")
+                # Check for status in dynamic_values
+                if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+                    if 'status' in config['dynamic_values']:
+                        print(f"   🧹 Found status in dynamic_values - will be removed")
+                    if 'operation_status' in config['dynamic_values']:
+                        print(f"   🧹 Found operation_status in dynamic_values - will be removed")
+                
+                print(f"   📊 Preserving status (root): {existing_status}")
                 
                 # Check if already nested
                 if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
@@ -2725,7 +2778,7 @@ def updated_config_construction():
                         existing_status=existing_status,
                         existing_operation_status=existing_operation_status
                     )
-                    print(f"   ✅ Already in nested format - preserved")
+                    print(f"   ✅ Already in nested format - cleaned and preserved")
                 else:
                     nested_config = nest_fields_in_dynamic_values(
                         config,
@@ -2734,10 +2787,15 @@ def updated_config_construction():
                     )
                     print(f"   ✅ Converted to nested format")
                 
-                # Ensure status is preserved
+                # Ensure status is preserved at root level
                 if existing_status:
                     nested_config['status'] = existing_status
-                    print(f"   ✅ Status preserved: {existing_status}")
+                    print(f"   ✅ Status preserved at root: {existing_status}")
+                
+                # Ensure no status/operation_status in dynamic_values
+                if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
+                    nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
+                    print(f"   🧹 Confirmed: no status/operation_status in dynamic_values")
                 
                 converted_configs.append(nested_config)
                 processed_authors.add(author_name)
@@ -2769,6 +2827,12 @@ def updated_config_construction():
         if author_name and author_name not in processed_authors:
             print(f"\n📝 Adding config from NEW_CONFIGS: {author_name}")
             
+            # Clean any status/operation_status from dynamic_values
+            if 'dynamic_values' in new_config and isinstance(new_config['dynamic_values'], dict):
+                if 'status' in new_config['dynamic_values'] or 'operation_status' in new_config['dynamic_values']:
+                    print(f"   🧹 Cleaning status/operation_status from dynamic_values")
+                    new_config['dynamic_values'] = clean_dynamic_values(new_config['dynamic_values'])
+            
             # For NEW_CONFIGS, create operation status
             operation_msg = f"updated_config_construction: Adding configuration for '{author_name}' from NEW_CONFIGS."
             
@@ -2778,6 +2842,10 @@ def updated_config_construction():
                 existing_status='pending',  # New configs start as pending
                 existing_operation_status=operation_msg
             )
+            
+            # Ensure no status/operation_status in dynamic_values
+            if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
+                nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
             
             converted_configs.append(nested_config)
             processed_authors.add(author_name)
@@ -2794,10 +2862,10 @@ def updated_config_construction():
             print(f"\n📝 Skipping config from NEW_CONFIGS: {author_name} (already processed from AUTHOR_PATH)")
     
     # ============================================================
-    # STEP 3: ENSURE CONSISTENCY (BUT PRESERVE STATUS)
+    # STEP 3: ENSURE CONSISTENCY AND CLEAN ALL dynamic_values
     # ============================================================
     print(f"\n{'='*60}")
-    print("🔧 ENSURING CONSISTENCY IN ALL CONFIGS...")
+    print("🧹 FINAL CLEANUP - REMOVING status/operation_status FROM ALL dynamic_values...")
     print(f"{'='*60}")
     
     for i, config in enumerate(converted_configs):
@@ -2816,14 +2884,24 @@ def updated_config_construction():
             config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' processed"
             print(f"   ✅ Added operation_status for config {i + 1}")
         
-        # Also ensure in dynamic_values
+        # CRITICAL: Clean dynamic_values - remove status and operation_status
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-            if 'status' not in config['dynamic_values']:
-                config['dynamic_values']['status'] = config['status']
-            if 'operation_status' not in config['dynamic_values']:
-                config['dynamic_values']['operation_status'] = config.get('operation_status', '')
+            # Check if they exist before cleaning
+            had_status = 'status' in config['dynamic_values']
+            had_operation = 'operation_status' in config['dynamic_values']
+            
+            config['dynamic_values'] = clean_dynamic_values(config['dynamic_values'])
+            
+            if had_status:
+                print(f"   🧹 Removed 'status' from dynamic_values in config {i + 1}")
+            if had_operation:
+                print(f"   🧹 Removed 'operation_status' from dynamic_values in config {i + 1}")
+            if not had_status and not had_operation:
+                print(f"   ✅ No status/operation_status found in dynamic_values in config {i + 1}")
+        else:
+            print(f"   ✅ No dynamic_values to clean in config {i + 1}")
     
-    print(f"   ✅ All {len(converted_configs)} configs have status and operation_status")
+    print(f"   ✅ All {len(converted_configs)} configs have status and operation_status at ROOT LEVEL only")
     
     # ============================================================
     # STEP 4: SAVE CONVERTED CONFIGS
@@ -2838,7 +2916,7 @@ def updated_config_construction():
                 print(f"✅ Converted {len(converted_configs)} configs saved to UPDATED_CONFIGS")
                 print(f"\n📋 PER-CONFIG STATUS SUMMARY:")
                 for status_info in config_status_messages:
-                    status_emoji = '✅' if status_info['status'] == 'completed' or status_info['status'] == 'pending' else '⚠️' if status_info['status'] == 'warning' else '❌'
+                    status_emoji = '✅' if status_info['status'] in ['completed', 'pending'] else '⚠️' if status_info['status'] == 'warning' else '❌'
                     print(f"   {status_emoji} 👤 {status_info['author']}: {status_info['status']}")
                     print(f"      📝 {status_info['message'][:80]}...")
             else:
@@ -2880,7 +2958,7 @@ def updated_config_construction():
         if warnings_encountered:
             operation_msg = f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. Warnings: " + "; ".join(warnings_encountered)
         else:
-            operation_msg = f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations."
+            operation_msg = f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations. All status fields are at root level only."
         print(f"\n✅ Updating operation_status (preserving existing status)")
         update_author_operation_status(operation_msg, preserve_status=True)
     
@@ -2894,7 +2972,7 @@ def updated_config_construction():
     for idx, status_info in enumerate(config_status_messages, 1):
         status_emoji = '✅' if status_info['status'] in ['pending', 'completed'] else '❌' if status_info['status'] == 'aborted' else '⚠️'
         print(f"\n{status_emoji} Config #{idx} - Author: {status_info['author']}")
-        print(f"   Status: {status_info['status']} (PRESERVED)")
+        print(f"   Status: {status_info['status']} (PRESERVED at ROOT LEVEL)")
         print(f"   Operation: {status_info['message']}")
         if idx < len(config_status_messages):
             print(f"   {'-'*50}")
@@ -2908,10 +2986,11 @@ def updated_config_construction():
     print(f"\n{'='*60}")
     print("✅ CONFIGURATION CONVERTER COMPLETED!")
     print(f"\n📊 Summary:")
-    print(f"  - Processed from AUTHOR_PATH: 1 config (preserved status)")
+    print(f"  - Processed from AUTHOR_PATH: 1 config (preserved status at root)")
     print(f"  - Added from NEW_CONFIGS: {len([c for c in new_configs if c.get('author') not in processed_authors])}")
     print(f"  - Total configs saved: {len(converted_configs)}")
-    print(f"  - Statuses preserved (NOT changed)")
+    print(f"  - Statuses preserved at ROOT LEVEL (NOT changed)")
+    print(f"  - status/operation_status REMOVED from dynamic_values")
     print(f"  - Configs with operation status: {len(config_status_messages)}")
     
     if warnings_encountered:
@@ -5123,7 +5202,8 @@ def randomize_next_schedule_minutes():
     
     UPDATES operation_status and status in AUTHOR_PATH
     ONLY executes if status is 'pending' AND randomize_schedule_minutes is true
-    Sets status to 'aborted' if critical errors occur or randomize_schedule_minutes is false/missing
+    If randomize_schedule_minutes is false, simply skips without changing status
+    Sets status to 'aborted' only if critical errors occur during operation
     """
     import os
     import json
@@ -5188,6 +5268,35 @@ def randomize_next_schedule_minutes():
         except Exception as e:
             print(f"Failed to update author status: {e}")
             return False
+    
+    def parse_boolean_value(value):
+        """
+        Parse a value to boolean, handling strings, booleans, and other types.
+        Returns True for: True, 'true', '1', 'yes', 'on'
+        Returns False for: False, 'false', '0', 'no', 'off', None, empty
+        """
+        if value is None:
+            return False
+        
+        if isinstance(value, bool):
+            return value
+        
+        if isinstance(value, (int, float)):
+            return bool(value)
+        
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            # True values
+            if value_lower in ('true', '1', 'yes', 'on', 'y', 't'):
+                return True
+            # False values
+            if value_lower in ('false', '0', 'no', 'off', 'n', 'f', ''):
+                return False
+            # If it's any other non-empty string, treat as True
+            return bool(value_lower)
+        
+        # For any other type, convert to boolean
+        return bool(value)
 
     # ============================================================
     # STEP 1: CHECK STATUS - ONLY execute if 'pending'
@@ -5229,15 +5338,32 @@ def randomize_next_schedule_minutes():
     # ============================================================
     # STEP 2: CHECK randomize_schedule_minutes FIELD
     # ============================================================
-    randomize_enabled = config.get('randomize_schedule_minutes', False)
-    
-    if not randomize_enabled:
-        error_msg = "randomize_next_schedule_minutes: ABORTED - 'randomize_schedule_minutes' is missing or set to false in config."
+    try:
+        # Get the randomize_schedule_minutes value from config
+        randomize_enabled = config.get('randomize_schedule_minutes', False)
+        
+        # Also check in dynamic_values if present
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_randomize = config['dynamic_values'].get('randomize_schedule_minutes')
+            if dyn_randomize is not None:
+                randomize_enabled = dyn_randomize
+        
+        # Parse the value (handles string 'false', 'true', etc.)
+        randomize_enabled_bool = parse_boolean_value(randomize_enabled)
+        
+        print(f"randomize_next_schedule_minutes: randomize_schedule_minutes = '{randomize_enabled}' (parsed as: {randomize_enabled_bool})")
+        
+        if not randomize_enabled_bool:
+            print(f"randomize_next_schedule_minutes: SKIPPED - 'randomize_schedule_minutes' is disabled (value: '{randomize_enabled}'). No status changes made.")
+            return  # Just skip, don't touch status
+        
+        print(f"randomize_next_schedule_minutes: 'randomize_schedule_minutes' is enabled - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"randomize_next_schedule_minutes: ERROR - Failed to check randomize_schedule_minutes flag: {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
-    
-    print(f"randomize_next_schedule_minutes: 'randomize_schedule_minutes' is enabled - proceeding...")
 
     # ============================================================
     # STEP 3: LOAD CONFIG DETAILS
@@ -5438,7 +5564,8 @@ def randomize_next_schedule_hours():
     
     UPDATES operation_status and status in AUTHOR_PATH
     ONLY executes if status is 'pending' AND randomize_schedule_hours is true
-    Sets status to 'aborted' if critical errors occur or randomize_schedule_hours is false/missing
+    If randomize_schedule_hours is false, simply skips without changing status
+    Sets status to 'aborted' only if critical errors occur during operation
     """
     import os
     import json
@@ -5503,6 +5630,35 @@ def randomize_next_schedule_hours():
         except Exception as e:
             print(f"Failed to update author status: {e}")
             return False
+    
+    def parse_boolean_value(value):
+        """
+        Parse a value to boolean, handling strings, booleans, and other types.
+        Returns True for: True, 'true', '1', 'yes', 'on'
+        Returns False for: False, 'false', '0', 'no', 'off', None, empty
+        """
+        if value is None:
+            return False
+        
+        if isinstance(value, bool):
+            return value
+        
+        if isinstance(value, (int, float)):
+            return bool(value)
+        
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            # True values
+            if value_lower in ('true', '1', 'yes', 'on', 'y', 't'):
+                return True
+            # False values
+            if value_lower in ('false', '0', 'no', 'off', 'n', 'f', ''):
+                return False
+            # If it's any other non-empty string, treat as True
+            return bool(value_lower)
+        
+        # For any other type, convert to boolean
+        return bool(value)
 
     # ============================================================
     # STEP 1: CHECK STATUS - ONLY execute if 'pending'
@@ -5544,15 +5700,32 @@ def randomize_next_schedule_hours():
     # ============================================================
     # STEP 2: CHECK randomize_schedule_hours FIELD
     # ============================================================
-    randomize_enabled = config.get('randomize_schedule_hours', False)
-    
-    if not randomize_enabled:
-        error_msg = "randomize_next_schedule_hours: ABORTED - 'randomize_schedule_hours' is missing or set to false in config."
+    try:
+        # Get the randomize_schedule_hours value from config
+        randomize_enabled = config.get('randomize_schedule_hours', False)
+        
+        # Also check in dynamic_values if present
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_randomize = config['dynamic_values'].get('randomize_schedule_hours')
+            if dyn_randomize is not None:
+                randomize_enabled = dyn_randomize
+        
+        # Parse the value (handles string 'false', 'true', etc.)
+        randomize_enabled_bool = parse_boolean_value(randomize_enabled)
+        
+        print(f"randomize_next_schedule_hours: randomize_schedule_hours = '{randomize_enabled}' (parsed as: {randomize_enabled_bool})")
+        
+        if not randomize_enabled_bool:
+            print(f"randomize_next_schedule_hours: SKIPPED - 'randomize_schedule_hours' is disabled (value: '{randomize_enabled}'). No status changes made.")
+            return  # Just skip, don't touch status
+        
+        print(f"randomize_next_schedule_hours: 'randomize_schedule_hours' is enabled - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"randomize_next_schedule_hours: ERROR - Failed to check randomize_schedule_hours flag: {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
-    
-    print(f"randomize_next_schedule_hours: 'randomize_schedule_hours' is enabled - proceeding...")
 
     # ============================================================
     # STEP 3: LOAD CONFIG DETAILS
@@ -6099,7 +6272,7 @@ def validate_image_urls():
     Removes invalid URLs from the jpgsurl field in AUTHOR_PATH.
     
     UPDATES operation_status and status in AUTHOR_PATH
-    ONLY executes if status is 'pending'
+    ONLY executes if status is 'pending' AND validate_csv_urls is True
     Sets status to 'aborted' if critical errors occur or not enough valid URLs remain
     """
     import os
@@ -6312,6 +6485,35 @@ def validate_image_urls():
         except Exception as e:
             return False, "", f"Corrupted or invalid image: {str(e)[:50]}"
     
+    def parse_boolean_value(value):
+        """
+        Parse a value to boolean, handling strings, booleans, and other types.
+        Returns True for: True, 'true', '1', 'yes', 'on'
+        Returns False for: False, 'false', '0', 'no', 'off', None, empty
+        """
+        if value is None:
+            return False
+        
+        if isinstance(value, bool):
+            return value
+        
+        if isinstance(value, (int, float)):
+            return bool(value)
+        
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            # True values
+            if value_lower in ('true', '1', 'yes', 'on', 'y', 't'):
+                return True
+            # False values
+            if value_lower in ('false', '0', 'no', 'off', 'n', 'f', ''):
+                return False
+            # If it's any other non-empty string, treat as True
+            return bool(value_lower)
+        
+        # For any other type, convert to boolean
+        return bool(value)
+    
     # ============================================================
     # STEP 1: CHECK STATUS FIRST
     # ============================================================
@@ -6350,7 +6552,37 @@ def validate_image_urls():
         return
     
     # ============================================================
-    # STEP 2: LOAD CONFIG DETAILS
+    # STEP 2: CHECK validate_csv_urls FLAG
+    # ============================================================
+    try:
+        # Get the validate_csv_urls value from config
+        validate_csv_urls = config.get('validate_csv_urls', False)
+        
+        # Also check in dynamic_values if present
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_validate = config['dynamic_values'].get('validate_csv_urls')
+            if dyn_validate is not None:
+                validate_csv_urls = dyn_validate
+        
+        # Parse the value (handles string 'false', 'true', etc.)
+        validate_csv_urls_bool = parse_boolean_value(validate_csv_urls)
+        
+        print(f"validate_image_urls: validate_csv_urls = '{validate_csv_urls}' (parsed as: {validate_csv_urls_bool})")
+        
+        if not validate_csv_urls_bool:
+            print(f"validate_image_urls: SKIPPED - 'validate_csv_urls' is False. Function only executes when this flag is True.")
+            return
+            
+        print(f"validate_image_urls: 'validate_csv_urls' is True - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"validate_image_urls: ERROR - Failed to check validate_csv_urls flag: {e}"
+        print(error_msg)
+        # Don't update status or touch anything, just return
+        return
+    
+    # ============================================================
+    # STEP 3: LOAD CONFIG DETAILS
     # ============================================================
     try:
         author = config.get('author', '').strip()
@@ -6394,7 +6626,7 @@ def validate_image_urls():
         return
     
     # ============================================================
-    # STEP 3: VALIDATE EACH URL/PATH
+    # STEP 4: VALIDATE EACH URL/PATH
     # ============================================================
     print(f"\n{'='*80}")
     print(f"VALIDATING {len(all_urls)} URLs/PATHS for author '{author}'")
@@ -6428,7 +6660,7 @@ def validate_image_urls():
         print()
     
     # ============================================================
-    # STEP 4: ALWAYS SAVE VALID URLs FIRST (even if not enough)
+    # STEP 5: ALWAYS SAVE VALID URLs FIRST (even if not enough)
     # ============================================================
     print(f"\n{'='*80}")
     print(f"VALIDATION RESULTS")
@@ -6441,7 +6673,7 @@ def validate_image_urls():
     print(f"Required cardamount:       {cardamount}")
     
     # ============================================================
-    # STEP 5: UPDATE jpgsurl FIELD - ALWAYS REMOVE INVALID URLs
+    # STEP 6: UPDATE jpgsurl FIELD - ALWAYS REMOVE INVALID URLs
     # ============================================================
     print(f"\nUpdating jpgsurl field - keeping {len(valid_urls)} valid URLs, removing {len(invalid_urls)} invalid...")
     
@@ -6468,7 +6700,7 @@ def validate_image_urls():
         return
     
     # ============================================================
-    # STEP 6: CHECK IF ENOUGH VALID URLs REMAIN (AFTER SAVING)
+    # STEP 7: CHECK IF ENOUGH VALID URLs REMAIN (AFTER SAVING)
     # ============================================================
     if len(valid_urls) < cardamount:
         error_msg = f"validate_image_urls: ERROR - Only {len(valid_urls)} valid URLs remain after removing {len(invalid_urls)} invalid. Need {cardamount}. Not enough valid images!"
@@ -6487,7 +6719,7 @@ def validate_image_urls():
         return
     
     # ============================================================
-    # STEP 7: SUCCESS - UPDATE STATUS
+    # STEP 8: SUCCESS - UPDATE STATUS
     # ============================================================
     if invalid_urls:
         operation_msg = (
@@ -6507,7 +6739,7 @@ def validate_image_urls():
     update_author_status('pending', operation_msg)
     
     # ============================================================
-    # STEP 8: FINAL SUMMARY
+    # STEP 9: FINAL SUMMARY
     # ============================================================
     print(f"\n{'='*80}")
     print(f"FINAL SUMMARY - Author: {author}")
@@ -6529,7 +6761,7 @@ def validate_image_urls():
     
     print(f"\n✅ jpgsurl field updated in AUTHOR_PATH (invalid URLs removed)")
     print(f"{'='*80}\n")
-
+    
 def generate_final_csv():
     """FINAL JARVEE-COMPATIBLE CSV – UNLIMITED POSTS WITH RANDOM CAPTION REUSE + 100 PER FILE SPLIT
     
@@ -6540,6 +6772,7 @@ def generate_final_csv():
     - Removes confirmed URLs from jpgsurl field
     - Archives confirmed URLs to uploaded_jpgs_url field
     - Sets status to 'completed'
+    - Opens the CSV folder in file manager
     
     UPDATES operation_status and status in AUTHOR_PATH
     ONLY executes if status is 'pending'
@@ -6551,6 +6784,9 @@ def generate_final_csv():
     import csv
     import random
     import string
+    import subprocess
+    import sys
+    import platform
     from datetime import datetime
     import pytz
 
@@ -6611,6 +6847,54 @@ def generate_final_csv():
             return False
         except Exception as e:
             print(f"Failed to update author status: {e}")
+            return False
+    
+    def open_folder_in_file_manager(folder_path):
+        """Open a folder in the system's file manager"""
+        try:
+            if not os.path.exists(folder_path):
+                print(f"⚠️ Folder does not exist: {folder_path}")
+                return False
+            
+            system = platform.system()
+            
+            if system == 'Windows':
+                # Windows: Use explorer
+                subprocess.Popen(['explorer', folder_path])
+                print(f"📂 Opened folder in Windows Explorer: {folder_path}")
+                return True
+                
+            elif system == 'Darwin':
+                # macOS: Use open
+                subprocess.Popen(['open', folder_path])
+                print(f"📂 Opened folder in Finder: {folder_path}")
+                return True
+                
+            elif system == 'Linux':
+                # Linux: Try different file managers
+                file_managers = ['nautilus', 'dolphin', 'thunar', 'nemo', 'pcmanfm']
+                for fm in file_managers:
+                    try:
+                        subprocess.Popen([fm, folder_path])
+                        print(f"📂 Opened folder in {fm}: {folder_path}")
+                        return True
+                    except FileNotFoundError:
+                        continue
+                # Fallback: try xdg-open
+                try:
+                    subprocess.Popen(['xdg-open', folder_path])
+                    print(f"📂 Opened folder using xdg-open: {folder_path}")
+                    return True
+                except:
+                    print(f"⚠️ Could not open folder. Please navigate to: {folder_path}")
+                    return False
+            else:
+                print(f"⚠️ Unsupported OS: {system}. Please navigate to: {folder_path}")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ Failed to open folder: {e}")
+            print(f"📁 CSV folder location: {folder_path}")
             return False
 
     def get_uploaded_jpgs_url_from_config(config):
@@ -7200,8 +7484,17 @@ def generate_final_csv():
     # THIS IS THE ONLY FUNCTION THAT SETS STATUS TO 'completed'
     update_author_status('completed', operation_msg)
     print(f"✅ Status updated to 'completed'")
+    
+    # ============================================================
+    # STEP 16: OPEN CSV FOLDER IN FILE MANAGER
+    # ============================================================
+    print(f"\n📂 Opening CSV folder in file manager...")
+    open_folder_in_file_manager(csv_dir)
+    
+    return
 
 def csv_engine():
+    update_calendar()
     validate_image_urls()
     generate_final_csv()
 #===============# 
@@ -15834,9 +16127,8 @@ def execute_engine():
         print(f"❌ {error_msg}")
         update_author_status('aborted', error_msg)
     
-    #update_settings()
     
 if __name__ == "__main__":
-   fetch_settings()
+   execute_engine()
 
    
