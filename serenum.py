@@ -2397,6 +2397,9 @@ def updated_config_construction():
     - REMOVES status and operation_status from dynamic_values (they should only be at root)
     - Does NOT override status - keeps whatever status was set by previous operations
     - PER-CONFIG operation_status with detailed messages about what was processed
+    - ESCAPES backslashes in JSON strings to ensure valid JSON
+    - APPENDS new messages to existing operation_status instead of overwriting
+    - NORMALIZES all slashes (/) and backslashes (\) to underscores (_) in operation_status
     
     UPDATES operation_status in AUTHOR_PATH based on processing results.
     Preserves existing status (does not change it).
@@ -2411,65 +2414,50 @@ def updated_config_construction():
                     return json.load(f)
             else:
                 return default if default is not None else {}
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"   ⚠️ JSON decode error in {file_path}: {e}")
             return default if default is not None else {}
-        except Exception:
+        except Exception as e:
+            print(f"   ⚠️ Error loading {file_path}: {e}")
             return default if default is not None else {}
     
     def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
+        """Save JSON file with proper formatting and escape handling"""
         try:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            # Use json.dumps with proper escaping
+            json_str = json.dumps(data, indent=2, ensure_ascii=False)
+            # Additional escape for backslashes in string values
+            # This ensures any backslashes in the data are properly escaped
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write(json_str)
             return True
-        except Exception:
+        except Exception as e:
+            print(f"   ❌ Error saving to {file_path}: {e}")
             return False
     
-    def update_author_operation_status(operation_message, preserve_status=True):
-        """Update operation_status in AUTHOR_PATH while preserving existing status"""
-        try:
-            author_data = load_json_file(AUTHOR_PATH, {})
-            
-            # If AUTHOR_PATH is a list, handle accordingly
-            if isinstance(author_data, list):
-                if not author_data:
-                    author_data = [{}]
-                # Update operation_status, preserve status
-                if preserve_status and 'status' in author_data[-1]:
-                    # Keep existing status
-                    pass
-                else:
-                    # Only set status if it doesn't exist
-                    if 'status' not in author_data[-1]:
-                        author_data[-1]['status'] = 'pending'
-                
-                author_data[-1]['operation_status'] = operation_message
-                
-                if save_json_file(AUTHOR_PATH, author_data):
-                    return True
-                return False
-            
-            # If AUTHOR_PATH is a single object
-            elif isinstance(author_data, dict):
-                # Preserve existing status - don't change it
-                # Only set status if it doesn't exist
-                if 'status' not in author_data:
-                    author_data['status'] = 'pending'
-                
-                author_data['operation_status'] = operation_message
-                
-                if save_json_file(AUTHOR_PATH, author_data):
-                    return True
-                return False
-            
-            return False
-        except Exception as e:
-            return False
+    def escape_json_string(value):
+        """
+        Properly escape a value for JSON serialization.
+        Handles backslashes, quotes, and other special characters.
+        """
+        if isinstance(value, str):
+            # Replace single backslashes with double backslashes (JSON escape)
+            # But don't double-escape already escaped backslashes
+            if '\\' in value and not '\\\\' in value:
+                value = value.replace('\\', '\\\\')
+            return value
+        elif isinstance(value, dict):
+            return {k: escape_json_string(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [escape_json_string(item) for item in value]
+        else:
+            return value
     
     def clean_dynamic_values(dynamic_values):
         """
         Clean dynamic_values by removing status and operation_status.
+        Also escapes any problematic characters.
         Returns cleaned dictionary.
         """
         if not isinstance(dynamic_values, dict):
@@ -2482,13 +2470,53 @@ def updated_config_construction():
         cleaned.pop('status', None)
         cleaned.pop('operation_status', None)
         
+        # Escape any string values to prevent JSON corruption
+        cleaned = escape_json_string(cleaned)
+        
         return cleaned
+    
+    def sanitize_for_json(data):
+        """
+        Recursively sanitize data for JSON serialization.
+        Handles backslashes, quotes, and other problematic characters.
+        """
+        if isinstance(data, str):
+            # Replace single backslashes with double backslashes
+            # This ensures paths like C:\xampp become C:\\xampp
+            if '\\' in data:
+                data = data.replace('\\', '\\\\')
+            return data
+        elif isinstance(data, dict):
+            return {k: sanitize_for_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [sanitize_for_json(item) for item in data]
+        else:
+            return data
+    
+    def normalize_slashes(text):
+        """
+        Normalize all slashes (forward and backslashes) to underscores.
+        This ensures operation_status messages don't contain problematic characters.
+        """
+        if not isinstance(text, str):
+            return text
+        
+        # Replace all backslashes and forward slashes with underscore
+        # First handle backslashes (escape them in the string)
+        text = text.replace('\\', '_')
+        # Then handle forward slashes
+        text = text.replace('/', '_')
+        # Also handle double backslashes that might have been escaped
+        text = text.replace('\\\\', '_')
+        
+        return text
     
     def nest_fields_in_dynamic_values(config, existing_status=None, existing_operation_status=None):
         """
         Move all fields (except status and operation_status) into dynamic_values nest.
         PRESERVES existing status if provided.
         REMOVES status and operation_status from dynamic_values.
+        Sanitizes all string values to ensure valid JSON.
         """
         if not isinstance(config, dict):
             return config
@@ -2504,17 +2532,21 @@ def updated_config_construction():
             # Only set default if no status exists
             nested_config['status'] = 'pending'
         
-        # Handle operation_status at ROOT LEVEL ONLY
+        # Handle operation_status at ROOT LEVEL ONLY - preserve existing if available
         if existing_operation_status is not None:
-            nested_config['operation_status'] = existing_operation_status
+            # Normalize slashes in existing operation_status
+            nested_config['operation_status'] = normalize_slashes(existing_operation_status)
         elif 'operation_status' in config and config['operation_status']:
-            nested_config['operation_status'] = config['operation_status']
+            # Normalize slashes in existing operation_status
+            nested_config['operation_status'] = normalize_slashes(config['operation_status'])
         else:
             # Create operation status based on author
             author_name = config.get('author', '')
             if not author_name and 'dynamic_values' in config:
                 author_name = config['dynamic_values'].get('author', 'Unknown')
-            nested_config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' processed"
+            # Normalize slashes in the author name and message
+            clean_author = normalize_slashes(author_name)
+            nested_config['operation_status'] = normalize_slashes(f"updated_config_construction: Configuration for '{clean_author}' processed")
         
         # Collect all other fields into dynamic_values
         dynamic_values = {}
@@ -2522,7 +2554,8 @@ def updated_config_construction():
         
         for key, value in config.items():
             if key not in excluded_fields:
-                dynamic_values[key] = value
+                # Sanitize value for JSON
+                dynamic_values[key] = sanitize_for_json(value)
         
         # If there was already a dynamic_values, merge it (but clean it first)
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
@@ -2530,7 +2563,7 @@ def updated_config_construction():
             cleaned_existing = clean_dynamic_values(config['dynamic_values'])
             for key, value in cleaned_existing.items():
                 if key not in dynamic_values:
-                    dynamic_values[key] = value
+                    dynamic_values[key] = sanitize_for_json(value)
         
         # CRITICAL: Remove any status or operation_status that might have been in dynamic_values
         dynamic_values = clean_dynamic_values(dynamic_values)
@@ -2543,7 +2576,10 @@ def updated_config_construction():
         if 'author' in config and 'author' not in dynamic_values:
             if 'dynamic_values' not in nested_config:
                 nested_config['dynamic_values'] = {}
-            nested_config['dynamic_values']['author'] = config['author']
+            nested_config['dynamic_values']['author'] = sanitize_for_json(config['author'])
+        
+        # Final sanitization of the entire config
+        nested_config = sanitize_for_json(nested_config)
         
         return nested_config
     
@@ -2565,6 +2601,111 @@ def updated_config_construction():
         else:
             return config
     
+    def append_operation_status(existing_message, new_message):
+        """
+        Append a new message to an existing operation_status message.
+        Normalizes all slashes to underscores in both messages.
+        Returns the combined message with proper formatting.
+        """
+        # Normalize slashes in both messages
+        if existing_message:
+            existing_message = normalize_slashes(existing_message)
+        if new_message:
+            new_message = normalize_slashes(new_message)
+        
+        if not existing_message:
+            return new_message
+        
+        # If the existing message already ends with a period, add space
+        if existing_message.endswith('.'):
+            return f"{existing_message} {new_message}"
+        else:
+            return f"{existing_message}. {new_message}"
+    
+    def get_existing_operation_status():
+        """
+        Get the existing operation_status from AUTHOR_PATH.
+        Returns the existing message or None if not found.
+        """
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            if isinstance(author_data, dict):
+                return author_data.get('operation_status', None)
+            elif isinstance(author_data, list) and author_data:
+                return author_data[-1].get('operation_status', None)
+            return None
+        except Exception:
+            return None
+    
+    def update_author_operation_status(operation_message, preserve_status=True):
+        """
+        Update operation_status in AUTHOR_PATH while preserving existing status.
+        APPENDS the new message to any existing operation_status.
+        Normalizes all slashes to underscores in the final message.
+        """
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            # Normalize slashes in the new message
+            operation_message = normalize_slashes(operation_message)
+            
+            # If AUTHOR_PATH is a list, handle accordingly
+            if isinstance(author_data, list):
+                if not author_data:
+                    author_data = [{}]
+                
+                # Get existing operation_status
+                existing_operation = author_data[-1].get('operation_status', '')
+                
+                # Normalize slashes in existing message
+                existing_operation = normalize_slashes(existing_operation)
+                
+                # Append new message to existing
+                combined_message = append_operation_status(existing_operation, operation_message)
+                
+                # Update operation_status, preserve status
+                if preserve_status and 'status' in author_data[-1]:
+                    # Keep existing status
+                    pass
+                else:
+                    # Only set status if it doesn't exist
+                    if 'status' not in author_data[-1]:
+                        author_data[-1]['status'] = 'pending'
+                
+                author_data[-1]['operation_status'] = combined_message
+                
+                if save_json_file(AUTHOR_PATH, author_data):
+                    return True
+                return False
+            
+            # If AUTHOR_PATH is a single object
+            elif isinstance(author_data, dict):
+                # Get existing operation_status
+                existing_operation = author_data.get('operation_status', '')
+                
+                # Normalize slashes in existing message
+                existing_operation = normalize_slashes(existing_operation)
+                
+                # Append new message to existing
+                combined_message = append_operation_status(existing_operation, operation_message)
+                
+                # Preserve existing status - don't change it
+                # Only set status if it doesn't exist
+                if 'status' not in author_data:
+                    author_data['status'] = 'pending'
+                
+                author_data['operation_status'] = combined_message
+                
+                if save_json_file(AUTHOR_PATH, author_data):
+                    return True
+                return False
+            
+            return False
+        except Exception as e:
+            print(f"   ❌ Error updating operation_status: {e}")
+            return False
+    
     # ============================================================
     # STEP 1: LOAD CONFIGURATIONS
     # ============================================================
@@ -2578,6 +2719,9 @@ def updated_config_construction():
     failed_count = 0
     config_status_messages = []
     has_critical_errors = False
+    
+    # Initialize operation_msg with a default value
+    operation_msg = "updated_config_construction: Processing completed."
     
     # Load NEW_CONFIGS (should be a list)
     try:
@@ -2600,9 +2744,14 @@ def updated_config_construction():
         if isinstance(author_path_data, dict):
             author_name = author_path_data.get('author', 'Unknown')
             status = author_path_data.get('status', 'No status')
+            existing_op = author_path_data.get('operation_status', 'None')
             print(f"   📝 Type: Single config object")
             print(f"   👤 Author: {author_name}")
             print(f"   📊 Status: {status}")
+            if existing_op != 'None':
+                # Show normalized version for display
+                normalized_preview = normalize_slashes(existing_op[:80])
+                print(f"   📝 Existing operation_status: {normalized_preview}...")
             
             # Check if status exists in dynamic_values (needs cleaning)
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
@@ -2614,7 +2763,11 @@ def updated_config_construction():
                 if isinstance(item, dict):
                     author_name = item.get('author', 'Unknown')
                     status = item.get('status', 'No status')
+                    existing_op = item.get('operation_status', 'None')
                     print(f"   📝 Config {idx+1}: Author={author_name}, Status={status}")
+                    if existing_op != 'None':
+                        normalized_preview = normalize_slashes(existing_op[:80])
+                        print(f"      📝 Existing operation_status: {normalized_preview}...")
                     # Check for status in dynamic_values
                     if 'dynamic_values' in item and isinstance(item['dynamic_values'], dict):
                         if 'status' in item['dynamic_values'] or 'operation_status' in item['dynamic_values']:
@@ -2634,6 +2787,8 @@ def updated_config_construction():
     print(f"\n{'='*60}")
     print("🔄 CONVERTING CONFIGURATIONS TO NESTED FORMAT...")
     print("🧹 REMOVING status/operation_status FROM dynamic_values...")
+    print("🔧 ESCAPING backslashes and special characters...")
+    print("📝 NORMALIZING slashes to underscores in operation_status...")
     print(f"{'='*60}")
     
     converted_configs = []
@@ -2662,6 +2817,10 @@ def updated_config_construction():
             existing_status = author_path_data.get('status', None)
             existing_operation_status = author_path_data.get('operation_status', None)
             
+            # Normalize any slashes in existing operation_status
+            if existing_operation_status:
+                existing_operation_status = normalize_slashes(existing_operation_status)
+            
             # Check if status exists in dynamic_values (it shouldn't, but we'll clean it)
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
                 if 'status' in author_path_data['dynamic_values']:
@@ -2671,7 +2830,8 @@ def updated_config_construction():
             
             print(f"   📊 Preserving status (root): {existing_status}")
             if existing_operation_status:
-                print(f"   📝 Preserving operation_status (root): {existing_operation_status[:80]}...")
+                normalized_preview = normalize_slashes(existing_operation_status[:80])
+                print(f"   📝 Preserving operation_status (root): {normalized_preview}...")
             
             # Check if this config is already in proper nested format
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
@@ -2701,6 +2861,13 @@ def updated_config_construction():
                 nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
                 print(f"   🧹 Confirmed: no status/operation_status in dynamic_values")
             
+            # Normalize slashes in operation_status
+            if 'operation_status' in nested_config:
+                nested_config['operation_status'] = normalize_slashes(nested_config['operation_status'])
+            
+            # Final sanitization
+            nested_config = sanitize_for_json(nested_config)
+            
             converted_configs.append(nested_config)
             processed_authors.add(author_name)
             processed_count += 1
@@ -2720,7 +2887,7 @@ def updated_config_construction():
             
             # Create error config
             try:
-                error_operation_msg = f"updated_config_construction: ERROR - {error_msg}"
+                error_operation_msg = normalize_slashes(f"updated_config_construction: ERROR - {error_msg}")
                 error_config = {
                     "status": "aborted",
                     "operation_status": error_operation_msg,
@@ -2762,6 +2929,10 @@ def updated_config_construction():
                 existing_status = config.get('status', None)
                 existing_operation_status = config.get('operation_status', None)
                 
+                # Normalize any slashes in existing operation_status
+                if existing_operation_status:
+                    existing_operation_status = normalize_slashes(existing_operation_status)
+                
                 # Check for status in dynamic_values
                 if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
                     if 'status' in config['dynamic_values']:
@@ -2796,6 +2967,13 @@ def updated_config_construction():
                 if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
                     nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
                     print(f"   🧹 Confirmed: no status/operation_status in dynamic_values")
+                
+                # Normalize slashes in operation_status
+                if 'operation_status' in nested_config:
+                    nested_config['operation_status'] = normalize_slashes(nested_config['operation_status'])
+                
+                # Final sanitization
+                nested_config = sanitize_for_json(nested_config)
                 
                 converted_configs.append(nested_config)
                 processed_authors.add(author_name)
@@ -2833,19 +3011,26 @@ def updated_config_construction():
                     print(f"   🧹 Cleaning status/operation_status from dynamic_values")
                     new_config['dynamic_values'] = clean_dynamic_values(new_config['dynamic_values'])
             
-            # For NEW_CONFIGS, create operation status
-            operation_msg = f"updated_config_construction: Adding configuration for '{author_name}' from NEW_CONFIGS."
+            # For NEW_CONFIGS, create operation status (normalize slashes)
+            operation_msg_new = normalize_slashes(f"updated_config_construction: Adding configuration for '{author_name}' from NEW_CONFIGS.")
             
             # Convert to nested format - NEW_CONFIGS might not have status
             nested_config = nest_fields_in_dynamic_values(
                 new_config,
                 existing_status='pending',  # New configs start as pending
-                existing_operation_status=operation_msg
+                existing_operation_status=operation_msg_new
             )
             
             # Ensure no status/operation_status in dynamic_values
             if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
                 nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
+            
+            # Normalize slashes in operation_status
+            if 'operation_status' in nested_config:
+                nested_config['operation_status'] = normalize_slashes(nested_config['operation_status'])
+            
+            # Final sanitization
+            nested_config = sanitize_for_json(nested_config)
             
             converted_configs.append(nested_config)
             processed_authors.add(author_name)
@@ -2854,7 +3039,7 @@ def updated_config_construction():
             config_status_messages.append({
                 'author': author_name,
                 'status': 'pending',
-                'message': operation_msg
+                'message': operation_msg_new
             })
             
             print(f"   ✅ Added config for {author_name}")
@@ -2881,8 +3066,11 @@ def updated_config_construction():
             author_name = config.get('author', '')
             if not author_name and 'dynamic_values' in config:
                 author_name = config['dynamic_values'].get('author', f'config_{i+1}')
-            config['operation_status'] = f"updated_config_construction: Configuration for '{author_name}' processed"
+            config['operation_status'] = normalize_slashes(f"updated_config_construction: Configuration for '{author_name}' processed")
             print(f"   ✅ Added operation_status for config {i + 1}")
+        else:
+            # Normalize slashes in existing operation_status
+            config['operation_status'] = normalize_slashes(config['operation_status'])
         
         # CRITICAL: Clean dynamic_values - remove status and operation_status
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
@@ -2902,6 +3090,7 @@ def updated_config_construction():
             print(f"   ✅ No dynamic_values to clean in config {i + 1}")
     
     print(f"   ✅ All {len(converted_configs)} configs have status and operation_status at ROOT LEVEL only")
+    print(f"   ✅ All slashes in operation_status normalized to underscores")
     
     # ============================================================
     # STEP 4: SAVE CONVERTED CONFIGS
@@ -2910,15 +3099,21 @@ def updated_config_construction():
     print("💾 SAVING CONFIGURATIONS TO UPDATED_CONFIGS...")
     print(f"{'='*60}")
     
+    save_success = False
     try:
         if converted_configs:
-            if save_json_file(UPDATED_CONFIGS, converted_configs):
-                print(f"✅ Converted {len(converted_configs)} configs saved to UPDATED_CONFIGS")
+            # Ensure all configs are sanitized before saving
+            sanitized_configs = [sanitize_for_json(config) for config in converted_configs]
+            
+            if save_json_file(UPDATED_CONFIGS, sanitized_configs):
+                print(f"✅ Converted {len(sanitized_configs)} configs saved to UPDATED_CONFIGS")
+                save_success = True
                 print(f"\n📋 PER-CONFIG STATUS SUMMARY:")
                 for status_info in config_status_messages:
                     status_emoji = '✅' if status_info['status'] in ['completed', 'pending'] else '⚠️' if status_info['status'] == 'warning' else '❌'
                     print(f"   {status_emoji} 👤 {status_info['author']}: {status_info['status']}")
-                    print(f"      📝 {status_info['message'][:80]}...")
+                    normalized_msg = normalize_slashes(status_info['message'][:80])
+                    print(f"      📝 {normalized_msg}...")
             else:
                 error_msg = f"Failed to save converted configs to {UPDATED_CONFIGS}."
                 print(f"❌ {error_msg}")
@@ -2927,6 +3122,7 @@ def updated_config_construction():
         else:
             print("ℹ️ No configs to save - creating empty file")
             save_json_file(UPDATED_CONFIGS, [])
+            save_success = True
     except Exception as e:
         error_msg = f"Error saving to UPDATED_CONFIGS: {str(e)}"
         print(f"❌ {error_msg}")
@@ -2934,7 +3130,48 @@ def updated_config_construction():
         has_critical_errors = True
     
     # ============================================================
-    # STEP 5: UPDATE OPERATION_STATUS IN AUTHOR_PATH (PRESERVE STATUS)
+    # STEP 5: VALIDATE SAVED JSON
+    # ============================================================
+    print(f"\n{'='*60}")
+    print("🔍 VALIDATING SAVED JSON...")
+    print(f"{'='*60}")
+    
+    try:
+        if os.path.exists(UPDATED_CONFIGS):
+            with open(UPDATED_CONFIGS, 'r', encoding='utf-8') as f:
+                content = f.read()
+                # Try to parse JSON to validate
+                json.loads(content)
+                print(f"✅ JSON validation passed - file is valid JSON")
+                
+                # Check for unescaped backslashes in the file
+                if '\\\\' in content:
+                    print(f"   ✅ Backslashes are properly escaped (found '\\\\\\\\')")
+                elif '\\' in content and not '\\\\' in content:
+                    print(f"   ⚠️ Found unescaped backslashes - may cause issues")
+                    warnings_encountered.append("Found unescaped backslashes in JSON output")
+                else:
+                    print(f"   ✅ No backslash issues found")
+                
+                # Check that slashes are normalized in operation_status
+                if 'operation_status' in content:
+                    # Look for any remaining slashes in operation_status
+                    import re
+                    # Find operation_status values in the JSON
+                    op_status_matches = re.findall(r'"operation_status":\s*"([^"]*)"', content)
+                    for match in op_status_matches:
+                        if '/' in match or '\\' in match:
+                            print(f"   ⚠️ Found slashes in operation_status: {match[:50]}...")
+                            warnings_encountered.append("Slashes found in operation_status - should be normalized")
+                            break
+                    else:
+                        print(f"   ✅ No slashes found in operation_status values")
+    except Exception as e:
+        print(f"   ⚠️ Could not validate JSON: {e}")
+        warnings_encountered.append(f"JSON validation warning: {e}")
+    
+    # ============================================================
+    # STEP 6: UPDATE OPERATION_STATUS IN AUTHOR_PATH (PRESERVE STATUS, APPEND, NORMALIZE)
     # ============================================================
     all_errors = errors_encountered
     detailed_issues = []
@@ -2949,21 +3186,30 @@ def updated_config_construction():
         if len(warnings_encountered) > 3:
             detailed_issues.append(f"... and {len(warnings_encountered) - 3} more warnings")
     
+    # Get existing operation_status for display (normalized)
+    existing_operation = get_existing_operation_status()
+    if existing_operation:
+        normalized_existing = normalize_slashes(existing_operation[:100])
+        print(f"\n📝 Existing operation_status found: {normalized_existing}...")
+    
     # Build operation message - DO NOT change status
+    # Normalize all slashes in the message
     if all_errors or has_critical_errors:
-        operation_msg = f"updated_config_construction: Configuration conversion encountered issues. Details: {'. '.join(detailed_issues)}."
-        print(f"\n⚠️ Updating operation_status (preserving existing status)")
-        update_author_operation_status(operation_msg, preserve_status=True)
+        operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion encountered issues. Details: {'. '.join(detailed_issues)}.")
+        print(f"\n⚠️ Updating operation_status (preserving existing status, appending, normalizing slashes)")
     else:
         if warnings_encountered:
-            operation_msg = f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. Warnings: " + "; ".join(warnings_encountered)
+            warnings_text = "; ".join(warnings_encountered)
+            operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. Warnings: {warnings_text}")
         else:
-            operation_msg = f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations. All status fields are at root level only."
-        print(f"\n✅ Updating operation_status (preserving existing status)")
-        update_author_operation_status(operation_msg, preserve_status=True)
+            operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations. All status fields are at root level only.")
+        print(f"\n✅ Updating operation_status (preserving existing status, appending, normalizing slashes)")
+    
+    # Now update the operation status with the defined message (appending to existing)
+    update_author_operation_status(operation_msg, preserve_status=True)
     
     # ============================================================
-    # STEP 6: DISPLAY LIVE SUMMARY
+    # STEP 7: DISPLAY LIVE SUMMARY
     # ============================================================
     print(f"\n{'='*60}")
     print("📊 LIVE CONFIGURATION OPERATION SUMMARY")
@@ -2973,7 +3219,8 @@ def updated_config_construction():
         status_emoji = '✅' if status_info['status'] in ['pending', 'completed'] else '❌' if status_info['status'] == 'aborted' else '⚠️'
         print(f"\n{status_emoji} Config #{idx} - Author: {status_info['author']}")
         print(f"   Status: {status_info['status']} (PRESERVED at ROOT LEVEL)")
-        print(f"   Operation: {status_info['message']}")
+        normalized_msg = normalize_slashes(status_info['message'])
+        print(f"   Operation: {normalized_msg}")
         if idx < len(config_status_messages):
             print(f"   {'-'*50}")
     
@@ -2992,18 +3239,23 @@ def updated_config_construction():
     print(f"  - Statuses preserved at ROOT LEVEL (NOT changed)")
     print(f"  - status/operation_status REMOVED from dynamic_values")
     print(f"  - Configs with operation status: {len(config_status_messages)}")
+    print(f"  - All backslashes properly escaped for JSON")
+    print(f"  - New messages APPENDED to existing operation_status (not overwritten)")
+    print(f"  - All slashes (/) and backslashes (\\) normalized to underscores (_)")
     
     if warnings_encountered:
         print(f"\n⚠️ WARNINGS ({len(warnings_encountered)}):")
         for warning in warnings_encountered[:5]:
-            print(f"    - {warning}")
+            normalized_warning = normalize_slashes(warning)
+            print(f"    - {normalized_warning}")
         if len(warnings_encountered) > 5:
             print(f"    ... and {len(warnings_encountered) - 5} more warnings")
     
     if all_errors:
         print(f"\n❌ ERRORS ({len(all_errors)}):")
         for error in all_errors[:5]:
-            print(f"    - {error}")
+            normalized_error = normalize_slashes(error)
+            print(f"    - {normalized_error}")
         if len(all_errors) > 5:
             print(f"    ... and {len(all_errors) - 5} more errors")
     
@@ -3027,6 +3279,7 @@ def update_settings():
     Closes the Edge window upon successful completion.
     
     Updates operation_status in AUTHOR_PATH based on processing results.
+    APPENDS new messages to existing operation_status.
     Contains professional message explaining any issues.
     
     PRE-CHECKS:
@@ -3038,7 +3291,8 @@ def update_settings():
     reconstruction_success = updated_config_construction()
     if not reconstruction_success:
         print("❌ [UPDATE] Configuration reconstruction failed. Aborting update.")
-        update_author_operation_status('Sorry, the settings update could not proceed because the configuration reconstruction failed. Please check the source files.')
+        # Append to existing operation_status
+        append_author_operation_status('Sorry, the settings update could not proceed because the configuration reconstruction failed. Please check the source files.')
         return False
     
     pyautogui.PAUSE = 0.0
@@ -3073,27 +3327,91 @@ def update_settings():
         except Exception as e:
             return False
     
-    def update_author_operation_status(operation_message):
-        """Update only operation_status in AUTHOR_PATH"""
+    def normalize_slashes(text):
+        """
+        Normalize all slashes (forward and backslashes) to underscores.
+        This ensures operation_status messages don't contain problematic characters.
+        """
+        if not isinstance(text, str):
+            return text
+        
+        # Replace all backslashes and forward slashes with underscore
+        text = text.replace('\\', '_')
+        text = text.replace('/', '_')
+        text = text.replace('\\\\', '_')
+        
+        return text
+    
+    def append_operation_status(existing_message, new_message):
+        """
+        Append a new message to an existing operation_status message.
+        Normalizes all slashes to underscores in both messages.
+        Returns the combined message with proper formatting.
+        """
+        # Normalize slashes in both messages
+        if existing_message:
+            existing_message = normalize_slashes(existing_message)
+        if new_message:
+            new_message = normalize_slashes(new_message)
+        
+        if not existing_message:
+            return new_message
+        
+        # If the existing message already ends with a period, add space
+        if existing_message.endswith('.'):
+            return f"{existing_message} {new_message}"
+        else:
+            return f"{existing_message}. {new_message}"
+    
+    def append_author_operation_status(operation_message):
+        """
+        Append a new message to the existing operation_status in AUTHOR_PATH.
+        Preserves existing status.
+        """
         try:
             author_data = load_json_file(AUTHOR_PATH, {})
             
             # Handle both dict and list formats
             if isinstance(author_data, dict):
-                # Single config object
-                author_data['operation_status'] = operation_message
-                # Preserve status - don't delete it
+                # Get existing operation_status
+                existing_operation = author_data.get('operation_status', '')
+                
+                # Append new message to existing
+                combined_message = append_operation_status(existing_operation, operation_message)
+                
+                # Update operation_status
+                author_data['operation_status'] = combined_message
+                
                 if save_json_file(AUTHOR_PATH, author_data):
                     return True
             elif isinstance(author_data, list) and author_data:
-                # List of configs
-                author_data[-1]['operation_status'] = operation_message
-                # Preserve status - don't delete it
+                # Get existing operation_status
+                existing_operation = author_data[-1].get('operation_status', '')
+                
+                # Append new message to existing
+                combined_message = append_operation_status(existing_operation, operation_message)
+                
+                # Update operation_status
+                author_data[-1]['operation_status'] = combined_message
+                
                 if save_json_file(AUTHOR_PATH, author_data):
                     return True
             return False
         except Exception as e:
             return False
+    
+    def get_existing_operation_status():
+        """Get the existing operation_status from AUTHOR_PATH."""
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            if isinstance(author_data, dict):
+                return author_data.get('operation_status', '')
+            elif isinstance(author_data, list) and author_data:
+                return author_data[-1].get('operation_status', '')
+            return ''
+        except Exception:
+            return ''
     
     def check_for_termination():
         if terminate_automation:
@@ -3462,14 +3780,14 @@ def update_settings():
         error_msg = "The UPDATED_CONFIGS file could not be created or validated. Check file permissions and disk space."
         print(f"❌ [INIT] {error_msg}")
         errors_encountered.append(error_msg)
-        update_author_operation_status(f"Sorry, the settings update could not start: {error_msg}")
+        append_author_operation_status(f"Sorry, the settings update could not start: {error_msg}")
         return False
     
     if not ensure_new_configs_exists():
         error_msg = "The NEW_CONFIGS file could not be created or validated. Check file permissions and disk space."
         print(f"❌ [INIT] {error_msg}")
         errors_encountered.append(error_msg)
-        update_author_operation_status(f"Sorry, the settings update could not start: {error_msg}")
+        append_author_operation_status(f"Sorry, the settings update could not start: {error_msg}")
         return False
     
     # Read the updated config data
@@ -3506,7 +3824,7 @@ def update_settings():
             error_msg = "No meaningful data to update. Both settings and uploaded_jpgs_url are empty. Aborting update to prevent writing empty data."
             print(f"❌ [PRE-CHECK] {error_msg}")
             errors_encountered.append(error_msg)
-            update_author_operation_status(f"Sorry, the settings update was aborted: {error_msg}")
+            append_author_operation_status(f"Sorry, the settings update was aborted: {error_msg}")
             return False
         
         # Save uploaded_jpgs_url data to temp file only if it has meaningful data
@@ -3515,7 +3833,7 @@ def update_settings():
             if not temp_success:
                 error_msg = "Failed to save uploaded_jpgs_url data to temp file"
                 errors_encountered.append(error_msg)
-                update_author_operation_status(f"Sorry, the settings update could not save JPG data: {error_msg}")
+                append_author_operation_status(f"Sorry, the settings update could not save JPG data: {error_msg}")
                 return False
             print(f"📸 [STAGE 1] Uploaded JPGs data saved to temp ({len(uploaded_jpgs_data) if isinstance(uploaded_jpgs_data, list) else 'unknown'} items)")
         else:
@@ -3537,13 +3855,13 @@ def update_settings():
         error_msg = f"UPDATED_CONFIGS contains invalid JSON: {str(e)}. The file is corrupted and cannot be read."
         print(f"❌ {error_msg}")
         errors_encountered.append(error_msg)
-        update_author_operation_status(f"Sorry, the settings update could not read the configuration: {error_msg}")
+        append_author_operation_status(f"Sorry, the settings update could not read the configuration: {error_msg}")
         return False
     except Exception as e:
         error_msg = f"Failed to read UPDATED_CONFIGS: {str(e)}. Check file permissions."
         print(f"❌ {error_msg}")
         errors_encountered.append(error_msg)
-        update_author_operation_status(f"Sorry, the settings update could not read the configuration: {error_msg}")
+        append_author_operation_status(f"Sorry, the settings update could not read the configuration: {error_msg}")
         return False
     
     # If we get here, we have at least one type of data to update
@@ -3924,7 +4242,7 @@ def update_settings():
             error_msg = f"Failed to navigate to '{phpmyadmin_url}'. The browser may have issues loading the page."
             print(f"❌ [NAVIGATION] {error_msg}")
             errors_encountered.append(error_msg)
-            update_author_operation_status(f"Sorry, the settings update could not navigate to the database interface: {error_msg}")
+            append_author_operation_status(f"Sorry, the settings update could not navigate to the database interface: {error_msg}")
             try:
                 close_edge_window(hwnd)
             except:
@@ -3961,7 +4279,7 @@ def update_settings():
             error_msg = f"The phpMyAdmin page at '{phpmyadmin_url}' failed to load after {MAX_OPERATION_RETRIES} attempts. Check if the URL is accessible and the server is running."
             print(f"❌ {error_msg}")
             errors_encountered.append(error_msg)
-            update_author_operation_status(f"Sorry, the settings update could not load the database page: {error_msg}")
+            append_author_operation_status(f"Sorry, the settings update could not load the database page: {error_msg}")
             try:
                 close_edge_window(hwnd)
             except:
@@ -3988,7 +4306,7 @@ def update_settings():
                     error_msg = "The UPDATE operation failed to execute successfully. Check the database connection and query syntax."
                     errors_encountered.append(error_msg)
                 
-                update_author_operation_status(f"Sorry, the settings update failed: {error_msg}")
+                append_author_operation_status(f"Sorry, the settings update failed: {error_msg}")
                 try:
                     close_edge_window(hwnd)
                 except:
@@ -4011,7 +4329,7 @@ def update_settings():
             
             if not upload_success:
                 errors_encountered.append(upload_msg)
-                update_author_operation_status(f"Sorry, the settings update failed to store uploaded JPGs data: {upload_msg}")
+                append_author_operation_status(f"Sorry, the settings update failed to store uploaded JPGs data: {upload_msg}")
                 try:
                     close_edge_window(hwnd)
                 except:
@@ -4067,7 +4385,7 @@ def update_settings():
             warnings_encountered.append(warning_msg)
         
         # ============================================================
-        # UPDATE ONLY OPERATION_STATUS IN AUTHOR_PATH
+        # APPEND TO OPERATION_STATUS IN AUTHOR_PATH
         # ============================================================
         # Build success message with details of what was updated
         update_details = []
@@ -4075,6 +4393,11 @@ def update_settings():
             update_details.append("settings updated")
         if has_uploadedjpgs_to_update:
             update_details.append(f"uploaded JPGs ({len(uploaded_jpgs_data) if isinstance(uploaded_jpgs_data, list) else 'unknown'} items) stored")
+        
+        # Get existing operation_status for display
+        existing_operation = get_existing_operation_status()
+        if existing_operation:
+            print(f"\n📝 Existing operation_status found: {existing_operation[:100]}...")
         
         if warnings_encountered or errors_encountered:
             detailed_issues = []
@@ -4087,16 +4410,16 @@ def update_settings():
             
             if errors_encountered:
                 operation_msg = f"Sorry, the settings update encountered issues. Details: {'. '.join(detailed_issues)}. Please resolve these issues and try again."
-                print(f"\n⚠️ Setting operation_status with error message")
-                update_author_operation_status(operation_msg)
+                print(f"\n⚠️ Appending operation_status with error message")
+                append_author_operation_status(operation_msg)
             else:
                 operation_msg = f"Settings update completed successfully with {len(warnings_encountered)} specific warnings. Updated: {', '.join(update_details)}. Warnings: " + "; ".join(warnings_encountered)
-                print(f"\n✅ Setting operation_status with warning message")
-                update_author_operation_status(operation_msg)
+                print(f"\n⚠️ Appending operation_status with warning message")
+                append_author_operation_status(operation_msg)
         else:
             operation_msg = f"Settings update completed successfully. Updated: {', '.join(update_details)}."
-            print(f"\n✅ Setting operation_status with success message")
-            update_author_operation_status(operation_msg)
+            print(f"\n✅ Appending operation_status with success message")
+            append_author_operation_status(operation_msg)
         
         # ============================================================
         # OPERATION COMPLETE
@@ -4137,7 +4460,7 @@ def update_settings():
         
     except KeyboardInterrupt:
         print("🛑 [UPDATE] Operation interrupted by user")
-        update_author_operation_status('The settings update operation was cancelled by the user. Please restart the process when ready.')
+        append_author_operation_status('The settings update operation was cancelled by the user. Please restart the process when ready.')
         try:
             close_edge_window(hwnd)
         except:
@@ -4148,7 +4471,7 @@ def update_settings():
         print(f"❌ [UPDATE] {error_msg}")
         import traceback
         traceback.print_exc()
-        update_author_operation_status(f"Sorry, the settings update encountered an unexpected error: {str(e)}. Please check the logs for details.")
+        append_author_operation_status(f"Sorry, the settings update encountered an unexpected error: {str(e)}. Please check the logs for details.")
         try:
             close_edge_window(hwnd)
         except:
@@ -6259,11 +6582,7 @@ def check_schedule_time():
     
     print(f"Status in Config:    pending ✅")
     print(f"{'='*80}\n")
-#====
 
-
-           
-#CSV ENGINE
 def validate_image_urls():
     """
     Validates URLs in jpgsurl field by checking if they point to actual images.
@@ -6272,7 +6591,7 @@ def validate_image_urls():
     Removes invalid URLs from the jpgsurl field in AUTHOR_PATH.
     
     UPDATES operation_status and status in AUTHOR_PATH
-    ONLY executes if status is 'pending' AND validate_csv_urls is True
+    ONLY executes if status is 'pending' AND validate_images_url is True
     Sets status to 'aborted' if critical errors occur or not enough valid URLs remain
     """
     import os
@@ -6552,31 +6871,31 @@ def validate_image_urls():
         return
     
     # ============================================================
-    # STEP 2: CHECK validate_csv_urls FLAG
+    # STEP 2: CHECK validate_images_url FLAG
     # ============================================================
     try:
-        # Get the validate_csv_urls value from config
-        validate_csv_urls = config.get('validate_csv_urls', False)
+        # Get the validate_images_url value from config
+        validate_images_url = config.get('validate_images_url', False)
         
         # Also check in dynamic_values if present
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-            dyn_validate = config['dynamic_values'].get('validate_csv_urls')
+            dyn_validate = config['dynamic_values'].get('validate_images_url')
             if dyn_validate is not None:
-                validate_csv_urls = dyn_validate
+                validate_images_url = dyn_validate
         
         # Parse the value (handles string 'false', 'true', etc.)
-        validate_csv_urls_bool = parse_boolean_value(validate_csv_urls)
+        validate_images_url_bool = parse_boolean_value(validate_images_url)
         
-        print(f"validate_image_urls: validate_csv_urls = '{validate_csv_urls}' (parsed as: {validate_csv_urls_bool})")
+        print(f"validate_image_urls: validate_images_url = '{validate_images_url}' (parsed as: {validate_images_url_bool})")
         
-        if not validate_csv_urls_bool:
-            print(f"validate_image_urls: SKIPPED - 'validate_csv_urls' is False. Function only executes when this flag is True.")
+        if not validate_images_url_bool:
+            print(f"validate_image_urls: SKIPPED - 'validate_images_url' is False. Function only executes when this flag is True.")
             return
             
-        print(f"validate_image_urls: 'validate_csv_urls' is True - proceeding...")
+        print(f"validate_image_urls: 'validate_images_url' is True - proceeding...")
         
     except Exception as e:
-        error_msg = f"validate_image_urls: ERROR - Failed to check validate_csv_urls flag: {e}"
+        error_msg = f"validate_image_urls: ERROR - Failed to check validate_images_url flag: {e}"
         print(error_msg)
         # Don't update status or touch anything, just return
         return
@@ -6761,7 +7080,11 @@ def validate_image_urls():
     
     print(f"\n✅ jpgsurl field updated in AUTHOR_PATH (invalid URLs removed)")
     print(f"{'='*80}\n")
-    
+#====
+
+
+           
+#CSV ENGINE 
 def generate_final_csv():
     """FINAL JARVEE-COMPATIBLE CSV – UNLIMITED POSTS WITH RANDOM CAPTION REUSE + 100 PER FILE SPLIT
     
@@ -7504,6 +7827,8 @@ def csv_engine():
 
 #=====DRIVER AUTOMATION
 # FORCE SSL BYPASS: This fixes "Could not reach host" in 90% of cases
+AUTHOR_PATH = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"  
+FILES_ROOT = r"C:\xampp\htdocs\AI automation\serenum\files"
 os.environ['WDM_SSL_VERIFY'] = '0'
 def initialize_driver(mode="headed"):
     """
@@ -7511,7 +7836,8 @@ def initialize_driver(mode="headed"):
     and falls back to local cache if offline.
     
     UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' if driver initialization fails
     """
     import os
     import time
@@ -7525,10 +7851,10 @@ def initialize_driver(mode="headed"):
     from webdriver_manager.chrome import ChromeDriverManager
     
     global driver, wait
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
+
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling"""
         try:
@@ -7537,7 +7863,9 @@ def initialize_driver(mode="headed"):
                     return json.load(f)
             else:
                 return default if default is not None else {}
-        except:
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
             return default if default is not None else {}
     
     def save_json_file(file_path, data):
@@ -7547,17 +7875,20 @@ def initialize_driver(mode="headed"):
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
-        except:
+        except Exception:
             return False
     
     def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
+        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+            author_data = load_json_file(AUTHOR_PATH, {})
             
-            if author_data:
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
                     author_data[-1]['operation_status'] = operation_message
@@ -7565,131 +7896,165 @@ def initialize_driver(mode="headed"):
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
                         author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = operation_message
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = operation_message
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
             return False
-        except:
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
             return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
     
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    # If status is 'aborted', skip execution
-    if current_status == 'aborted':
-        print(f"initialize_driver: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"initialize_driver: SKIPPED - Status is 'aborted'. No action taken.")
-        return None, None
-
-    print(f"initialize_driver: Starting driver initialization (mode: {mode})")
-    
-    # --- 1. Process Cleanup ---
-    print("Closing existing Chrome instances...")
-    for proc in psutil.process_iter(['name']):
-        try:
-            if proc.info['name'] and proc.info['name'].lower() in ['chrome.exe', 'chromedriver.exe']:
-                proc.terminate()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    time.sleep(1)
-
-    # --- 2. Path Configuration ---
-    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    selenium_profile = os.path.expanduser(r"~\.chrome_selenium_profile")
-    wdm_home = os.path.join(os.path.expanduser("~"), ".wdm")
-
-    # --- 3. Profile Setup ---
-    if not os.path.exists(selenium_profile):
-        real_user_data = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
-        source_profile = os.path.join(real_user_data, "Profile 1")
-        if os.path.exists(source_profile):
-            print("Copying Profile 1 to Selenium directory...")
-            shutil.copytree(source_profile, selenium_profile, dirs_exist_ok=True)
-
-    # --- 4. Chrome Options ---
-    chrome_options = Options()
-    chrome_options.binary_location = chrome_path
-    chrome_options.add_argument(f"--user-data-dir={selenium_profile}")
-    chrome_options.add_argument("--profile-directory=Default")
-    
-    if mode == "headless":
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--disable-gpu")
-    else:
-        chrome_options.add_argument("--start-maximized")
-
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
-
-    # --- 5. The "Bypass" Driver Logic ---
-    driver_path = None
+    # Check current status
     try:
-        print("Attempting to bypass SSL and fetch Driver v144...")
-        driver_path = ChromeDriverManager().install()
-        print(f"Bypass successful! Driver path: {driver_path}")
-        update_author_status('pending', f"initialize_driver: Driver v144 downloaded successfully")
-    except Exception as e:
-        error_msg = f"initialize_driver: Network bypass failed: {e}"
-        print(error_msg)
-        print("Searching local .wdm cache for the newest available driver...")
-        update_author_status('pending', f"initialize_driver: Network failed, searching local cache")
+        config_data = load_json_file(AUTHOR_PATH, {})
         
-        found_drivers = []
-        for root, _, files in os.walk(wdm_home):
-            for file in files:
-                if file.lower() == "chromedriver.exe":
-                    found_drivers.append(os.path.join(root, file))
-        
-        if found_drivers:
-            driver_path = max(found_drivers, key=os.path.getmtime)
-            print(f"Using latest cached driver: {driver_path}")
-            update_author_status('pending', f"initialize_driver: Using cached driver from {driver_path}")
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+        elif isinstance(config_data, dict):
+            config = config_data
         else:
-            error_msg = "initialize_driver: ERROR - No driver found online or in cache. Please check your firewall."
+            error_msg = "initialize_driver: ERROR - Invalid config format in AUTHOR_PATH."
             print(error_msg)
             update_author_status('aborted', error_msg)
-            raise Exception(error_msg)
-
-    # --- 6. Start WebDriver ---
-    try:
-        service = Service(executable_path=driver_path)
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        wait = WebDriverWait(driver, 15)
-        print("ChromeDriver initialized successfully.")
+            return None, None
         
-        # Update status on success
-        success_msg = f"initialize_driver: ChromeDriver initialized successfully (mode: {mode})"
-        update_author_status('pending', success_msg)
+        current_status = config.get('status', 'pending')
         
-        return driver, wait
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status != 'pending':
+            print(f"initialize_driver: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return None, None
+        
+        print(f"initialize_driver: Status is 'pending' - proceeding...")
+        
     except Exception as e:
-        error_msg = f"initialize_driver: Critical Error - Driver version mismatch: {e}"
+        error_msg = f"initialize_driver: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
         print(error_msg)
-        print("Ensure your Wi-Fi allows downloading .exe files from Google APIs.")
         update_author_status('aborted', error_msg)
-        raise
+        return None, None
 
+    # ============================================================
+    # STEP 2: INITIALIZE DRIVER
+    # ============================================================
+    print(f"initialize_driver: Starting driver initialization (mode: {mode})")
+    
+    try:
+        # --- Process Cleanup ---
+        print("Closing existing Chrome instances...")
+        for proc in psutil.process_iter(['name']):
+            try:
+                if proc.info['name'] and proc.info['name'].lower() in ['chrome.exe', 'chromedriver.exe']:
+                    proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        time.sleep(1)
+        
+        # --- Path Configuration ---
+        chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        selenium_profile = os.path.expanduser(r"~\.chrome_selenium_profile")
+        wdm_home = os.path.join(os.path.expanduser("~"), ".wdm")
+        
+        # --- Profile Setup ---
+        if not os.path.exists(selenium_profile):
+            real_user_data = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+            source_profile = os.path.join(real_user_data, "Profile 1")
+            if os.path.exists(source_profile):
+                print("Copying Profile 1 to Selenium directory...")
+                shutil.copytree(source_profile, selenium_profile, dirs_exist_ok=True)
+        
+        # --- Chrome Options ---
+        chrome_options = Options()
+        chrome_options.binary_location = chrome_path
+        chrome_options.add_argument(f"--user-data-dir={selenium_profile}")
+        chrome_options.add_argument("--profile-directory=Default")
+        
+        if mode == "headless":
+            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--disable-gpu")
+        else:
+            chrome_options.add_argument("--start-maximized")
+        
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        
+        # --- Driver Acquisition ---
+        driver_path = None
+        try:
+            print("Attempting to download ChromeDriver v144...")
+            driver_path = ChromeDriverManager().install()
+            print(f"Driver downloaded successfully: {driver_path}")
+            update_author_status('pending', f"initialize_driver: Driver v144 downloaded successfully")
+        except Exception as e:
+            error_msg = f"initialize_driver: Network download failed: {e}"
+            print(error_msg)
+            print("Searching local .wdm cache for the newest available driver...")
+            update_author_status('pending', f"initialize_driver: Network failed, searching local cache")
+            
+            found_drivers = []
+            for root, _, files in os.walk(wdm_home):
+                for file in files:
+                    if file.lower() == "chromedriver.exe":
+                        found_drivers.append(os.path.join(root, file))
+            
+            if found_drivers:
+                driver_path = max(found_drivers, key=os.path.getmtime)
+                print(f"Using latest cached driver: {driver_path}")
+                update_author_status('pending', f"initialize_driver: Using cached driver from {driver_path}")
+            else:
+                error_msg = "initialize_driver: ERROR - No driver found online or in cache. Please check your firewall/internet connection."
+                print(error_msg)
+                update_author_status('aborted', error_msg)
+                return None, None
+        
+        # --- Start WebDriver ---
+        try:
+            service = Service(executable_path=driver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            wait = WebDriverWait(driver, 15)
+            print("ChromeDriver initialized successfully.")
+            
+            # Update status on success
+            success_msg = f"initialize_driver: ChromeDriver initialized successfully (mode: {mode})"
+            update_author_status('pending', success_msg)
+            
+            return driver, wait
+            
+        except Exception as e:
+            error_msg = f"initialize_driver: ERROR - Failed to start ChromeDriver: {e}"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return None, None
+            
+    except Exception as e:
+        error_msg = f"initialize_driver: ERROR - Critical failure: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return None, None
+    
 def load_urls():
-    """Load URLs from pageandgroupaccounts.json based on author from pageandgroupauthors.json.
+    """Load URLs from config based on author from AUTHOR_PATH.
     
     UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' if critical errors occur
+    DOES NOT change status on success
     """
     import os
     import json
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    AUTHOR_URL = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupaccounts.json'
-    
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling"""
         try:
@@ -7698,7 +8063,9 @@ def load_urls():
                     return json.load(f)
             else:
                 return default if default is not None else {}
-        except:
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
             return default if default is not None else {}
     
     def save_json_file(file_path, data):
@@ -7708,17 +8075,20 @@ def load_urls():
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
-        except:
+        except Exception:
             return False
     
     def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
+        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+            author_data = load_json_file(AUTHOR_PATH, {})
             
-            if author_data:
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
                     author_data[-1]['operation_status'] = operation_message
@@ -7726,84 +8096,105 @@ def load_urls():
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
                         author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = operation_message
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = operation_message
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
             return False
-        except:
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
             return False
 
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    # If status is 'aborted', skip execution
-    if current_status == 'aborted':
-        print(f"load_urls: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"load_urls: SKIPPED - Status is 'aborted'. No action taken.")
-        raise Exception("load_urls: SKIPPED - Status is 'aborted'")
-
-    print(f"load_urls: Starting URL load")
-    
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
     try:
-        # Load author from pageandgroupauthors.json
-        if not os.path.exists(AUTHOR_PATH):
-            error_msg = f"load_urls: ERROR - AUTHOR_PATH not found: {AUTHOR_PATH}"
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "load_urls: ERROR - Invalid config format in AUTHOR_PATH."
             print(error_msg)
             update_author_status('aborted', error_msg)
             raise Exception(error_msg)
-            
-        with open(AUTHOR_PATH, 'r') as author_file:
-            author_data = json.load(author_file)
-            author = author_data.get('author')
-            if not author:
-                error_msg = "load_urls: ERROR - No 'author' key found in pageandgroupauthors.json"
-                print(error_msg)
-                update_author_status('aborted', error_msg)
-                raise Exception(error_msg)
+        
+        current_status = config.get('status', 'pending')
+        
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status != 'pending':
+            print(f"load_urls: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return None
+        
+        print(f"load_urls: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"load_urls: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        raise Exception(error_msg)
+
+    # ============================================================
+    # STEP 2: GET AUTHOR AND ACCOUNT_URL FROM CONFIG
+    # ============================================================
+    try:
+        author = config.get('author', '').strip()
+        if not author:
+            error_msg = "load_urls: ERROR - 'author' is missing or empty in config."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            raise Exception(error_msg)
         
         print(f"load_urls: Author found: {author}")
         
-        # Load URLs from pageandgroupaccounts.json
-        if not os.path.exists(AUTHOR_URL):
-            error_msg = f"load_urls: ERROR - AUTHOR_URL not found: {AUTHOR_URL}"
+        # Get account_url from config
+        account_url = config.get('account_url', {})
+        if not account_url:
+            error_msg = f"load_urls: ERROR - 'account_url' missing for author '{author}' in config."
             print(error_msg)
             update_author_status('aborted', error_msg)
             raise Exception(error_msg)
-            
-        with open(AUTHOR_URL, 'r') as file:
-            data = json.load(file)
-            if author not in data:
-                error_msg = f"load_urls: ERROR - Author '{author}' not found in pageandgroupaccounts.json"
-                print(error_msg)
-                update_author_status('aborted', error_msg)
-                raise Exception(error_msg)
-                
-            if "schedule" not in data[author]:
-                error_msg = f"load_urls: ERROR - 'schedule' key not found for author '{author}' in pageandgroupaccounts.json"
-                print(error_msg)
-                update_author_status('aborted', error_msg)
-                raise Exception(error_msg)
-                
-            url = data[author]["schedule"][0]
-            
-        # Update status on success
-        success_msg = f"load_urls: URL loaded successfully for author '{author}': {url}"
-        print(success_msg)
-        update_author_status('pending', success_msg)
         
+        # If account_url is a dict, get the value for this author
+        if isinstance(account_url, dict):
+            url = account_url.get(author, '')
+            if not url:
+                error_msg = f"load_urls: ERROR - No URL found for author '{author}' in account_url."
+                print(error_msg)
+                update_author_status('aborted', error_msg)
+                raise Exception(error_msg)
+        else:
+            url = str(account_url)
+        
+        if not url:
+            error_msg = f"load_urls: ERROR - Empty URL for author '{author}'."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            raise Exception(error_msg)
+        
+        # SUCCESS - DO NOT CHANGE STATUS
+        print(f"load_urls: URL loaded successfully for author '{author}'")
         return url
         
     except Exception as e:
-        error_msg = f"load_urls: Failed to load URLs from JSON: {str(e)}"
+        error_msg = f"load_urls: Failed to load URL: {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         raise
@@ -7811,13 +8202,13 @@ def load_urls():
 def launch_profile():
     """Navigate to the upload post URL, confirm it, and continuously recheck every 2 seconds.
     
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
+    UPDATES operation_status in AUTHOR_PATH
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' ONLY if critical errors occur
+    If schedule_end_date is older than schedule_date, just updates operation_status and returns
+    DOES NOT change status on success or completion
     """
     global driver, wait
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
     
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling"""
@@ -7827,7 +8218,9 @@ def launch_profile():
                     return json.load(f)
             else:
                 return default if default is not None else {}
-        except:
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
             return default if default is not None else {}
     
     def save_json_file(file_path, data):
@@ -7837,17 +8230,20 @@ def launch_profile():
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
-        except:
+        except Exception:
             return False
     
     def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
+        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+            author_data = load_json_file(AUTHOR_PATH, {})
             
-            if author_data:
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
                     author_data[-1]['operation_status'] = operation_message
@@ -7855,90 +8251,133 @@ def launch_profile():
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
                         author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = operation_message
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = operation_message
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
             return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    # If status is 'aborted', skip execution
-    if current_status == 'aborted':
-        print(f"launch_profile: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"launch_profile: SKIPPED - Status is 'aborted'. No action taken.")
-        return
-
-    print(f"launch_profile: Starting profile launch")
-    update_author_status('pending', f"launch_profile: Starting profile launch")
-    
-    try:
-        # Read the author JSON to check schedule dates
-        try:
-            with open(AUTHOR_PATH, 'r') as f:
-                author_data = json.load(f)
         except Exception as e:
-            error_msg = f"launch_profile: ERROR - Error reading author JSON: {str(e)}"
+            print(f"Failed to update author status: {e}")
+            return False
+
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "launch_profile: ERROR - Invalid config format in AUTHOR_PATH."
             print(error_msg)
             update_author_status('aborted', error_msg)
             return
         
-        # Parse schedule dates
-        schedule_date = author_data.get("schedule_date", "")
-        schedule_end_date = author_data.get("schedule_end_date", "")
+        current_status = config.get('status', 'pending')
         
-        # Check if operation is completed based on dates
-        if schedule_date and schedule_end_date:
-            # Compare dates (assuming format: DD/MM/YYYY HH:MM)
-            try:
-                from datetime import datetime
-                
-                # Parse dates
-                date_format = "%d/%m/%Y %H:%M"
-                schedule_dt = datetime.strptime(schedule_date, date_format)
-                schedule_end_dt = datetime.strptime(schedule_end_date, date_format)
-                
-                # If schedule_end_date <= schedule_date, operation is completed
-                if schedule_end_dt <= schedule_dt:
-                    author_name = author_data.get('author', 'Unknown')
-                    print(f"launch_profile: Operation completed for author {author_name}")
-                    print(f"Schedule Date: {schedule_date}")
-                    print(f"Schedule End Date: {schedule_end_date}")
-                    
-                    # Update JSON with completed status
-                    author_data["operation_status"] = f"launch_profile: Operation completed for {author_name} - schedule ended"
-                    author_data["status"] = "completed"
-                    
-                    try:
-                        with open(AUTHOR_PATH, 'w') as f:
-                            json.dump(author_data, f, indent=4)
-                        print("launch_profile: JSON updated with completed status.")
-                        update_author_status('completed', f"launch_profile: Operation completed for {author_name}")
-                    except Exception as e:
-                        print(f"launch_profile: ERROR - Error updating JSON: {str(e)}")
-                    
-                    return  # Exit the function, don't proceed with automation
-                    
-            except ValueError as e:
-                print(f"launch_profile: Error parsing dates: {str(e)}. Proceeding with caution...")
-                update_author_status('pending', f"launch_profile: Date parsing error, proceeding with caution")
-                # If date parsing fails, continue with automation as fallback
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
         
+        if current_status != 'pending':
+            print(f"launch_profile: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return
+        
+        print(f"launch_profile: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"launch_profile: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 2: LOAD CONFIG DETAILS
+    # ============================================================
+    try:
+        author = config.get('author', '').strip()
+        if not author:
+            error_msg = "launch_profile: ERROR - 'author' is missing or empty in config."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        schedule_date = config.get('schedule_date', '')
+        schedule_end_date = config.get('schedule_end_date', '')
+        
+        print(f"launch_profile: Author: {author}")
+        print(f"launch_profile: Schedule Date: {schedule_date}")
+        print(f"launch_profile: Schedule End Date: {schedule_end_date}")
+        
+    except Exception as e:
+        error_msg = f"launch_profile: ERROR - Failed to process config: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 3: CHECK SCHEDULE END DATE
+    # If schedule_end_date is older than schedule_date -> operation is done
+    # Just update operation_status and return - DO NOT CHANGE status
+    # ============================================================
+    if schedule_date and schedule_end_date:
+        try:
+            from datetime import datetime
+            date_format = "%d/%m/%Y %H:%M"
+            schedule_dt = datetime.strptime(schedule_date, date_format)
+            schedule_end_dt = datetime.strptime(schedule_end_date, date_format)
+            
+            # If schedule_end_date is older than or equal to schedule_date -> operation is DONE
+            if schedule_end_dt <= schedule_dt:
+                msg = f"launch_profile: schedule end date ({schedule_end_date}) is older than schedule date ({schedule_date}), operation for the config is completed. closing operation."
+                print(msg)
+                # Update ONLY operation_status, status remains whatever it is
+                update_author_status('pending', msg)
+                return  # Exit the function, don't proceed with automation
+            else:
+                # schedule_end_date is newer than schedule_date -> operation is still ongoing
+                print(f"launch_profile: schedule_end_date ({schedule_end_date}) is newer than schedule_date ({schedule_date}). Operation is ongoing - proceeding...")
+                
+        except ValueError as e:
+            error_msg = f"launch_profile: ERROR - Invalid date format in schedule_date or schedule_end_date: {str(e)}"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        except Exception as e:
+            error_msg = f"launch_profile: ERROR - Failed to parse dates: {str(e)}"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+
+    # ============================================================
+    # STEP 4: GET UPLOAD URL AND NAVIGATE
+    # ============================================================
+    try:
+        # Get URL from config
         uploadpost_url = load_urls()
-        post_completed = False  # Flag to track if posting is done
+        if not uploadpost_url:
+            error_msg = f"launch_profile: ERROR - Failed to get URL for author '{author}'"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
         
-        update_author_status('pending', f"launch_profile: Navigating to {uploadpost_url}")
+        print(f"launch_profile: Upload URL: {uploadpost_url}")
+        post_completed = False
         
         # Initial navigation attempt
         while True:
@@ -7949,7 +8388,6 @@ def launch_profile():
                     EC.presence_of_element_located((By.XPATH, "//textarea | //div[@contenteditable='true'] | //input[@placeholder='Write something...']"))
                 )
                 print("Navigated to upload post page.")
-                update_author_status('pending', f"launch_profile: Successfully navigated to {uploadpost_url}")
                 break
             else:
                 print(f"Current URL ({current_url}) is not the upload post URL.")
@@ -7984,10 +8422,12 @@ def launch_profile():
                 print("Waiting 2 seconds before rechecking URL...")
                 time.sleep(2)
 
-        # Continuous rechecking loop
+        # ============================================================
+        # STEP 5: CONTINUOUS RECHECKING LOOP
+        # ============================================================
         last_url = driver.current_url
         
-        while not post_completed:  # Changed condition
+        while not post_completed:
             try:
                 current_url = driver.current_url
                 print("Checking if URL is correct...")
@@ -7998,10 +8438,11 @@ def launch_profile():
                         reset_trackers()
                         last_url = current_url
 
-                    # Update progress JSON
-                    driver_progress_path = r"C:\xampp\htdocs\AI automation\serenum\driverprogress.json"
+                    # Update progress JSON using FILES_ROOT
+                    driver_progress_path = os.path.join(FILES_ROOT, "driverprogress.json")
                     progress_data = {"driver": "started", "scheduled": "waiting"}
                     try:
+                        os.makedirs(os.path.dirname(driver_progress_path), exist_ok=True)
                         with open(driver_progress_path, 'w') as f:
                             json.dump(progress_data, f, indent=4)
                         print(f"Updated {driver_progress_path}")
@@ -8009,21 +8450,16 @@ def launch_profile():
                         print(f"Failed to write progress: {e}")
 
                     print(f"URL correct. Proceeding with post actions...")
-                    update_author_status('pending', f"launch_profile: Proceeding with post actions")
                     firstbatch()
                     secondbatch()
                     
-                    # Add a flag to indicate posting is done
-                    # You'll need to modify these functions to return a success status
-                    # or check for a confirmation element after posting
+                    # Check if post was successful
                     try:
-                        # Check if post was successful (look for success message)
                         success_element = wait.until(
                             EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'post') or contains(text(), 'published')]")),
                             timeout=10
                         )
                         print("launch_profile: Post successful!")
-                        update_author_status('completed', f"launch_profile: Post completed successfully for {author_data.get('author', 'Unknown')}")
                         post_completed = True
                         break
                     except:
@@ -8035,7 +8471,6 @@ def launch_profile():
                     reset_trackers()
                     last_url = current_url
 
-                    # CRITICAL FIX: Use driver.get() instead of refresh()
                     driver.get(uploadpost_url)
                     print(f"Navigated to: {uploadpost_url}")
 
@@ -8086,21 +8521,18 @@ def launch_profile():
         error_msg = f"launch_profile: Fatal error: {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
-        print("Browser remains open for debugging.")
-        input("Press Enter to close...")  # Optional: pause before crash
         raise
-
+       
 def reset_trackers():
     """Reset all function trackers to their initial state, excluding update_calendar.
     
     UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' if critical errors occur
+    Updates operation_status on success or failure
     """
     import os
     import json
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
     
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling"""
@@ -8110,7 +8542,9 @@ def reset_trackers():
                     return json.load(f)
             else:
                 return default if default is not None else {}
-        except:
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
             return default if default is not None else {}
     
     def save_json_file(file_path, data):
@@ -8120,17 +8554,20 @@ def reset_trackers():
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             return True
-        except:
+        except Exception:
             return False
     
     def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
+        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+            author_data = load_json_file(AUTHOR_PATH, {})
             
-            if author_data:
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
                     author_data[-1]['operation_status'] = operation_message
@@ -8138,98 +8575,130 @@ def reset_trackers():
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
                         author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = operation_message
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = operation_message
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
             return False
-        except:
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
             return False
 
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    # If status is 'aborted', skip execution
-    if current_status == 'aborted':
-        print(f"reset_trackers: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"reset_trackers: SKIPPED - Status is 'aborted'. No action taken.")
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "reset_trackers: ERROR - Invalid config format in AUTHOR_PATH."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        current_status = config.get('status', 'pending')
+        
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status != 'pending':
+            print(f"reset_trackers: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            update_author_status('pending', f"reset_trackers: SKIPPED - Status is '{current_status}'")
+            return
+        
+        print(f"reset_trackers: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"reset_trackers: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
         return
 
-    print(f"reset_trackers: Resetting all function trackers")
+    # ============================================================
+    # STEP 2: RESET TRACKERS
+    # ============================================================
+    try:
+        # ---- Caption writers ----
+        writecaption_ocr.last_written_caption = None
+        if hasattr(writecaption_element, 'last_written_caption'):
+            writecaption_element.last_written_caption = None
+        writecaption_element.has_written = False
+
+        # ---- set_webschedule ----
+        if hasattr(set_webschedule, 'has_set'):
+            set_webschedule.has_set = False
+
+        # ---- toggleaddphoto ----
+        toggleaddphoto.is_toggled = False
+
+        # ---- toggleschedule ----
+        toggleschedule.is_toggled = False
+
+        # ---- selectmedia ----
+        selectmedia.has_uploaded = False
+
+        # ---- selectgroups ----
+        selectgroups.is_dropdown_opened = False
+        selectgroups.is_see_more_clicked = False
+        selectgroups.groups_selected = False
+        selectgroups.is_page_selected = False
+
+        print(
+            "Reset all function trackers: "
+            "last_written_caption (ocr & element), "
+            "has_written (writecaption_element), "
+            "has_set (set_webschedule), "
+            "is_toggled (toggleaddphoto), is_toggled (toggleschedule), "
+            "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
+            "groups_selected, is_page_selected"
+        )
+        
+        # SUCCESS - Update operation_status only, keep status as pending
+        update_author_status('pending', "reset_trackers: All trackers reset successfully")
+        return
+        
+    except Exception as e:
+        error_msg = f"reset_trackers: ERROR - Failed to reset trackers: {str(e)}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
     
-    # ---- Caption writers ----
-    writecaption_ocr.last_written_caption = None
-    if hasattr(writecaption_element, 'last_written_caption'):
-        writecaption_element.last_written_caption = None
-    writecaption_element.has_written = False
-
-    # ---- set_webschedule ----
-    if hasattr(set_webschedule, 'has_set'):
-        set_webschedule.has_set = False
-
-    # ---- toggleaddphoto ----
-    toggleaddphoto.is_toggled = False
-
-    # ---- toggleschedule ----
-    toggleschedule.is_toggled = False
-
-    # ---- selectmedia ----
-    selectmedia.has_uploaded = False
-
-    # ---- selectgroups ----
-    selectgroups.is_dropdown_opened = False
-    selectgroups.is_see_more_clicked = False
-    selectgroups.groups_selected = False
-    selectgroups.is_page_selected = False
-
-    print(
-        "Reset all function trackers: "
-        "last_written_caption (ocr & element), "
-        "has_written (writecaption_element), "
-        "has_set (set_webschedule), "
-        "is_toggled (toggleaddphoto), is_toggled (toggleschedule), "
-        "has_uploaded, is_dropdown_opened, is_see_more_clicked, "
-        "groups_selected, is_page_selected"
-    )
-    
-    update_author_status('pending', f"reset_trackers: All trackers reset successfully")
-
-def manage_group_switch():
+def randomize_groups():
     """
-    Handles **only** group switching:
-      • switch → move current_selected → last_selected, clear current_selected
-      • no     → clear last_selected
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
+    Handles group switching with proper pipeline tracking
+    Each group is selected once before any group is repeated
     """
     import os
     import json
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    from datetime import datetime
     
     def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
         try:
             if os.path.exists(file_path):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            else:
-                return default if default is not None else {}
+            return default if default is not None else {}
         except:
             return default if default is not None else {}
     
     def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
         try:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -8239,588 +8708,254 @@ def manage_group_switch():
             return False
     
     def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
         try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            if isinstance(author_data, list):
+                if not author_data:
+                    author_data = [{}]
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
                     author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    # If status is 'aborted', skip execution
-    if current_status == 'aborted':
-        print(f"manage_group_switch: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"manage_group_switch: SKIPPED - Status is 'aborted'. No action taken.")
-        return False
-
-    cfg_path   = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
-    upload_path = r"C:\xampp\htdocs\AI automation\serenum\files\groups\uploadgroups.json"
-
-    print(f"manage_group_switch: Starting group switch management")
-
-    # ---------- read config ----------
-    group_switch = "no"
-    if os.path.exists(cfg_path) and os.path.getsize(cfg_path):
-        try:
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            group_switch = cfg.get("group_switch", "no").lower()
-        except Exception as e:
-            error_msg = f"manage_group_switch: ERROR - config read error: {e}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return False
-
-    if group_switch not in ("switch", "no"):
-        group_switch = "no"
-
-    print(f"manage_group_switch: group_switch = '{group_switch}'")
-
-    # ---------- read / init uploadgroups ----------
-    default = {
-        "groups_selected": {
-            "last_selected": [],
-            "current_selected": {"1st": "", "2nd": "", "3rd": ""},
-            "status": "no groups selected"
-        }
-    }
-
-    data = default
-    if os.path.exists(upload_path) and os.path.getsize(upload_path):
-        try:
-            with open(upload_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"manage_group_switch: WARNING - uploadgroups read error: {e}")
-
-    cur = [
-        data.get("groups_selected", {}).get("current_selected", {}).get("1st", ""),
-        data.get("groups_selected", {}).get("current_selected", {}).get("2nd", ""),
-        data.get("groups_selected", {}).get("current_selected", {}).get("3rd", "")
-    ]
-    cur = [x for x in cur if x]
-
-    # ---------- apply switch ----------
-    if group_switch == "switch":
-        last = data.get("groups_selected", {}).get("last_selected", [])
-        last = list(set(last + cur))
-        data["groups_selected"]["last_selected"] = last
-        data["groups_selected"]["current_selected"] = {"1st": "", "2nd": "", "3rd": ""}
-        print(f"manage_group_switch: switched → last_selected = {last}")
-        update_author_status('pending', f"manage_group_switch: Switched groups - {len(last)} groups in last_selected")
-    else:
-        data["groups_selected"]["last_selected"] = []
-        print("manage_group_switch: cleared last_selected")
-        update_author_status('pending', f"manage_group_switch: Cleared last_selected (group_switch = no)")
-
-    # ---------- write back ----------
-    os.makedirs(os.path.dirname(upload_path), exist_ok=True)
-    try:
-        with open(upload_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-        print("manage_group_switch: uploadgroups.json updated")
-        return True
-    except Exception as e:
-        error_msg = f"manage_group_switch: ERROR - write error: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return False
-    
-def fetch_jpgsvault_urls():
-    """
-    Modified function to fetch all_urls data from automation_tree
-    Properly handles JSON array format from the database
-    Adds summary counts of unique folder names and their URL counts
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json as json_module
-    import re
-    from collections import defaultdict
-    from datetime import datetime, timezone
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    URLS_FILE = r'C:\xampp\htdocs\AI automation\serenum\files\fetchedjpgsurl.json'
-    
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
             else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    # If status is 'aborted', skip execution
-    if current_status == 'aborted':
-        print(f"fetch_jpgsvault_urls: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"fetch_jpgsvault_urls: SKIPPED - Status is 'aborted'. No action taken.")
-        return []
-
-    print(f"fetch_jpgsvault_urls: Starting fetch from automation_tree...")
-    update_author_status('pending', f"fetch_jpgsvault_urls: Starting fetch from automation_tree")
-    
-    # HELPER FUNCTION: Empty the JSON file at the start
-    def empty_json_file():
-        """
-        Empties the JSON output file at the beginning of execution
-        Creates an empty structure or removes the file
-        """
-        try:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(URLS_FILE), exist_ok=True)
-            
-            # Write empty JSON structure
-            empty_data = {
-                "source_url": "",
-                "current_url": "",
-                "page_title": "",
-                "fetched_at": "",
-                "total_jpgs": 0,
-                "expected_total": 0,
-                "jpg_urls": [],
-                "folder_summary": {
-                    "total_unique_folders": 0,
-                    "folders": {},
-                    "details": []
-                },
-                "debug": {
-                    "summary_cards": {"Unique URLs Saved": "0"},
-                    "found_via_js": 0,
-                    "source": "automation_tree.all_urls",
-                    "records_processed": 0,
-                    "json_array_size": 0,
-                    "metadata_skipped": 0,
-                    "status": "initializing"
-                }
-            }
-            
-            with open(URLS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(empty_data, f, ensure_ascii=False, indent=2)
-            
-            print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] ✅ JSON file emptied/initialized: {URLS_FILE}")
-            return True
-            
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                author_data['status'] = status_value
+                author_data['operation_status'] = operation_message
+            return save_json_file(AUTHOR_PATH, author_data)
         except Exception as e:
-            print(f"⚠️ WARNING: Could not empty JSON file: {e}")
+            print(f"Failed to update author status: {e}")
             return False
-    
-    # Inner function for manual parsing
-    def manual_parse_urls(urls_field):
-        """
-        Fallback parser for when JSON parsing fails
-        Handles various formats like comma-separated, newline-separated, etc.
-        """
-        urls_list = []
-        
-        # Try comma separation first
-        if ',' in urls_field:
-            # Split by comma but be careful with escaped commas
-            parts = urls_field.split(',')
-            for part in parts:
-                part = part.strip()
-                # Remove brackets and quotes
-                part = re.sub(r'^[\[\]"\']+|[\[\]"\']+$', '', part)
-                if part:
-                    urls_list.append(part)
-        elif '\n' in urls_field:
-            # Split by newline
-            for line in urls_field.split('\n'):
-                line = line.strip()
-                if line:
-                    urls_list.append(line)
-        else:
-            # Single URL
-            urls_list.append(urls_field.strip())
-        
-        return urls_list
-    
-    def extract_folder_name(url):
-        """
-        Extract folder name from URL pattern: .../jpgs/{folder_name}/...
-        Returns folder name or 'unknown' if not found
-        """
-        try:
-            # Look for pattern '/jpgs/' followed by folder name
-            jpgs_pattern = r'/jpgs/([^/]+)/'
-            match = re.search(jpgs_pattern, url)
-            if match:
-                return match.group(1)
-            
-            # Alternative pattern without leading slash
-            jpgs_pattern2 = r'jpgs/([^/]+)/'
-            match = re.search(jpgs_pattern2, url)
-            if match:
-                return match.group(1)
-            
-            return 'unknown'
-        except:
-            return 'unknown'
-    
+
+    # STEP 1: CHECK STATUS
     try:
-        print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] Starting fetch from automation_tree...")
+        config_data = load_json_file(AUTHOR_PATH, {})
         
-        # FIRST THING: Empty the JSON file
-        print(f"[ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] Emptying JSON file before fetching...")
-        empty_json_file()
-        
-        # Query to get all_urls column from automation_tree
-        query = "SELECT all_urls FROM automation_tree" 
-        result = db.execute_query(query)  # Using the global execute_query function
-        
-        if result.get('status') != 'success':
-            error_msg = f"fetch_jpgsvault_urls: QUERY ERROR - {result.get('message')}"
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            is_list = False
+        else:
+            error_msg = "ERROR - Invalid config format"
             print(error_msg)
             update_author_status('aborted', error_msg)
-            # Even on error, the file is already emptied
-            return []
-            
-        rows = result.get('results', [])
+            return False
         
-        if not rows:
-            warning_msg = "fetch_jpgsvault_urls: WARNING - Database returned 'success' but the results list is empty. Check if the table 'automation_tree' actually has rows."
-            print(warning_msg)
-            update_author_status('pending', warning_msg)
-            # File is already emptied, just return
-            return []
+        current_status = config.get('status', 'pending')
+        if current_status != 'pending':
+            print(f"SKIPPED - Status is '{current_status}'")
+            return False
         
-        print(f"SUCCESS: Fetched {len(rows)} records from 'automation_tree'")
-        update_author_status('pending', f"fetch_jpgsvault_urls: Fetched {len(rows)} records from automation_tree")
-        
-        # Extract all URLs from the rows
-        all_urls = []
-        seen_urls = set()
-        skipped_count = 0
-        metadata_count = 0
-        expected_total = None  # Will be extracted from metadata
-        urls_list = []  # Initialize for statistics
-        
-        # Dictionary to store folder name counts
-        folder_counts = defaultdict(int)
-        
-        for row in rows:
-            # Get the all_urls field from each row
-            urls_field = row.get('all_urls', '')
-            
-            if urls_field:
-                # Try to parse as JSON array first
-                urls_list = []
-                
-                # Check if it looks like a JSON array
-                if urls_field.strip().startswith('[') and urls_field.strip().endswith(']'):
-                    try:
-                        # Parse as JSON array
-                        urls_list = json_module.loads(urls_field)
-                        print(f"Successfully parsed JSON array with {len(urls_list)} items")
-                    except json_module.JSONDecodeError as e:
-                        print(f"JSON parse error: {e}, falling back to manual parsing")
-                        # Fallback to manual parsing if JSON fails
-                        urls_list = manual_parse_urls(urls_field)
-                else:
-                    # Try other formats
-                    urls_list = manual_parse_urls(urls_field)
-                
-                # Process each URL in the list
-                for item in urls_list:
-                    # Skip metadata entries like "total_urls: 9684" and extract expected total
-                    if isinstance(item, str):
-                        item_lower = item.lower().strip()
-                        if item_lower.startswith('total_urls:') or item_lower.startswith('total_urls='):
-                            # Extract the expected total from metadata
-                            try:
-                                # Parse "total_urls: 9317" or "total_urls:9317" or "total_urls=9317"
-                                total_match = re.search(r'\d+', item)
-                                if total_match:
-                                    expected_total = int(total_match.group())
-                                    print(f"📊 Found metadata: {item} -> Expected total: {expected_total}")
-                            except Exception as e:
-                                print(f"Could not parse expected total from '{item}': {e}")
-                            
-                            print(f"Skipping metadata entry: {item}")
-                            metadata_count += 1
-                            continue
-                    
-                    url = str(item).strip()
-                    
-                    # Skip empty strings
-                    if not url:
-                        skipped_count += 1
-                        continue
-                    
-                    # Remove quotes if present (from manual parsing)
-                    url = url.strip('"').strip("'")
-                    
-                    # Fix escaped slashes
-                    url = url.replace('\\/', '/')
-                    
-                    # Remove any leading/trailing brackets or weird characters
-                    url = re.sub(r'^[\["\']+|[\]"\']+$', '', url)
-                    
-                    # Handle the URL construction
-                    original_url = url  # Keep for debugging
-                    
-                    if 'jpgs' in url.lower():
-                        # Find where jpgs starts
-                        jpgs_index = url.lower().find('jpgs')
-                        if jpgs_index != -1:
-                            path_part = url[jpgs_index:]
-                            # Clean up the path
-                            path_part = path_part.replace('\\', '/')
-                            # Replace multiple slashes with single slash
-                            path_part = re.sub(r'/+', '/', path_part)
-                            # Remove any quotes or brackets from path
-                            path_part = re.sub(r'["\'\[\]]', '', path_part)
-                            # Construct clean URL
-                            url = f'https://fhdrikxsirudr.fwh.is/{path_part}'
-                        else:
-                            # If no jpgs found, treat as relative path
-                            url = url.replace('\\', '/')
-                            url = re.sub(r'/+', '/', url)
-                            url = re.sub(r'["\'\[\]]', '', url)
-                            url = f'https://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
-                    elif url.startswith('/'):
-                        url = f'https://fhdrikxsirudr.fwh.is{url}'
-                        url = re.sub(r'/+', '/', url)
-                    elif url.startswith('//'):
-                        url = f'https:{url}'
-                        url = re.sub(r'/+', '/', url)
-                    elif not url.startswith('http'):
-                        # Assume it's a relative path
-                        url = url.replace('\\', '/')
-                        url = re.sub(r'/+', '/', url)
-                        url = re.sub(r'["\'\[\]]', '', url)
-                        url = f'https://fhdrikxsirudr.fwh.is/{url.lstrip("/")}'
-                    else:
-                        # Already has http, just clean it
-                        url = re.sub(r'["\'\[\]]', '', url)
-                        url = re.sub(r'/+', '/', url)
-                    
-                    # Extract folder name for summary
-                    folder_name = extract_folder_name(url)
-                    
-                    # Accept ALL URLs regardless of extension
-                    if url and url not in seen_urls:
-                        # Accept the URL regardless of extension
-                        seen_urls.add(url)
-                        all_urls.append(url)
-                        # Increment folder count
-                        folder_counts[folder_name] += 1
-                    elif url in seen_urls:
-                        skipped_count += 1
-                    else:
-                        skipped_count += 1
-                        print(f"DEBUG: Skipped invalid URL: {original_url} -> {url}")
-        
-        total = len(all_urls)
-        
-        # If expected_total wasn't found in metadata, use the actual total
-        if expected_total is None:
-            expected_total = total
-            print(f"\n⚠️ No metadata found with expected total, using extracted count: {expected_total}")
-        
-        print(f"\n📊 STATISTICS:")
-        print(f"   - Total items in JSON array: {len(urls_list)}")
-        print(f"   - Metadata entries skipped: {metadata_count}")
-        print(f"   - URLs extracted: {total}")
-        print(f"   - Expected URLs: {expected_total}")
-        print(f"   - Skipped/duplicates: {skipped_count}")
-        
-        if total != expected_total:
-            print(f"\n⚠️ WARNING: Extracted {total} URLs but expected {expected_total}")
-            print(f"   Difference: {expected_total - total} URLs missing")
-            
-            # Debug: Check what's in the first few URLs to see the pattern
-            print("\n🔍 First 5 raw URLs from JSON:")
-            for i, item in enumerate(urls_list[:5]):
-                if isinstance(item, str) and not item.startswith('total_urls'):
-                    print(f"   {i+1}. {item}")
-        else:
-            print(f"\n✅ PERFECT MATCH: Extracted all {total} URLs as expected!")
-        
-        # Print folder summary
-        print(f"\n📁 FOLDER SUMMARY (Unique names and their URL counts):")
-        print(f"{'='*60}")
-        print(f"{'Folder Name':<30} {'URL Count':<10} {'Percentage':<10}")
-        print(f"{'='*60}")
-        
-        # Sort by count descending
-        sorted_folders = sorted(folder_counts.items(), key=lambda x: x[1], reverse=True)
-        
-        for folder_name, count in sorted_folders:
-            percentage = (count / total * 100) if total > 0 else 0
-            print(f"{folder_name:<30} {count:<10} {percentage:.1f}%")
-        
-        print(f"{'='*60}")
-        print(f"{'TOTAL UNIQUE FOLDERS':<30} {len(folder_counts):<10}")
-        print(f"{'TOTAL URLs':<30} {total:<10}")
-        print(f"{'='*60}")
-        
-        print(f"\n✅ Final: {total} unique JPG URL(s) extracted from all_urls column")
-        
-        # Create output in EXACT same format as fetch_urls
-        output_data = {
-            "source_url": "https://fhdrikxsirudr.fwh.is/loadimagesurl.php",
-            "current_url": "https://fhdrikxsirudr.fwh.is/loadimagesurl.php",
-            "page_title": "JPGs Vault Database Export",
-            "fetched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z",
-            "total_jpgs": total,
-            "expected_total": expected_total,
-            "jpg_urls": all_urls,
-            "folder_summary": {
-                "total_unique_folders": len(folder_counts),
-                "folders": dict(sorted_folders),
-                "details": [
-                    {
-                        "folder_name": folder_name,
-                        "url_count": count,
-                        "percentage": round((count / total * 100), 2) if total > 0 else 0
-                    }
-                    for folder_name, count in sorted_folders
-                ]
-            },
-            "debug": {
-                "summary_cards": {"Unique URLs Saved": str(total)},
-                "found_via_js": total,
-                "source": "automation_tree.all_urls",
-                "records_processed": len(rows),
-                "json_array_size": len(urls_list),
-                "metadata_skipped": metadata_count,
-                "status": "completed_successfully"
-            }
-        }
-        
-        # Save to file (overwrites the empty version with actual data)
-        with open(URLS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
-        
-        print(f"\n💾 Data saved to {URLS_FILE}")
-        
-        if all_urls:
-            print(f"\n📋 Sample URLs (first 10):")
-            for url in all_urls[:10]:
-                # Also show which folder each sample belongs to
-                folder = extract_folder_name(url)
-                print(f"  [{folder}] {url}")
-        
-        # Build success message
-        success_msg = f"fetch_jpgsvault_urls: Successfully fetched {total} URLs from {len(rows)} records. Folders: {len(folder_counts)}"
-        update_author_status('pending', success_msg)
-        
-        return all_urls
+        print(f"Status is 'pending' - proceeding...")
         
     except Exception as e:
-        error_msg = f"fetch_jpgsvault_urls: CRITICAL ERROR - {str(e)}"
+        error_msg = f"ERROR - {e}"
         print(error_msg)
-        import traceback
-        traceback.print_exc()
         update_author_status('aborted', error_msg)
+        return False
+
+    # STEP 2: GET CONFIG VALUES
+    try:
+        author = config.get('author', '').strip()
+        group_switch = config.get('group_switch', 'no').lower().strip()
         
-        # Update the JSON with error status (file was already emptied at start)
-        try:
-            error_data = {
-                "source_url": "",
-                "current_url": "",
-                "page_title": "",
-                "fetched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat() + "Z",
-                "total_jpgs": 0,
-                "expected_total": 0,
-                "jpg_urls": [],
-                "folder_summary": {
-                    "total_unique_folders": 0,
-                    "folders": {},
-                    "details": []
-                },
-                "debug": {
-                    "summary_cards": {"Unique URLs Saved": "0"},
-                    "found_via_js": 0,
-                    "source": "automation_tree.all_urls",
-                    "records_processed": 0,
-                    "json_array_size": 0,
-                    "metadata_skipped": 0,
-                    "status": f"error: {str(e)}"
-                }
-            }
-            with open(URLS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(error_data, f, ensure_ascii=False, indent=2)
-        except:
-            pass  # If we can't even write error, just return
+        # Get both fields
+        group_field = config.get('group', '')
+        group_types_field = config.get('group_types', '')
         
-        return []
-     
+        # Determine source
+        if group_types_field:
+            source_groups = group_types_field
+            field_used = 'group_types'
+        elif group_field:
+            source_groups = group_field
+            field_used = 'group'
+        else:
+            source_groups = ''
+            field_used = 'none'
+        
+        if group_switch not in ('yes', 'no'):
+            group_switch = 'no'
+        
+        print(f"Author: {author}, group_switch: '{group_switch}', field: '{field_used}'")
+        print(f"Current group value: '{group_field}', group_types: '{group_types_field}'")
+        
+    except Exception as e:
+        error_msg = f"ERROR - {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return False
+
+    # STEP 3: PARSE SOURCE GROUPS
+    try:
+        if isinstance(source_groups, list):
+            parsed_groups = [str(g).strip() for g in source_groups if str(g).strip()]
+        elif isinstance(source_groups, str) and source_groups.strip():
+            parsed_groups = [g.strip() for g in source_groups.split(',') if g.strip()]
+        else:
+            parsed_groups = []
+        
+        print(f"Parsed {len(parsed_groups)} groups from source: {parsed_groups}")
+        
+    except Exception as e:
+        error_msg = f"ERROR parsing groups - {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return False
+
+    # STEP 4: LOAD DEBUG DATA
+    try:
+        debug = config.get('group_switch_debug', {})
+        
+        # New simplified tracking
+        all_groups = debug.get('all_groups', [])
+        selected_groups = debug.get('selected_groups', [])
+        awaiting_selection = debug.get('awaiting_selection', [])
+        pipeline_complete = debug.get('pipeline_complete', False)
+        current_group = debug.get('current_group', '')
+        
+        print(f"DEBUG: all_groups={all_groups}")
+        print(f"DEBUG: selected_groups={selected_groups}")
+        print(f"DEBUG: awaiting_selection={awaiting_selection}")
+        print(f"DEBUG: current_group='{current_group}'")
+        print(f"DEBUG: pipeline_complete={pipeline_complete}")
+        
+    except Exception as e:
+        error_msg = f"ERROR loading debug - {e}"
+        print(error_msg)
+        all_groups = []
+        selected_groups = []
+        awaiting_selection = []
+        pipeline_complete = False
+        current_group = ''
+
+    # STEP 5: DETECT NEW GROUPS AND RE-INITIALIZE IF NEEDED
+    if group_switch == "no":
+        # Clear everything
+        all_groups = []
+        selected_groups = []
+        awaiting_selection = []
+        pipeline_complete = False
+        current_group = ''
+        action = "group_switch is no - cleared all"
+        print("CLEARED: group_switch is no")
+        
+    elif parsed_groups:
+        # Check if we need to re-initialize based on new groups
+        current_source_groups = sorted(parsed_groups)
+        current_debug_groups = sorted(all_groups) if all_groups else []
+        
+        # If debug has no data OR source groups are different from debug groups
+        if not all_groups or current_source_groups != current_debug_groups:
+            # New groups detected or first time - re-initialize
+            all_groups = parsed_groups.copy()
+            # Reset everything
+            selected_groups = []
+            awaiting_selection = all_groups.copy()
+            pipeline_complete = False
+            current_group = ''
+            action = f"RE-INITIALIZED with {len(all_groups)} groups from source"
+            print(f"🔄 RE-INITIALIZED: {len(all_groups)} groups, awaiting={awaiting_selection}")
+        else:
+            # Use existing debug data - groups unchanged
+            print(f"✅ Using existing debug data - no new groups detected")
+            action = "Using existing debug data"
+    
+    # STEP 6: MAIN PIPELINE LOGIC
+    if group_switch == "yes" and all_groups:
+        
+        # Check if pipeline is complete (all groups selected)
+        if pipeline_complete:
+            # Reset pipeline
+            selected_groups = []
+            awaiting_selection = all_groups.copy()
+            pipeline_complete = False
+            current_group = ''
+            action = f"🔄 PIPELINE RESET: all groups selected, restarting"
+            print(f"🔄 PIPELINE RESET: {len(all_groups)} groups available")
+        
+        # Move to next group if awaiting has items
+        if awaiting_selection and not pipeline_complete:
+            # Select next group from awaiting
+            current_group = awaiting_selection[0]
+            # Remove from awaiting
+            awaiting_selection.pop(0)
+            # Add to selected
+            selected_groups.append(current_group)
+            
+            action = f"SELECTED '{current_group}' ({len(selected_groups)}/{len(all_groups)} selected)"
+            print(f"✅ SELECTED: '{current_group}'")
+            print(f"📊 Progress: {len(selected_groups)}/{len(all_groups)} groups selected")
+            print(f"⏳ Remaining: {awaiting_selection}")
+            
+        elif not awaiting_selection and not pipeline_complete:
+            # All groups have been selected - mark pipeline as complete
+            pipeline_complete = True
+            action = f"✅ PIPELINE COMPLETE: All {len(all_groups)} groups have been selected"
+            print(f"✅ PIPELINE COMPLETE: All groups selected!")
+            current_group = ''  # Clear current group when done
+            
+        else:
+            action = f"WAITING: No groups to process"
+            print(f"⏳ WAITING: No groups to process")
+
+    # STEP 7: UPDATE BOTH FIELDS WITH CURRENT GROUP - HIGHEST PRIORITY
+    if group_switch == "yes":
+        if current_group:
+            # ALWAYS update both fields with the current group
+            config['group'] = current_group
+            config['group_types'] = current_group
+            print(f"📝 Updated 'group' = '{current_group}'")
+            print(f"📝 Updated 'group_types' = '{current_group}'")
+        else:
+            # If no current group, clear both fields
+            config['group'] = ''
+            config['group_types'] = ''
+            print(f"📝 Cleared 'group' and 'group_types'")
+
+    # STEP 8: SAVE DEBUG DATA
+    try:
+        debug_output = {
+            "author": author,
+            "group_switch": group_switch,
+            "field_used": field_used,
+            "all_groups": all_groups,
+            "selected_groups": selected_groups,
+            "awaiting_selection": awaiting_selection,
+            "pipeline_complete": pipeline_complete,
+            "current_group": current_group,
+            "total_groups": len(all_groups),
+            "selected_count": len(selected_groups),
+            "remaining_count": len(awaiting_selection),
+            "action": action,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        config['group_switch_debug'] = debug_output
+        
+        if is_list:
+            config_data[-1] = config
+        else:
+            config_data = config
+        
+        if save_json_file(AUTHOR_PATH, config_data):
+            print(f"✅ SAVED: {action}")
+            status_msg = f"Group: '{current_group}' ({len(selected_groups)}/{len(all_groups)})" if current_group else f"Pipeline: {len(selected_groups)}/{len(all_groups)} complete"
+            update_author_status('pending', status_msg)
+            return True
+        else:
+            error_msg = "ERROR saving"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return False
+        
+    except Exception as e:
+        error_msg = f"ERROR saving - {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return False
+                                 
 def corruptedjpgs():
     """
     Scans ALL .jpg, .jpeg, .png, .gif files in:
@@ -15971,10 +16106,9 @@ def secondbatch():
     set_webschedule() #*  
 #===================#
 
-def execute_engine():
+def execute_engine_():
     """Execute the appropriate engine based on the engine value.
-    Executes regardless of status - no status check."""
-    
+    Executes regardless of status - NO STATUS CHECKS OR UPDATES."""
     
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling"""
@@ -15989,70 +16123,20 @@ def execute_engine():
         except Exception:
             return default if default is not None else {}
     
-    def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
-        try:
-            author_data = load_json_file(AUTHOR_PATH, {})
-            
-            is_list = isinstance(author_data, list)
-            
-            if is_list:
-                if not author_data:
-                    author_data = [{}]
-                
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-            else:
-                if not isinstance(author_data, dict):
-                    author_data = {}
-                
-                author_data['status'] = status_value
-                author_data['operation_status'] = operation_message
-                
-                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
-                    author_data['dynamic_values']['status'] = status_value
-                    author_data['dynamic_values']['operation_status'] = operation_message
-            
-            if save_json_file(AUTHOR_PATH, author_data):
-                return True
-            return False
-        except Exception as e:
-            print(f"Failed to update author status: {e}")
-            return False
-
+    # ============================================================
+    # STEP 1: LOAD CONFIG - No status anything
+    # ============================================================
     fetch_settings()
-
-    # ============================================================
-    # STEP 1: LOAD CONFIG - No status check
-    # ============================================================
     try:
         config_data = load_json_file(AUTHOR_PATH, {})
         
         if isinstance(config_data, list) and len(config_data) > 0:
             config = config_data[-1]
-            config_is_list = True
         elif isinstance(config_data, dict):
             config = config_data
-            config_is_list = False
         else:
             error_msg = "execute_engine: ERROR - Invalid config format in AUTHOR_PATH."
             print(error_msg)
-            update_author_status('aborted', error_msg)
             return
         
         print(f"execute_engine: Config loaded successfully")
@@ -16070,10 +16154,13 @@ def execute_engine():
     if not engine_value:
         error_msg = "execute_engine: ERROR - 'engine' field is missing or empty in config."
         print(error_msg)
-        update_author_status('aborted', error_msg)
         return
     
     print(f"execute_engine: Engine value: '{engine_value}'")
+    
+    # Get author info for logging
+    author = config.get('author', 'Unknown')
+    time_order = config.get('time_order', 'Unknown')
 
     # ============================================================
     # STEP 3: EXECUTE BASED ON ENGINE TYPE
@@ -16081,54 +16168,230 @@ def execute_engine():
     
     if engine_value == "driver":
         # ===== DRIVER ENGINE =====
-        print(f"\nexecute_engine: Starting DRIVER engine...")
+        print(f"\n{'='*80}")
+        print(f"EXECUTING DRIVER ENGINE")
+        print(f"{'='*80}")
+        print(f"Author: {author}")
+        print(f"Time Order: {time_order}")
+        print(f"{'='*80}\n")
         
         try:
             # Initialize WebDriver
+            print("execute_engine: Initializing WebDriver...")
             driver, wait = initialize_driver(mode="headed")
+            
+            if driver is None or wait is None:
+                error_msg = f"execute_engine: DRIVER engine failed - WebDriver initialization returned None"
+                print(f"❌ {error_msg}")
+                return
+            
+            print("execute_engine: WebDriver initialized successfully")
             
             # Call update_calendar before launch_profile
             print("execute_engine: Calling update_calendar before launch_profile...")
+            try:
+                update_calendar()
+                print("execute_engine: update_calendar completed")
+            except Exception as e:
+                error_msg = f"execute_engine: update_calendar failed: {str(e)}"
+                print(f"⚠️ {error_msg}")
+                # Continue anyway - don't abort
             
             # Execute launch_profile
-            launch_profile()
-            update_settings()
+            print("execute_engine: Calling launch_profile...")
+            try:
+                launch_profile()
+                print("execute_engine: launch_profile completed")
+            except Exception as e:
+                error_msg = f"execute_engine: launch_profile failed: {str(e)}"
+                print(f"❌ {error_msg}")
+                return
             
-            print(f"execute_engine: DRIVER engine completed.")
+            # Update settings
+            print("execute_engine: Calling update_settings...")
+            try:
+                update_settings()
+                print("execute_engine: update_settings completed")
+            except Exception as e:
+                error_msg = f"execute_engine: update_settings failed: {str(e)}"
+                print(f"⚠️ {error_msg}")
+                # Don't abort - settings update is not critical
+            
+            print(f"\n✅ execute_engine: DRIVER engine completed successfully for author '{author}'")
             return
          
         except Exception as e:
             error_msg = f"execute_engine: DRIVER engine failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            update_author_status('aborted', error_msg)
+            print(f"\n❌ {error_msg}")
             return
             
     elif engine_value == "csv":
         # ===== CSV ENGINE =====
-        print(f"\nexecute_engine: Starting CSV engine...")
+        print(f"\n{'='*80}")
+        print(f"EXECUTING CSV ENGINE")
+        print(f"{'='*80}")
+        print(f"Author: {author}")
+        print(f"Time Order: {time_order}")
+        print(f"{'='*80}\n")
         
         try:
             # Call csv_engine which handles the CSV pipeline
+            print("execute_engine: Calling csv_engine...")
             csv_engine()
-            update_settings()
+            print("execute_engine: csv_engine completed")
             
-            print(f"execute_engine: CSV engine completed.")
+            # Update settings
+            print("execute_engine: Calling update_settings...")
+            try:
+                update_settings()
+                print("execute_engine: update_settings completed")
+            except Exception as e:
+                error_msg = f"execute_engine: update_settings failed: {str(e)}"
+                print(f"⚠️ {error_msg}")
+                # Don't abort - settings update is not critical
+            
+            print(f"\n✅ execute_engine: CSV engine completed successfully for author '{author}'")
             return
          
         except Exception as e:
             error_msg = f"execute_engine: CSV engine failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            update_author_status('aborted', error_msg)
+            print(f"\n❌ {error_msg}")
             return
             
     else:
         # ===== UNKNOWN ENGINE =====
         error_msg = f"execute_engine: ERROR - Unknown engine: '{engine_value}'. Must be 'driver' or 'csv'."
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
+        print(f"\n❌ {error_msg}")
+        return
     
+def execute_engine():
+    """Execute the appropriate engine based on the engine value.
+    Executes regardless of status - NO STATUS CHECKS OR UPDATES."""
+    
+    def load_json_file(file_path, default=None):
+        """Load JSON file with error handling"""
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                return default if default is not None else {}
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
+            return default if default is not None else {}
+    
+    # ============================================================
+    # STEP 1: LOAD CONFIG - No status anything
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+        elif isinstance(config_data, dict):
+            config = config_data
+        else:
+            error_msg = "execute_engine: ERROR - Invalid config format in AUTHOR_PATH."
+            print(error_msg)
+            return
+        
+        print(f"execute_engine: Config loaded successfully")
+        
+    except Exception as e:
+        error_msg = f"execute_engine: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        return
+
+    # ============================================================
+    # STEP 2: GET ENGINE VALUE
+    # ============================================================
+    engine_value = config.get("engine", "").strip().lower()
+    
+    if not engine_value:
+        error_msg = "execute_engine: ERROR - 'engine' field is missing or empty in config."
+        print(error_msg)
+        return
+    
+    print(f"execute_engine: Engine value: '{engine_value}'")
+    
+    # Get author info for logging
+    author = config.get('author', 'Unknown')
+    time_order = config.get('time_order', 'Unknown')
+
+    # ============================================================
+    # STEP 3: EXECUTE BASED ON ENGINE TYPE
+    # ============================================================
+    
+    if engine_value == "driver":
+        # ===== DRIVER ENGINE =====
+        print(f"\n{'='*80}")
+        print(f"EXECUTING DRIVER ENGINE")
+        print(f"{'='*80}")
+        print(f"Author: {author}")
+        print(f"Time Order: {time_order}")
+        print(f"{'='*80}\n")
+        
+        try:
+            # Initialize WebDriver
+            print("execute_engine: Initializing WebDriver...")
+            driver, wait = initialize_driver(mode="headed")
+            launch_profile()
+            
+            if driver is None or wait is None:
+                error_msg = f"execute_engine: DRIVER engine failed - WebDriver initialization returned None"
+                print(f"❌ {error_msg}")
+                return
+            
+            print("execute_engine: WebDriver initialized successfully")
+            
+            # Execute launch_profile
+            print("execute_engine: Calling launch_profile...")
+         
+        except Exception as e:
+            error_msg = f"execute_engine: DRIVER engine failed: {str(e)}"
+            print(f"\n❌ {error_msg}")
+            return
+            
+    elif engine_value == "csv":
+        # ===== CSV ENGINE =====
+        print(f"\n{'='*80}")
+        print(f"EXECUTING CSV ENGINE")
+        print(f"{'='*80}")
+        print(f"Author: {author}")
+        print(f"Time Order: {time_order}")
+        print(f"{'='*80}\n")
+        
+        try:
+            # Call csv_engine which handles the CSV pipeline
+            print("execute_engine: Calling csv_engine...")
+            csv_engine()
+            print("execute_engine: csv_engine completed")
+            
+            # Update settings
+            print("execute_engine: Calling update_settings...")
+            try:
+                update_settings()
+                print("execute_engine: update_settings completed")
+            except Exception as e:
+                error_msg = f"execute_engine: update_settings failed: {str(e)}"
+                print(f"⚠️ {error_msg}")
+                # Don't abort - settings update is not critical
+            
+            print(f"\n✅ execute_engine: CSV engine completed successfully for author '{author}'")
+            return
+         
+        except Exception as e:
+            error_msg = f"execute_engine: CSV engine failed: {str(e)}"
+            print(f"\n❌ {error_msg}")
+            return
+            
+    else:
+        # ===== UNKNOWN ENGINE =====
+        error_msg = f"execute_engine: ERROR - Unknown engine: '{engine_value}'. Must be 'driver' or 'csv'."
+        print(f"\n❌ {error_msg}")
+        return 
     
 if __name__ == "__main__":
-   execute_engine()
-
+   randomize_groups()
    
