@@ -127,7 +127,7 @@ import string
 JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
 GUI_PATH = r'C:\xampp\htdocs\AI automation\serenum\files\gui'
 NEW_CONFIGS = r"C:\xampp\htdocs\AI automation\serenum\new_configs.json"
-DEFAULT_PATH = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
+DEFAULT_PATH = r"C:\xampp\htdocs\AI automation\serenum"
 AUTHOR_URL = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupaccounts.json"
 URLS_FILE = r"C:\xampp\htdocs\AI automation\serenum\files\fetchedjpgsurl.json"
 INPUT_IMAGE_PATH = r"C:\xampp\htdocs\AI automation\serenum\input_images"
@@ -475,6 +475,8 @@ def analyze_and_distribute_configs():
     
     When moving config to AUTHOR_PATH, extracts the time_order_type key and adds
     a new 'time_order' field with that key value.
+    
+    Before flattening, saves dynamic field names to dynamic_fields.txt in DEFAULT_PATH.
     """
     import os
     import json
@@ -502,6 +504,16 @@ def analyze_and_distribute_configs():
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    
+    def save_text_file(file_path, data):
+        """Save text file with proper formatting"""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(data)
             return True
         except Exception:
             return False
@@ -698,6 +710,14 @@ def analyze_and_distribute_configs():
                 flattened[key] = value
         return flattened
     
+    def extract_dynamic_field_names(config):
+        """Extract field names from dynamic_values wrapper"""
+        field_names = []
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            for key in config['dynamic_values'].keys():
+                field_names.append(key)
+        return field_names
+    
     # ============================================================
     # STEP 1: LOAD CONFIGURATIONS
     # ============================================================
@@ -716,6 +736,37 @@ def analyze_and_distribute_configs():
         configs = [configs]
     
     print(f"✅ Loaded {len(configs)} configurations")
+    
+    # ============================================================
+    # STEP 1.5: EXTRACT AND SAVE DYNAMIC FIELD NAMES
+    # ============================================================
+    print(f"\n{'='*60}")
+    print("📝 Extracting dynamic field names...")
+    print(f"{'='*60}")
+    
+    all_dynamic_fields = set()
+    for config in configs:
+        if isinstance(config, dict):
+            field_names = extract_dynamic_field_names(config)
+            all_dynamic_fields.update(field_names)
+    
+    if all_dynamic_fields:
+        # Sort for consistency
+        sorted_fields = sorted(all_dynamic_fields)
+        dynamic_fields_text = '\n'.join(sorted_fields)
+        
+        # Save to DEFAULT_PATH using global constant
+        dynamic_fields_path = os.path.join(DEFAULT_PATH, "dynamic_fields.txt")
+        
+        if save_text_file(dynamic_fields_path, dynamic_fields_text):
+            print(f"✅ Dynamic field names saved to: {dynamic_fields_path}")
+            print(f"   Fields: {len(sorted_fields)}")
+            for field in sorted_fields:
+                print(f"   - {field}")
+        else:
+            print(f"⚠️ Failed to save dynamic field names to: {dynamic_fields_path}")
+    else:
+        print("ℹ️ No dynamic_values found in configurations")
     
     # Initialize tracking variables
     errors_encountered = []
@@ -1925,465 +1976,6 @@ def fetch_settings():
         except:
             pass
         return False
-        
-def uploadedjpgs():
-    """
-    Archive VALID URLs from next_jpgcard.json → Each config's uploaded_jpgs_url field
-    AND DELETE **ALL** files from:
-      - next jpg folder
-      - uploaded jpgs folder
-      - downloaded folder
-      - jpgfolders folder
-    Fully clear next_jpgcard.json.
-    Only valid URLs are preserved. Safe, robust, full logging.
-    
-    MODIFICATION: 'uploaded_jpgs_url' is saved as an ARRAY with the folder name 
-    sneaked in as a marker object: ["https://url1.com", {"folder": "author"}, "https://url2.com"]
-    
-    Handles EACH config individually - updates status and operation_status per config.
-    """
-    
-    from datetime import datetime
-    import pytz
-    import os
-    import json
-    import re
-
-    # Helper functions for loading/saving
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if not content:
-                        return default if default is not None else {}
-                    return json.loads(content)
-            else:
-                return default if default is not None else {}
-        except json.JSONDecodeError as e:
-            return default if default is not None else {}
-        except Exception as e:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception as e:
-            return False
-    
-    def update_config_status(author_name, status_value, operation_message, configs_data):
-        """
-        Update status and operation_status for a specific config in AUTHOR_PATH
-        Returns: (success, updated_configs)
-        """
-        try:
-            if not isinstance(configs_data, list):
-                configs_data = []
-            
-            # Find the config with matching author
-            found = False
-            for idx, entry in enumerate(configs_data):
-                if entry.get('author') == author_name:
-                    # Check if this config has a dynamic_values wrapper
-                    if 'dynamic_values' in entry and isinstance(entry['dynamic_values'], dict):
-                        entry['dynamic_values']['status'] = status_value
-                        entry['dynamic_values']['operation_status'] = operation_message
-                        # Also keep at root for backward compatibility
-                        entry['status'] = status_value
-                        entry['operation_status'] = operation_message
-                    else:
-                        entry['status'] = status_value
-                        entry['operation_status'] = operation_message
-                    found = True
-                    break
-            
-            if not found:
-                # Create new entry for this author
-                new_entry = {
-                    "author": author_name,
-                    "status": status_value,
-                    "operation_status": operation_message
-                }
-                configs_data.append(new_entry)
-            
-            return True, configs_data
-        except Exception as e:
-            return False, configs_data
-    
-    def get_author_from_config(config):
-        """
-        Extract author from config (handles both flat and nested formats)
-        """
-        if isinstance(config, dict):
-            # Check if it has dynamic_values wrapper
-            if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-                return config['dynamic_values'].get('author', '')
-            # Check root level
-            return config.get('author', '')
-        return ''
-
-    def get_uploaded_jpgs_url_from_config(config):
-        """
-        Extract uploaded_jpgs_url from config (handles both flat and nested formats)
-        """
-        if isinstance(config, dict):
-            # Check if it has dynamic_values wrapper
-            if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-                return config['dynamic_values'].get('uploaded_jpgs_url', [])
-            # Check root level
-            return config.get('uploaded_jpgs_url', [])
-        return []
-
-    def set_uploaded_jpgs_url_in_config(config, value):
-        """
-        Set uploaded_jpgs_url in config (handles both flat and nested formats)
-        """
-        if isinstance(config, dict):
-            # Check if it has dynamic_values wrapper
-            if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-                config['dynamic_values']['uploaded_jpgs_url'] = value
-            else:
-                config['uploaded_jpgs_url'] = value
-        return config
-
-    # ------------------------------------------------------------------ #
-    # 1. Load AUTHOR_PATH and get all configs
-    # ------------------------------------------------------------------ #
-    try:
-        author_path = AUTHOR_PATH
-    except NameError:
-        author_path = r'C:\xampp\htdocs\AI automation\serenum\author_path.json'
-    
-    # Load all configs
-    configs_data = load_json_file(author_path, [])
-    if not isinstance(configs_data, list):
-        configs_data = []
-    
-    print(f"\n{'='*88}")
-    print(f"📁 LOADED {len(configs_data)} CONFIGS FROM AUTHOR_PATH")
-    print(f"{'='*88}")
-    
-    # Track overall results
-    all_results = []
-    errors_encountered = []
-    warnings_encountered = []
-    processed_count = 0
-    failed_count = 0
-    
-    # Process each config individually
-    for config_index, config_entry in enumerate(configs_data):
-        print(f"\n{'='*60}")
-        print(f"📝 PROCESSING CONFIG {config_index + 1}/{len(configs_data)}")
-        print(f"{'='*60}")
-        
-        # Get author name
-        author = get_author_from_config(config_entry)
-        
-        if not author:
-            warning_msg = f"Config {config_index + 1}: No 'author' field found. Skipping this configuration."
-            print(f"⚠️ {warning_msg}")
-            warnings_encountered.append(warning_msg)
-            failed_count += 1
-            continue
-        
-        print(f"👤 Author: {author}")
-        
-        # Get existing uploaded_jpgs_url from config
-        uploaded_jpgs_url = get_uploaded_jpgs_url_from_config(config_entry)
-        
-        # Handle different formats for backward compatibility
-        if isinstance(uploaded_jpgs_url, str):
-            try:
-                uploaded_jpgs_url = json.loads(uploaded_jpgs_url)
-            except:
-                if uploaded_jpgs_url:
-                    url_list = [u.strip() for u in uploaded_jpgs_url.split(',') if u.strip()]
-                    # Check if any item has folder marker
-                    has_folder_marker = any(isinstance(item, dict) and item.get('folder') == author for item in url_list)
-                    if not has_folder_marker and url_list:
-                        uploaded_jpgs_url = [{"folder": author}] + url_list
-                    else:
-                        uploaded_jpgs_url = url_list
-                else:
-                    uploaded_jpgs_url = [{"folder": author}]
-        
-        elif not isinstance(uploaded_jpgs_url, list):
-            uploaded_jpgs_url = [{"folder": author}]
-        
-        # Extract existing URLs (filter out folder marker and metadata objects)
-        existing_urls = [item for item in uploaded_jpgs_url if isinstance(item, str)]
-        
-        print(f"📸 Existing URLs for {author}: {len(existing_urls)}")
-        
-        # ------------------------------------------------------------------ #
-        # 2. Define paths for THIS author
-        # ------------------------------------------------------------------ #
-        next_dir = fr'C:\xampp\htdocs\AI automation\serenum\files\next jpg\{author}'
-        uploaded_dir = fr'C:\xampp\htdocs\AI automation\serenum\files\uploaded jpgs\{author}'
-        downloaded_dir = fr'C:\xampp\htdocs\AI automation\serenum\files\downloaded\{author}'
-        jpgfolders_dir = fr'C:\xampp\htdocs\AI automation\serenum\files\jpgfolders\{author}'
-        next_json_path = os.path.join(next_dir, 'next_jpgcard.json')
-        
-        # Ensure all directories exist
-        dirs_created = True
-        for d in [next_dir, uploaded_dir, downloaded_dir, jpgfolders_dir]:
-            try:
-                os.makedirs(d, exist_ok=True)
-            except Exception as e:
-                error_msg = f"Author '{author}': Failed to create directory {d}: {str(e)}"
-                print(f"❌ {error_msg}")
-                errors_encountered.append(error_msg)
-                dirs_created = False
-                failed_count += 1
-        
-        if not dirs_created:
-            # Update this config's status to aborted
-            status_msg = f"uploadedjpgs: Directory creation failed. Please check file permissions."
-            update_config_status(author, 'aborted', status_msg, configs_data)
-            continue
-        
-        # ------------------------------------------------------------------ #
-        # 3. Load next_jpgcard.json – extract ONLY valid JPG URLs
-        # ------------------------------------------------------------------ #
-        next_urls = []
-        next_json_data = {}
-        load_error = None
-        
-        if os.path.exists(next_json_path):
-            try:
-                with open(next_json_path, 'r', encoding='utf-8') as f:
-                    next_json_data = json.load(f)
-                raw = next_json_data.get("next_jpgcard", [])
-                
-                # Handle case where 'next_jpgcard' might be a single string or a list
-                items = [raw] if isinstance(raw, str) else raw
-                for item in items:
-                    if isinstance(item, str):
-                        url = item.strip()
-                        if url.lower().startswith(('http://', 'https://')) and url.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-                            next_urls.append(url)
-                        else:
-                            print(f"   Skipped invalid URL: {url[:50]}...")
-            except Exception as e:
-                load_error = f"Failed to read next_jpgcard.json: {str(e)}"
-                print(f"⚠️ {load_error}")
-        else:
-            print(f"ℹ️ No next_jpgcard.json found for {author}")
-        
-        print(f"📸 Found {len(next_urls)} valid URL(s) to archive for {author}")
-        
-        # ------------------------------------------------------------------ #
-        # 4. DELETE ALL FILES FROM 4 FOLDERS
-        # ------------------------------------------------------------------ #
-        folders_to_clean = [
-            ("next jpg", next_dir),
-            ("uploaded jpgs", uploaded_dir),
-            ("downloaded", downloaded_dir),
-            ("jpgfolders", jpgfolders_dir)
-        ]
-        
-        delete_stats = {
-            "next jpg": {"deleted": 0, "failed": []},
-            "uploaded jpgs": {"deleted": 0, "failed": []},
-            "downloaded": {"deleted": 0, "failed": []},
-            "jpgfolders": {"deleted": 0, "failed": []}
-        }
-        
-        print(f"\n🗑️ Cleaning folders for {author}:")
-        for label, folder in folders_to_clean:
-            print(f"   {label}: {folder}")
-            try:
-                if os.path.exists(folder):
-                    files = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
-                else:
-                    print(f"     → Folder does not exist")
-                    continue
-            except Exception as e:
-                print(f"     [ERROR] Cannot access folder: {e}")
-                continue
-            
-            if not files:
-                print(f"     → Already empty.")
-                continue
-            
-            for f in files:
-                path = os.path.join(folder, f)
-                try:
-                    os.remove(path)
-                    delete_stats[label]["deleted"] += 1
-                    print(f"     [DELETED] {f}")
-                except Exception as e:
-                    delete_stats[label]["failed"].append((f, str(e)))
-                    print(f"     [FAILED] {f} → {e}")
-        
-        # ------------------------------------------------------------------ #
-        # 5. Combine & deduplicate URLs (preserve order)
-        # ------------------------------------------------------------------ #
-        all_urls = existing_urls + next_urls
-        unique_urls = list(dict.fromkeys(all_urls))
-        newly_added = len(unique_urls) - len(existing_urls)
-        
-        # ------------------------------------------------------------------ #
-        # 6. Build the complete array with folder marker
-        # ------------------------------------------------------------------ #
-        timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
-        
-        # Calculate stats
-        total_failed = sum(len(stats["failed"]) for stats in delete_stats.values())
-        total_deleted = sum(stats["deleted"] for stats in delete_stats.values())
-        
-        # Build the array with folder marker at the beginning
-        uploaded_jpgs_array = [{"folder": author}] + unique_urls
-        
-        # Add a timestamp marker at the end (for metadata purposes)
-        uploaded_jpgs_array.append({
-            "_timestamp": timestamp,
-            "_total_urls": len(unique_urls),
-            "_added_this_time": len(next_urls),
-            "_new_unique": newly_added,
-            "_files_deleted": total_deleted,
-            "_folders_cleared": ["next jpg", "uploaded jpgs", "downloaded", "jpgfolders"]
-        })
-        
-        # Add failed deletes as a marker object
-        if total_failed > 0:
-            failed_deletes = []
-            for label in delete_stats:
-                for file_name, error in delete_stats[label]["failed"]:
-                    failed_deletes.append({
-                        "folder": label,
-                        "file": file_name,
-                        "error": error
-                    })
-            uploaded_jpgs_array.append({
-                "_failed_deletes": failed_deletes
-            })
-        
-        # ------------------------------------------------------------------ #
-        # 7. Update this config's uploaded_jpgs_url field
-        # ------------------------------------------------------------------ #
-        configs_data[config_index] = set_uploaded_jpgs_url_in_config(
-            configs_data[config_index], 
-            uploaded_jpgs_array
-        )
-        
-        # ------------------------------------------------------------------ #
-        # 8. Determine status for this config
-        # ------------------------------------------------------------------ #
-        has_failed_deletes = total_failed > 0
-        has_errors = load_error is not None
-        
-        if has_errors:
-            status_value = 'aborted'
-            operation_msg = f"uploadedjpgs: Operation encountered issues for author '{author}': {load_error}. URLs were processed but may be incomplete."
-        elif has_failed_deletes:
-            status_value = 'aborted'
-            operation_msg = f"uploadedjpgs: {total_failed} file(s) could not be deleted for author '{author}'. Please check file permissions. {newly_added} new URLs added, {len(unique_urls)} total unique URLs."
-        else:
-            status_value = 'pending'
-            if len(next_urls) == 0:
-                operation_msg = f"uploadedjpgs: No new URLs to archive for '{author}'. {len(unique_urls)} total unique URLs already recorded. All image folders cleared. {total_deleted} files deleted."
-            else:
-                operation_msg = f"uploadedjpgs: Uploaded JPGs archived successfully for '{author}'. {newly_added} new URLs added, {len(unique_urls)} total unique URLs. All image folders cleared. {total_deleted} files deleted."
-        
-        # Update the config's status
-        update_config_status(author, status_value, operation_msg, configs_data)
-        
-        processed_count += 1
-        print(f"\n✅ Config for '{author}' processed - Status: {status_value}")
-        print(f"   - Total URLs: {len(unique_urls)}")
-        print(f"   - New URLs added: {newly_added}")
-        print(f"   - Files deleted: {total_deleted}")
-        if has_failed_deletes:
-            print(f"   - ⚠️ Failed deletes: {total_failed}")
-        if has_errors:
-            print(f"   - ⚠️ Load errors: {load_error}")
-        
-        # ------------------------------------------------------------------ #
-        # 9. FULLY CLEAR next_jpgcard.json for this author
-        # ------------------------------------------------------------------ #
-        try:
-            cleared_json = {
-                "next_jpgcard": [],
-                "timestamp": timestamp,
-                "total_checked": next_json_data.get("total_checked", 0),
-                "total_valid": len(next_urls),
-                "status": "FULLY CLEARED",
-                "author": author,
-                "note": "All files deleted from: next jpg, uploaded jpgs, downloaded, jpgfolders. URLs archived to AUTHOR_PATH."
-            }
-            with open(next_json_path, 'w', encoding='utf-8') as f:
-                json.dump(cleared_json, f, indent=4, ensure_ascii=False)
-            print(f"   ✅ Cleared next_jpgcard.json for {author}")
-        except Exception as e:
-            warning_msg = f"Author '{author}': Could not clear next_jpgcard.json: {e}"
-            print(f"   ⚠️ {warning_msg}")
-            warnings_encountered.append(warning_msg)
-    
-    # ------------------------------------------------------------------ #
-    # 10. Save ALL updated configs to AUTHOR_PATH
-    # ------------------------------------------------------------------ #
-    print(f"\n{'='*88}")
-    print("💾 SAVING ALL UPDATED CONFIGS TO AUTHOR_PATH...")
-    print(f"{'='*88}")
-    
-    if save_json_file(author_path, configs_data):
-        print(f"✅ All {len(configs_data)} configs saved to AUTHOR_PATH")
-    else:
-        error_msg = "Failed to save AUTHOR_PATH. Check file permissions."
-        print(f"❌ {error_msg}")
-        errors_encountered.append(error_msg)
-    
-    # ------------------------------------------------------------------ #
-    # 11. FINAL SUMMARY
-    # ------------------------------------------------------------------ #
-    print(f"\n{'='*88}")
-    print(f"✅ UPLOADED JPGS OPERATION COMPLETED!")
-    print(f"{'='*88}")
-    print(f"📊 Summary:")
-    print(f"  - Configs processed: {processed_count}")
-    print(f"  - Configs with errors: {failed_count}")
-    print(f"  - Total configs in AUTHOR_PATH: {len(configs_data)}")
-    
-    # Count successful vs aborted
-    success_count = 0
-    aborted_count = 0
-    for config in configs_data:
-        status = config.get('status', 'unknown')
-        if status == 'pending':
-            success_count += 1
-        elif status == 'aborted':
-            aborted_count += 1
-    
-    print(f"  - Configs with status 'pending': {success_count}")
-    print(f"  - Configs with status 'aborted': {aborted_count}")
-    
-    if warnings_encountered:
-        print(f"\n⚠️ WARNINGS ({len(warnings_encountered)}):")
-        for warning in warnings_encountered[:5]:
-            print(f"    - {warning}")
-        if len(warnings_encountered) > 5:
-            print(f"    ... and {len(warnings_encountered) - 5} more warnings")
-    
-    if errors_encountered:
-        print(f"\n❌ ERRORS ({len(errors_encountered)}):")
-        for error in errors_encountered[:5]:
-            print(f"    - {error}")
-        if len(errors_encountered) > 5:
-            print(f"    ... and {len(errors_encountered) - 5} more errors")
-    
-    print(f"{'='*88}")
-    print(f" SYSTEM READY FOR FRESH MARKJPGS() CYCLE")
-    print(f" @teamxtech – {datetime.now(pytz.timezone('Africa/Lagos')).strftime('%Y-%m-%d %H:%M:%S')} WAT")
-    print(f"{'='*88}")
-    
-    # Return success/failure - true if no critical errors
-    return len(errors_encountered) == 0
 
 def updated_config_construction():
     """
@@ -2400,6 +1992,7 @@ def updated_config_construction():
     - ESCAPES backslashes in JSON strings to ensure valid JSON
     - APPENDS new messages to existing operation_status instead of overwriting
     - NORMALIZES all slashes (/) and backslashes (\) to underscores (_) in operation_status
+    - CHECKS dynamic_fields.txt and removes any fields not listed in it from dynamic_values
     
     UPDATES operation_status in AUTHOR_PATH based on processing results.
     Preserves existing status (does not change it).
@@ -2425,10 +2018,7 @@ def updated_config_construction():
         """Save JSON file with proper formatting and escape handling"""
         try:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            # Use json.dumps with proper escaping
             json_str = json.dumps(data, indent=2, ensure_ascii=False)
-            # Additional escape for backslashes in string values
-            # This ensures any backslashes in the data are properly escaped
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(json_str)
             return True
@@ -2436,14 +2026,47 @@ def updated_config_construction():
             print(f"   ❌ Error saving to {file_path}: {e}")
             return False
     
+    def save_text_file(file_path, data):
+        """Save text file with proper formatting"""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(data)
+            return True
+        except Exception:
+            return False
+    
+    def load_dynamic_fields():
+        """
+        Load dynamic field names from dynamic_fields.txt.
+        Returns a set of allowed field names.
+        If the file doesn't exist, returns None to indicate all fields are allowed.
+        """
+        dynamic_fields_path = os.path.join(DEFAULT_PATH, "dynamic_fields.txt")
+        
+        if not os.path.exists(dynamic_fields_path):
+            print(f"   ⚠️ dynamic_fields.txt not found at: {dynamic_fields_path}")
+            print(f"   ℹ️ No field filtering will be applied")
+            return None
+        
+        try:
+            with open(dynamic_fields_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    print(f"   ⚠️ dynamic_fields.txt is empty - no filtering applied")
+                    return None
+                
+                # Split by newline and strip whitespace
+                fields = set([line.strip() for line in content.split('\n') if line.strip()])
+                print(f"   📋 Loaded {len(fields)} dynamic fields from dynamic_fields.txt")
+                return fields
+        except Exception as e:
+            print(f"   ⚠️ Error reading dynamic_fields.txt: {e}")
+            return None
+    
     def escape_json_string(value):
-        """
-        Properly escape a value for JSON serialization.
-        Handles backslashes, quotes, and other special characters.
-        """
+        """Properly escape a value for JSON serialization."""
         if isinstance(value, str):
-            # Replace single backslashes with double backslashes (JSON escape)
-            # But don't double-escape already escaped backslashes
             if '\\' in value and not '\\\\' in value:
                 value = value.replace('\\', '\\\\')
             return value
@@ -2454,10 +2077,10 @@ def updated_config_construction():
         else:
             return value
     
-    def clean_dynamic_values(dynamic_values):
+    def clean_dynamic_values(dynamic_values, allowed_fields=None):
         """
-        Clean dynamic_values by removing status and operation_status.
-        Also escapes any problematic characters.
+        Clean dynamic_values by removing status, operation_status, and any fields
+        not in allowed_fields (if allowed_fields is provided).
         Returns cleaned dictionary.
         """
         if not isinstance(dynamic_values, dict):
@@ -2470,19 +2093,25 @@ def updated_config_construction():
         cleaned.pop('status', None)
         cleaned.pop('operation_status', None)
         
+        # If allowed_fields is provided, remove any fields not in the list
+        if allowed_fields is not None:
+            # Find fields to remove
+            fields_to_remove = [key for key in cleaned.keys() if key not in allowed_fields]
+            if fields_to_remove:
+                print(f"   🗑️ Removing fields not in dynamic_fields.txt: {fields_to_remove}")
+                for key in fields_to_remove:
+                    cleaned.pop(key, None)
+            else:
+                print(f"   ✅ All fields are in dynamic_fields.txt")
+        
         # Escape any string values to prevent JSON corruption
         cleaned = escape_json_string(cleaned)
         
         return cleaned
     
     def sanitize_for_json(data):
-        """
-        Recursively sanitize data for JSON serialization.
-        Handles backslashes, quotes, and other problematic characters.
-        """
+        """Recursively sanitize data for JSON serialization."""
         if isinstance(data, str):
-            # Replace single backslashes with double backslashes
-            # This ensures paths like C:\xampp become C:\\xampp
             if '\\' in data:
                 data = data.replace('\\', '\\\\')
             return data
@@ -2494,28 +2123,22 @@ def updated_config_construction():
             return data
     
     def normalize_slashes(text):
-        """
-        Normalize all slashes (forward and backslashes) to underscores.
-        This ensures operation_status messages don't contain problematic characters.
-        """
+        """Normalize all slashes (forward and backslashes) to underscores."""
         if not isinstance(text, str):
             return text
         
-        # Replace all backslashes and forward slashes with underscore
-        # First handle backslashes (escape them in the string)
         text = text.replace('\\', '_')
-        # Then handle forward slashes
         text = text.replace('/', '_')
-        # Also handle double backslashes that might have been escaped
         text = text.replace('\\\\', '_')
         
         return text
     
-    def nest_fields_in_dynamic_values(config, existing_status=None, existing_operation_status=None):
+    def nest_fields_in_dynamic_values(config, existing_status=None, existing_operation_status=None, allowed_fields=None):
         """
         Move all fields (except status and operation_status) into dynamic_values nest.
         PRESERVES existing status if provided.
         REMOVES status and operation_status from dynamic_values.
+        REMOVES any fields not in allowed_fields (if provided).
         Sanitizes all string values to ensure valid JSON.
         """
         if not isinstance(config, dict):
@@ -2529,22 +2152,17 @@ def updated_config_construction():
         elif 'status' in config and config['status']:
             nested_config['status'] = config['status']
         else:
-            # Only set default if no status exists
             nested_config['status'] = 'pending'
         
-        # Handle operation_status at ROOT LEVEL ONLY - preserve existing if available
+        # Handle operation_status at ROOT LEVEL ONLY
         if existing_operation_status is not None:
-            # Normalize slashes in existing operation_status
             nested_config['operation_status'] = normalize_slashes(existing_operation_status)
         elif 'operation_status' in config and config['operation_status']:
-            # Normalize slashes in existing operation_status
             nested_config['operation_status'] = normalize_slashes(config['operation_status'])
         else:
-            # Create operation status based on author
             author_name = config.get('author', '')
             if not author_name and 'dynamic_values' in config:
                 author_name = config['dynamic_values'].get('author', 'Unknown')
-            # Normalize slashes in the author name and message
             clean_author = normalize_slashes(author_name)
             nested_config['operation_status'] = normalize_slashes(f"updated_config_construction: Configuration for '{clean_author}' processed")
         
@@ -2559,14 +2177,14 @@ def updated_config_construction():
         
         # If there was already a dynamic_values, merge it (but clean it first)
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-            # Clean the existing dynamic_values first
-            cleaned_existing = clean_dynamic_values(config['dynamic_values'])
+            # Clean the existing dynamic_values (remove status/operation_status and any non-allowed fields)
+            cleaned_existing = clean_dynamic_values(config['dynamic_values'], allowed_fields)
             for key, value in cleaned_existing.items():
                 if key not in dynamic_values:
                     dynamic_values[key] = sanitize_for_json(value)
         
-        # CRITICAL: Remove any status or operation_status that might have been in dynamic_values
-        dynamic_values = clean_dynamic_values(dynamic_values)
+        # CRITICAL: Remove any status/operation_status and non-allowed fields from dynamic_values
+        dynamic_values = clean_dynamic_values(dynamic_values, allowed_fields)
         
         # Only add dynamic_values if there are fields to nest
         if dynamic_values:
@@ -2574,9 +2192,11 @@ def updated_config_construction():
         
         # Ensure author is in dynamic_values if not already
         if 'author' in config and 'author' not in dynamic_values:
-            if 'dynamic_values' not in nested_config:
-                nested_config['dynamic_values'] = {}
-            nested_config['dynamic_values']['author'] = sanitize_for_json(config['author'])
+            # Check if 'author' is allowed
+            if allowed_fields is None or 'author' in allowed_fields:
+                if 'dynamic_values' not in nested_config:
+                    nested_config['dynamic_values'] = {}
+                nested_config['dynamic_values']['author'] = sanitize_for_json(config['author'])
         
         # Final sanitization of the entire config
         nested_config = sanitize_for_json(nested_config)
@@ -2584,17 +2204,13 @@ def updated_config_construction():
         return nested_config
     
     def flatten_config(config):
-        """
-        Flatten a config by moving dynamic_values to root level
-        """
+        """Flatten a config by moving dynamic_values to root level"""
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
             flattened = {}
-            # Keep status and operation_status at root
             if 'status' in config:
                 flattened['status'] = config['status']
             if 'operation_status' in config:
                 flattened['operation_status'] = config['operation_status']
-            # Move all dynamic_values to root
             for key, value in config['dynamic_values'].items():
                 flattened[key] = value
             return flattened
@@ -2602,12 +2218,7 @@ def updated_config_construction():
             return config
     
     def append_operation_status(existing_message, new_message):
-        """
-        Append a new message to an existing operation_status message.
-        Normalizes all slashes to underscores in both messages.
-        Returns the combined message with proper formatting.
-        """
-        # Normalize slashes in both messages
+        """Append a new message to an existing operation_status message."""
         if existing_message:
             existing_message = normalize_slashes(existing_message)
         if new_message:
@@ -2616,17 +2227,13 @@ def updated_config_construction():
         if not existing_message:
             return new_message
         
-        # If the existing message already ends with a period, add space
         if existing_message.endswith('.'):
             return f"{existing_message} {new_message}"
         else:
             return f"{existing_message}. {new_message}"
     
     def get_existing_operation_status():
-        """
-        Get the existing operation_status from AUTHOR_PATH.
-        Returns the existing message or None if not found.
-        """
+        """Get the existing operation_status from AUTHOR_PATH."""
         try:
             author_data = load_json_file(AUTHOR_PATH, {})
             
@@ -2639,37 +2246,23 @@ def updated_config_construction():
             return None
     
     def update_author_operation_status(operation_message, preserve_status=True):
-        """
-        Update operation_status in AUTHOR_PATH while preserving existing status.
-        APPENDS the new message to any existing operation_status.
-        Normalizes all slashes to underscores in the final message.
-        """
+        """Update operation_status in AUTHOR_PATH while preserving existing status."""
         try:
             author_data = load_json_file(AUTHOR_PATH, {})
             
-            # Normalize slashes in the new message
             operation_message = normalize_slashes(operation_message)
             
-            # If AUTHOR_PATH is a list, handle accordingly
             if isinstance(author_data, list):
                 if not author_data:
                     author_data = [{}]
                 
-                # Get existing operation_status
                 existing_operation = author_data[-1].get('operation_status', '')
-                
-                # Normalize slashes in existing message
                 existing_operation = normalize_slashes(existing_operation)
-                
-                # Append new message to existing
                 combined_message = append_operation_status(existing_operation, operation_message)
                 
-                # Update operation_status, preserve status
                 if preserve_status and 'status' in author_data[-1]:
-                    # Keep existing status
                     pass
                 else:
-                    # Only set status if it doesn't exist
                     if 'status' not in author_data[-1]:
                         author_data[-1]['status'] = 'pending'
                 
@@ -2679,19 +2272,11 @@ def updated_config_construction():
                     return True
                 return False
             
-            # If AUTHOR_PATH is a single object
             elif isinstance(author_data, dict):
-                # Get existing operation_status
                 existing_operation = author_data.get('operation_status', '')
-                
-                # Normalize slashes in existing message
                 existing_operation = normalize_slashes(existing_operation)
-                
-                # Append new message to existing
                 combined_message = append_operation_status(existing_operation, operation_message)
                 
-                # Preserve existing status - don't change it
-                # Only set status if it doesn't exist
                 if 'status' not in author_data:
                     author_data['status'] = 'pending'
                 
@@ -2707,6 +2292,25 @@ def updated_config_construction():
             return False
     
     # ============================================================
+    # STEP 0: LOAD DYNAMIC FIELDS FROM TXT
+    # ============================================================
+    print(f"\n{'='*60}")
+    print("📋 LOADING DYNAMIC FIELDS DEFINITION...")
+    print(f"{'='*60}")
+    
+    allowed_dynamic_fields = load_dynamic_fields()
+    
+    if allowed_dynamic_fields is not None:
+        print(f"   📋 Allowed dynamic fields: {len(allowed_dynamic_fields)} fields")
+        # Show first 10 fields for preview
+        preview_fields = list(allowed_dynamic_fields)[:10]
+        print(f"   📋 Fields preview: {', '.join(preview_fields)}")
+        if len(allowed_dynamic_fields) > 10:
+            print(f"   📋 ... and {len(allowed_dynamic_fields) - 10} more fields")
+    else:
+        print(f"   ℹ️ No dynamic_fields.txt found - no field filtering will be applied")
+    
+    # ============================================================
     # STEP 1: LOAD CONFIGURATIONS
     # ============================================================
     print(f"\n{'='*60}")
@@ -2719,8 +2323,9 @@ def updated_config_construction():
     failed_count = 0
     config_status_messages = []
     has_critical_errors = False
+    removed_fields_count = 0
+    removed_fields_list = []
     
-    # Initialize operation_msg with a default value
     operation_msg = "updated_config_construction: Processing completed."
     
     # Load NEW_CONFIGS (should be a list)
@@ -2740,7 +2345,6 @@ def updated_config_construction():
         author_path_data = load_json_file(AUTHOR_PATH, {})
         print(f"📁 Loaded from AUTHOR_PATH")
         
-        # Debug: show what was loaded
         if isinstance(author_path_data, dict):
             author_name = author_path_data.get('author', 'Unknown')
             status = author_path_data.get('status', 'No status')
@@ -2749,11 +2353,9 @@ def updated_config_construction():
             print(f"   👤 Author: {author_name}")
             print(f"   📊 Status: {status}")
             if existing_op != 'None':
-                # Show normalized version for display
                 normalized_preview = normalize_slashes(existing_op[:80])
                 print(f"   📝 Existing operation_status: {normalized_preview}...")
             
-            # Check if status exists in dynamic_values (needs cleaning)
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
                 if 'status' in author_path_data['dynamic_values'] or 'operation_status' in author_path_data['dynamic_values']:
                     print(f"   ⚠️ Found status/operation_status in dynamic_values - will be cleaned")
@@ -2768,7 +2370,6 @@ def updated_config_construction():
                     if existing_op != 'None':
                         normalized_preview = normalize_slashes(existing_op[:80])
                         print(f"      📝 Existing operation_status: {normalized_preview}...")
-                    # Check for status in dynamic_values
                     if 'dynamic_values' in item and isinstance(item['dynamic_values'], dict):
                         if 'status' in item['dynamic_values'] or 'operation_status' in item['dynamic_values']:
                             print(f"      ⚠️ Found status/operation_status in dynamic_values - will be cleaned")
@@ -2787,6 +2388,7 @@ def updated_config_construction():
     print(f"\n{'='*60}")
     print("🔄 CONVERTING CONFIGURATIONS TO NESTED FORMAT...")
     print("🧹 REMOVING status/operation_status FROM dynamic_values...")
+    print(f"🗑️ REMOVING fields NOT in dynamic_fields.txt...")
     print("🔧 ESCAPING backslashes and special characters...")
     print("📝 NORMALIZING slashes to underscores in operation_status...")
     print(f"{'='*60}")
@@ -2800,7 +2402,6 @@ def updated_config_construction():
         print(f"\n📝 Processing single config from AUTHOR_PATH")
         
         try:
-            # Extract author name
             author_name = author_path_data.get('author', '')
             if not author_name and 'dynamic_values' in author_path_data:
                 author_name = author_path_data['dynamic_values'].get('author', '')
@@ -2813,15 +2414,21 @@ def updated_config_construction():
             
             print(f"   👤 Author: {author_name}")
             
-            # PRESERVE existing status - this is critical
             existing_status = author_path_data.get('status', None)
             existing_operation_status = author_path_data.get('operation_status', None)
             
-            # Normalize any slashes in existing operation_status
             if existing_operation_status:
                 existing_operation_status = normalize_slashes(existing_operation_status)
             
-            # Check if status exists in dynamic_values (it shouldn't, but we'll clean it)
+            # Check for fields that will be removed
+            if allowed_dynamic_fields is not None and 'dynamic_values' in author_path_data:
+                current_fields = set(author_path_data['dynamic_values'].keys())
+                fields_to_remove = [f for f in current_fields if f not in allowed_dynamic_fields and f not in ['status', 'operation_status']]
+                if fields_to_remove:
+                    print(f"   🗑️ Fields to remove from dynamic_values: {fields_to_remove}")
+                    removed_fields_count += len(fields_to_remove)
+                    removed_fields_list.extend(fields_to_remove)
+            
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
                 if 'status' in author_path_data['dynamic_values']:
                     print(f"   🧹 Found status in dynamic_values - will be removed")
@@ -2829,25 +2436,22 @@ def updated_config_construction():
                     print(f"   🧹 Found operation_status in dynamic_values - will be removed")
             
             print(f"   📊 Preserving status (root): {existing_status}")
-            if existing_operation_status:
-                normalized_preview = normalize_slashes(existing_operation_status[:80])
-                print(f"   📝 Preserving operation_status (root): {normalized_preview}...")
             
-            # Check if this config is already in proper nested format
+            # Check if already nested
             if 'dynamic_values' in author_path_data and isinstance(author_path_data['dynamic_values'], dict):
-                # Already nested - preserve everything but CLEAN dynamic_values
                 nested_config = nest_fields_in_dynamic_values(
                     author_path_data,
                     existing_status=existing_status,
-                    existing_operation_status=existing_operation_status
+                    existing_operation_status=existing_operation_status,
+                    allowed_fields=allowed_dynamic_fields
                 )
-                print(f"   ✅ Already in nested format - cleaned and preserved")
+                print(f"   ✅ Already in nested format - cleaned and filtered")
             else:
-                # Convert to nested format - PRESERVE status
                 nested_config = nest_fields_in_dynamic_values(
                     author_path_data,
                     existing_status=existing_status,
-                    existing_operation_status=existing_operation_status
+                    existing_operation_status=existing_operation_status,
+                    allowed_fields=allowed_dynamic_fields
                 )
                 print(f"   ✅ Converted to nested format")
             
@@ -2858,7 +2462,7 @@ def updated_config_construction():
             
             # Ensure no status/operation_status in dynamic_values
             if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
-                nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
+                nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'], allowed_dynamic_fields)
                 print(f"   🧹 Confirmed: no status/operation_status in dynamic_values")
             
             # Normalize slashes in operation_status
@@ -2885,7 +2489,6 @@ def updated_config_construction():
             failed_count += 1
             has_critical_errors = True
             
-            # Create error config
             try:
                 error_operation_msg = normalize_slashes(f"updated_config_construction: ERROR - {error_msg}")
                 error_config = {
@@ -2911,7 +2514,6 @@ def updated_config_construction():
             print(f"\n📝 Processing config {idx + 1}/{len(author_path_data)} from AUTHOR_PATH")
             
             try:
-                # Extract author name
                 author_name = config.get('author', '')
                 if not author_name and 'dynamic_values' in config:
                     author_name = config['dynamic_values'].get('author', '')
@@ -2925,15 +2527,21 @@ def updated_config_construction():
                 
                 print(f"   👤 Author: {author_name}")
                 
-                # PRESERVE existing status
                 existing_status = config.get('status', None)
                 existing_operation_status = config.get('operation_status', None)
                 
-                # Normalize any slashes in existing operation_status
                 if existing_operation_status:
                     existing_operation_status = normalize_slashes(existing_operation_status)
                 
-                # Check for status in dynamic_values
+                # Check for fields that will be removed
+                if allowed_dynamic_fields is not None and 'dynamic_values' in config:
+                    current_fields = set(config['dynamic_values'].keys())
+                    fields_to_remove = [f for f in current_fields if f not in allowed_dynamic_fields and f not in ['status', 'operation_status']]
+                    if fields_to_remove:
+                        print(f"   🗑️ Fields to remove from dynamic_values: {fields_to_remove}")
+                        removed_fields_count += len(fields_to_remove)
+                        removed_fields_list.extend(fields_to_remove)
+                
                 if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
                     if 'status' in config['dynamic_values']:
                         print(f"   🧹 Found status in dynamic_values - will be removed")
@@ -2942,37 +2550,34 @@ def updated_config_construction():
                 
                 print(f"   📊 Preserving status (root): {existing_status}")
                 
-                # Check if already nested
                 if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
                     nested_config = nest_fields_in_dynamic_values(
                         config,
                         existing_status=existing_status,
-                        existing_operation_status=existing_operation_status
+                        existing_operation_status=existing_operation_status,
+                        allowed_fields=allowed_dynamic_fields
                     )
-                    print(f"   ✅ Already in nested format - cleaned and preserved")
+                    print(f"   ✅ Already in nested format - cleaned and filtered")
                 else:
                     nested_config = nest_fields_in_dynamic_values(
                         config,
                         existing_status=existing_status,
-                        existing_operation_status=existing_operation_status
+                        existing_operation_status=existing_operation_status,
+                        allowed_fields=allowed_dynamic_fields
                     )
                     print(f"   ✅ Converted to nested format")
                 
-                # Ensure status is preserved at root level
                 if existing_status:
                     nested_config['status'] = existing_status
                     print(f"   ✅ Status preserved at root: {existing_status}")
                 
-                # Ensure no status/operation_status in dynamic_values
                 if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
-                    nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
+                    nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'], allowed_dynamic_fields)
                     print(f"   🧹 Confirmed: no status/operation_status in dynamic_values")
                 
-                # Normalize slashes in operation_status
                 if 'operation_status' in nested_config:
                     nested_config['operation_status'] = normalize_slashes(nested_config['operation_status'])
                 
-                # Final sanitization
                 nested_config = sanitize_for_json(nested_config)
                 
                 converted_configs.append(nested_config)
@@ -2993,7 +2598,6 @@ def updated_config_construction():
                 has_critical_errors = True
     
     else:
-        # AUTHOR_PATH is empty or invalid
         print("ℹ️ No valid config found in AUTHOR_PATH")
     
     # Process configs from NEW_CONFIGS (list) that aren't already processed
@@ -3005,31 +2609,35 @@ def updated_config_construction():
         if author_name and author_name not in processed_authors:
             print(f"\n📝 Adding config from NEW_CONFIGS: {author_name}")
             
-            # Clean any status/operation_status from dynamic_values
+            # Check for fields that will be removed
+            if allowed_dynamic_fields is not None and 'dynamic_values' in new_config:
+                current_fields = set(new_config['dynamic_values'].keys())
+                fields_to_remove = [f for f in current_fields if f not in allowed_dynamic_fields and f not in ['status', 'operation_status']]
+                if fields_to_remove:
+                    print(f"   🗑️ Fields to remove from dynamic_values: {fields_to_remove}")
+                    removed_fields_count += len(fields_to_remove)
+                    removed_fields_list.extend(fields_to_remove)
+            
             if 'dynamic_values' in new_config and isinstance(new_config['dynamic_values'], dict):
                 if 'status' in new_config['dynamic_values'] or 'operation_status' in new_config['dynamic_values']:
                     print(f"   🧹 Cleaning status/operation_status from dynamic_values")
-                    new_config['dynamic_values'] = clean_dynamic_values(new_config['dynamic_values'])
+                    new_config['dynamic_values'] = clean_dynamic_values(new_config['dynamic_values'], allowed_dynamic_fields)
             
-            # For NEW_CONFIGS, create operation status (normalize slashes)
             operation_msg_new = normalize_slashes(f"updated_config_construction: Adding configuration for '{author_name}' from NEW_CONFIGS.")
             
-            # Convert to nested format - NEW_CONFIGS might not have status
             nested_config = nest_fields_in_dynamic_values(
                 new_config,
-                existing_status='pending',  # New configs start as pending
-                existing_operation_status=operation_msg_new
+                existing_status='pending',
+                existing_operation_status=operation_msg_new,
+                allowed_fields=allowed_dynamic_fields
             )
             
-            # Ensure no status/operation_status in dynamic_values
             if 'dynamic_values' in nested_config and isinstance(nested_config['dynamic_values'], dict):
-                nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'])
+                nested_config['dynamic_values'] = clean_dynamic_values(nested_config['dynamic_values'], allowed_dynamic_fields)
             
-            # Normalize slashes in operation_status
             if 'operation_status' in nested_config:
                 nested_config['operation_status'] = normalize_slashes(nested_config['operation_status'])
             
-            # Final sanitization
             nested_config = sanitize_for_json(nested_config)
             
             converted_configs.append(nested_config)
@@ -3050,18 +2658,16 @@ def updated_config_construction():
     # STEP 3: ENSURE CONSISTENCY AND CLEAN ALL dynamic_values
     # ============================================================
     print(f"\n{'='*60}")
-    print("🧹 FINAL CLEANUP - REMOVING status/operation_status FROM ALL dynamic_values...")
+    print("🧹 FINAL CLEANUP - REMOVING status/operation_status AND FILTERING FIELDS...")
     print(f"{'='*60}")
     
     for i, config in enumerate(converted_configs):
-        # Only set status if it doesn't exist - PRESERVE existing
         if 'status' not in config or not config['status']:
             config['status'] = 'pending'
             print(f"   ✅ Added default status 'pending' to config {i + 1}")
         else:
             print(f"   ✅ Preserved existing status '{config['status']}' for config {i + 1}")
         
-        # Ensure operation_status exists
         if 'operation_status' not in config or not config['operation_status']:
             author_name = config.get('author', '')
             if not author_name and 'dynamic_values' in config:
@@ -3069,16 +2675,14 @@ def updated_config_construction():
             config['operation_status'] = normalize_slashes(f"updated_config_construction: Configuration for '{author_name}' processed")
             print(f"   ✅ Added operation_status for config {i + 1}")
         else:
-            # Normalize slashes in existing operation_status
             config['operation_status'] = normalize_slashes(config['operation_status'])
         
-        # CRITICAL: Clean dynamic_values - remove status and operation_status
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-            # Check if they exist before cleaning
             had_status = 'status' in config['dynamic_values']
             had_operation = 'operation_status' in config['dynamic_values']
             
-            config['dynamic_values'] = clean_dynamic_values(config['dynamic_values'])
+            # This will also filter fields
+            config['dynamic_values'] = clean_dynamic_values(config['dynamic_values'], allowed_dynamic_fields)
             
             if had_status:
                 print(f"   🧹 Removed 'status' from dynamic_values in config {i + 1}")
@@ -3092,6 +2696,12 @@ def updated_config_construction():
     print(f"   ✅ All {len(converted_configs)} configs have status and operation_status at ROOT LEVEL only")
     print(f"   ✅ All slashes in operation_status normalized to underscores")
     
+    if removed_fields_count > 0:
+        print(f"   🗑️ Removed {removed_fields_count} fields not in dynamic_fields.txt")
+        if removed_fields_list:
+            unique_removed = list(set(removed_fields_list))
+            print(f"   🗑️ Unique fields removed: {unique_removed}")
+    
     # ============================================================
     # STEP 4: SAVE CONVERTED CONFIGS
     # ============================================================
@@ -3102,7 +2712,6 @@ def updated_config_construction():
     save_success = False
     try:
         if converted_configs:
-            # Ensure all configs are sanitized before saving
             sanitized_configs = [sanitize_for_json(config) for config in converted_configs]
             
             if save_json_file(UPDATED_CONFIGS, sanitized_configs):
@@ -3140,38 +2749,46 @@ def updated_config_construction():
         if os.path.exists(UPDATED_CONFIGS):
             with open(UPDATED_CONFIGS, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # Try to parse JSON to validate
                 json.loads(content)
                 print(f"✅ JSON validation passed - file is valid JSON")
                 
-                # Check for unescaped backslashes in the file
                 if '\\\\' in content:
-                    print(f"   ✅ Backslashes are properly escaped (found '\\\\\\\\')")
+                    print(f"   ✅ Backslashes are properly escaped")
                 elif '\\' in content and not '\\\\' in content:
                     print(f"   ⚠️ Found unescaped backslashes - may cause issues")
                     warnings_encountered.append("Found unescaped backslashes in JSON output")
                 else:
                     print(f"   ✅ No backslash issues found")
                 
-                # Check that slashes are normalized in operation_status
-                if 'operation_status' in content:
-                    # Look for any remaining slashes in operation_status
-                    import re
-                    # Find operation_status values in the JSON
-                    op_status_matches = re.findall(r'"operation_status":\s*"([^"]*)"', content)
-                    for match in op_status_matches:
-                        if '/' in match or '\\' in match:
-                            print(f"   ⚠️ Found slashes in operation_status: {match[:50]}...")
-                            warnings_encountered.append("Slashes found in operation_status - should be normalized")
-                            break
-                    else:
-                        print(f"   ✅ No slashes found in operation_status values")
+                import re
+                op_status_matches = re.findall(r'"operation_status":\s*"([^"]*)"', content)
+                for match in op_status_matches:
+                    if '/' in match or '\\' in match:
+                        print(f"   ⚠️ Found slashes in operation_status: {match[:50]}...")
+                        warnings_encountered.append("Slashes found in operation_status - should be normalized")
+                        break
+                else:
+                    print(f"   ✅ No slashes found in operation_status values")
+                
+                # Check if any fields in dynamic_values are not in the allowed list
+                if allowed_dynamic_fields is not None:
+                    # Parse JSON and check dynamic_values
+                    parsed_data = json.loads(content)
+                    for config in parsed_data:
+                        if 'dynamic_values' in config:
+                            dynamic_keys = set(config['dynamic_values'].keys())
+                            invalid_keys = [k for k in dynamic_keys if k not in allowed_dynamic_fields and k not in ['status', 'operation_status']]
+                            if invalid_keys:
+                                print(f"   ⚠️ Found fields in dynamic_values not in dynamic_fields.txt: {invalid_keys}")
+                                warnings_encountered.append(f"Fields not in dynamic_fields.txt: {invalid_keys}")
+                            else:
+                                print(f"   ✅ All fields in dynamic_values are allowed")
     except Exception as e:
         print(f"   ⚠️ Could not validate JSON: {e}")
         warnings_encountered.append(f"JSON validation warning: {e}")
     
     # ============================================================
-    # STEP 6: UPDATE OPERATION_STATUS IN AUTHOR_PATH (PRESERVE STATUS, APPEND, NORMALIZE)
+    # STEP 6: UPDATE OPERATION_STATUS IN AUTHOR_PATH
     # ============================================================
     all_errors = errors_encountered
     detailed_issues = []
@@ -3186,26 +2803,31 @@ def updated_config_construction():
         if len(warnings_encountered) > 3:
             detailed_issues.append(f"... and {len(warnings_encountered) - 3} more warnings")
     
-    # Get existing operation_status for display (normalized)
     existing_operation = get_existing_operation_status()
     if existing_operation:
         normalized_existing = normalize_slashes(existing_operation[:100])
         print(f"\n📝 Existing operation_status found: {normalized_existing}...")
     
-    # Build operation message - DO NOT change status
-    # Normalize all slashes in the message
+    # Build operation message
     if all_errors or has_critical_errors:
         operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion encountered issues. Details: {'. '.join(detailed_issues)}.")
         print(f"\n⚠️ Updating operation_status (preserving existing status, appending, normalizing slashes)")
     else:
-        if warnings_encountered:
-            warnings_text = "; ".join(warnings_encountered)
-            operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. Warnings: {warnings_text}")
+        if removed_fields_count > 0:
+            removed_summary = f"Removed {removed_fields_count} fields not in dynamic_fields.txt"
+            if warnings_encountered:
+                warnings_text = "; ".join(warnings_encountered)
+                operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. {removed_summary}. Warnings: {warnings_text}")
+            else:
+                operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations. {removed_summary}. All status fields are at root level only.")
         else:
-            operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations. All status fields are at root level only.")
+            if warnings_encountered:
+                warnings_text = "; ".join(warnings_encountered)
+                operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully with {len(warnings_encountered)} warnings. Warnings: {warnings_text}")
+            else:
+                operation_msg = normalize_slashes(f"updated_config_construction: Configuration conversion completed successfully. Converted {len(converted_configs)} configurations. All status fields are at root level only.")
         print(f"\n✅ Updating operation_status (preserving existing status, appending, normalizing slashes)")
     
-    # Now update the operation status with the defined message (appending to existing)
     update_author_operation_status(operation_msg, preserve_status=True)
     
     # ============================================================
@@ -3238,6 +2860,16 @@ def updated_config_construction():
     print(f"  - Total configs saved: {len(converted_configs)}")
     print(f"  - Statuses preserved at ROOT LEVEL (NOT changed)")
     print(f"  - status/operation_status REMOVED from dynamic_values")
+    if removed_fields_count > 0:
+        print(f"  - 🗑️ Removed {removed_fields_count} fields NOT in dynamic_fields.txt")
+        if removed_fields_list:
+            unique_removed = list(set(removed_fields_list))
+            preview_removed = unique_removed[:10]
+            print(f"  - 🗑️ Removed fields: {', '.join(preview_removed)}")
+            if len(unique_removed) > 10:
+                print(f"  - 🗑️ ... and {len(unique_removed) - 10} more fields removed")
+    else:
+        print(f"  - ✅ All fields are in dynamic_fields.txt (no fields removed)")
     print(f"  - Configs with operation status: {len(config_status_messages)}")
     print(f"  - All backslashes properly escaped for JSON")
     print(f"  - New messages APPENDED to existing operation_status (not overwritten)")
@@ -5067,6 +4699,9 @@ def update_calendar():
 def update_timeschedule():
     """Move next → last (OVERWRITE), generate NEW next_schedule starting AFTER schedule_date.
     
+    If schedule_end_date is provided, only generate schedules up to that date.
+    schedule_time_count tracks total time slots across the entire period.
+    
     UPDATES operation_status and status in AUTHOR_PATH
     ONLY executes if status is 'pending'
     Sets status to 'aborted' if critical errors occur
@@ -5191,6 +4826,7 @@ def update_timeschedule():
         
         cardamount = int(config.get('cardamount', 1))
         schedule_date_str = config.get('schedule_date', '').strip()
+        schedule_end_date_str = config.get('schedule_end_date', '').strip()
         
         time_order_type = config.get('time_order_type', {})
         if not time_order_type or not isinstance(time_order_type, dict):
@@ -5214,6 +4850,7 @@ def update_timeschedule():
         
         print(f"update_timeschedule: Author: {author}, Time Order: {time_order}, Cardamount: {cardamount}")
         print(f"update_timeschedule: Schedule date: '{schedule_date_str}'")
+        print(f"update_timeschedule: Schedule end date: '{schedule_end_date_str}'")
         
     except Exception as e:
         error_msg = f"update_timeschedule: ERROR - Failed to process config: {e}"
@@ -5222,27 +4859,71 @@ def update_timeschedule():
         return
 
     # ============================================================
-    # STEP 3: PARSE SCHEDULE DATE
+    # STEP 3: VALIDATE SCHEDULE DATE (REQUIRED)
     # ============================================================
+    if not schedule_date_str:
+        error_msg = "update_timeschedule: ERROR - 'schedule_date' is missing or empty. This is required."
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # Parse schedule_date
     base_datetime = None
-    if schedule_date_str:
+    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+        try:
+            dt = datetime.strptime(schedule_date_str.split('.')[0], fmt)
+            if ' ' not in schedule_date_str:
+                dt = dt.replace(hour=0, minute=0)
+            base_datetime = dt
+            print(f"update_timeschedule: Using schedule_date: {base_datetime.strftime('%d/%m/%Y %H:%M')}")
+            break
+        except ValueError:
+            continue
+
+    if base_datetime is None:
+        error_msg = f"update_timeschedule: ERROR - Invalid schedule_date format: '{schedule_date_str}'. Expected DD/MM/YYYY HH:MM"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # Check if schedule_date is in the past
+    now = datetime.now()
+    if base_datetime < now:
+        error_msg = f"update_timeschedule: ERROR - schedule_date '{base_datetime.strftime('%d/%m/%Y %H:%M')}' is in the past (current: {now.strftime('%d/%m/%Y %H:%M')})"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 4: PARSE SCHEDULE END DATE (OPTIONAL)
+    # ============================================================
+    end_datetime = None
+    has_end_date = False
+    
+    if schedule_end_date_str:
         for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
             try:
-                dt = datetime.strptime(schedule_date_str.split('.')[0], fmt)
-                if ' ' not in schedule_date_str:
-                    dt = dt.replace(hour=0, minute=0)
-                base_datetime = dt
-                print(f"update_timeschedule: Using schedule_date: {base_datetime.strftime('%d/%m/%Y %H:%M')}")
+                dt = datetime.strptime(schedule_end_date_str.split('.')[0], fmt)
+                if ' ' not in schedule_end_date_str:
+                    dt = dt.replace(hour=23, minute=59)
+                end_datetime = dt
+                has_end_date = True
+                print(f"update_timeschedule: Using schedule_end_date: {end_datetime.strftime('%d/%m/%Y %H:%M')}")
                 break
             except ValueError:
                 continue
-
-    if base_datetime is None:
-        base_datetime = datetime.now()
-        print(f"update_timeschedule: Invalid schedule_date. Falling back to now: {base_datetime.strftime('%d/%m/%Y %H:%M')}")
+        
+        if end_datetime is None:
+            print(f"update_timeschedule: WARNING - Invalid schedule_end_date format: '{schedule_end_date_str}'. Ignoring and continuing without end date.")
+            has_end_date = False
+            end_datetime = None
+        elif end_datetime <= base_datetime:
+            print(f"update_timeschedule: WARNING - schedule_end_date '{end_datetime.strftime('%d/%m/%Y %H:%M')}' is before or equal to schedule_date. Ignoring and continuing without end date.")
+            has_end_date = False
+            end_datetime = None
 
     # ============================================================
-    # STEP 4: SORT TIME SLOTS AND BUILD TIME MAP
+    # STEP 5: SORT TIME SLOTS AND BUILD TIME MAP
     # ============================================================
     timeorders = sorted(timeorders, key=lambda x: x["24hours"])
     valid_times_24 = [t["24hours"] for t in timeorders]
@@ -5251,7 +4932,7 @@ def update_timeschedule():
     print(f"update_timeschedule: Valid time slots for '{time_order}': {', '.join(valid_times_24)}")
 
     # ============================================================
-    # STEP 5: SETUP FILE PATHS (NO post_filter)
+    # STEP 6: SETUP FILE PATHS (NO post_filter)
     # ============================================================
     base_dir = os.path.join(FILES_ROOT, "next jpg", author, "jsons")
     
@@ -5259,7 +4940,7 @@ def update_timeschedule():
     schedules_path = os.path.join(base_dir, f"{time_order}_schedules.json")
 
     # ============================================================
-    # STEP 6: LOAD CALENDAR DATA
+    # STEP 7: LOAD CALENDAR DATA
     # ============================================================
     if not os.path.exists(calendar_path):
         error_msg = f"update_timeschedule: ERROR - Calendar file missing: {calendar_path}. Run update_calendar() first."
@@ -5278,7 +4959,7 @@ def update_timeschedule():
         return
 
     # ============================================================
-    # STEP 7: LOAD EXISTING SCHEDULES
+    # STEP 8: LOAD EXISTING SCHEDULES
     # ============================================================
     old_last_schedule = []
     old_next_schedule = []
@@ -5293,7 +4974,7 @@ def update_timeschedule():
             print(f"update_timeschedule: Warning - Error reading schedules.json: {e}")
 
     # ============================================================
-    # STEP 8: OVERWRITE LAST_SCHEDULE WITH OLD NEXT_SCHEDULE
+    # STEP 9: OVERWRITE LAST_SCHEDULE WITH OLD NEXT_SCHEDULE
     # ============================================================
     new_last_schedule = []
     for item in old_next_schedule:
@@ -5320,14 +5001,15 @@ def update_timeschedule():
     print(f"update_timeschedule: last_schedule updated with {len(new_last_schedule)} slot(s)")
 
     # ============================================================
-    # STEP 9: BUILD USED IDS FROM NEW LAST_SCHEDULE
+    # STEP 10: BUILD USED IDS FROM NEW LAST_SCHEDULE
     # ============================================================
     used_ids = {slot.get("id") for slot in new_last_schedule if isinstance(slot, dict)}
 
     # ============================================================
-    # STEP 10: GENERATE NEXT_SCHEDULE FROM CALENDAR DATA
+    # STEP 11: GENERATE NEXT_SCHEDULE FROM CALENDAR DATA
     # ============================================================
     next_schedule_list = []
+    total_time_slots = 0
     
     all_slots = []
     calendars = calendar_data.get('calendars', [])
@@ -5355,6 +5037,11 @@ def update_timeschedule():
                             
                             # Must be AFTER base_datetime
                             if slot_datetime > base_datetime:
+                                # Check if within end date range (if provided)
+                                if has_end_date and end_datetime:
+                                    if slot_datetime > end_datetime:
+                                        continue
+                                
                                 # Today: apply 50-minute buffer
                                 if slot_datetime.date() == base_datetime.date():
                                     minutes_diff = (slot_datetime - base_datetime).total_seconds() / 60
@@ -5369,6 +5056,7 @@ def update_timeschedule():
                                         "time_24hour": slot_time_24,
                                         "datetime": slot_datetime
                                     })
+                                    total_time_slots += 1
                         except Exception:
                             continue
     
@@ -5393,7 +5081,7 @@ def update_timeschedule():
         return
 
     # ============================================================
-    # STEP 11: WRITE SCHEDULES.JSON
+    # STEP 12: WRITE SCHEDULES.JSON
     # ============================================================
     output_data = {
         "last_schedule": new_last_schedule,
@@ -5412,7 +5100,7 @@ def update_timeschedule():
         return
 
     # ============================================================
-    # STEP 12: UPDATE SCHEDULE_DATE IN CONFIG
+    # STEP 13: UPDATE SCHEDULE_DATE IN CONFIG (24-hour format)
     # ============================================================
     new_schedule_date = None
     if next_schedule_list:
@@ -5423,11 +5111,62 @@ def update_timeschedule():
                 "%d/%m/%Y %H:%M"
             )
             
-            # Update the config
+            # Update the config - write in 24-hour format
             if config_is_list:
                 config_data[-1]['schedule_date'] = new_schedule_date.strftime("%d/%m/%Y %H:%M")
             else:
                 config_data['schedule_date'] = new_schedule_date.strftime("%d/%m/%Y %H:%M")
+            
+            # ============================================================
+            # STEP 14: HANDLE schedule_time_count (based on end date)
+            # ============================================================
+            if has_end_date and end_datetime:
+                # Calculate total time slots across the entire period
+                total_slots_count = 0
+                
+                # Re-scan all slots from base_datetime to end_datetime
+                for month_data in calendars:
+                    days_list = month_data.get('days', [])
+                    
+                    for week_data in days_list:
+                        for day_data in week_data.get('days', []):
+                            day_info = day_data.get('day')
+                            if day_info is None:
+                                continue
+                            
+                            date_str = day_info.get('date')
+                            time_ahead = day_info.get('time_ahead', [])
+                            
+                            for slot in time_ahead:
+                                slot_time_24 = slot.get('24hours')
+                                
+                                if slot_time_24:
+                                    try:
+                                        slot_datetime = datetime.strptime(f"{date_str} {slot_time_24}", "%d/%m/%Y %H:%M")
+                                        
+                                        # Count all slots within the range
+                                        if base_datetime <= slot_datetime <= end_datetime:
+                                            total_slots_count += 1
+                                    except Exception:
+                                        continue
+                
+                # Add schedule_time_count field
+                if config_is_list:
+                    config_data[-1]['schedule_time_count'] = total_slots_count
+                else:
+                    config_data['schedule_time_count'] = total_slots_count
+                
+                print(f"update_timeschedule: schedule_time_count set to: {total_slots_count}")
+            else:
+                # Remove schedule_time_count if it exists (no end date)
+                if config_is_list:
+                    if 'schedule_time_count' in config_data[-1]:
+                        del config_data[-1]['schedule_time_count']
+                        print("update_timeschedule: Removed schedule_time_count (no end date)")
+                else:
+                    if 'schedule_time_count' in config_data:
+                        del config_data['schedule_time_count']
+                        print("update_timeschedule: Removed schedule_time_count (no end date)")
             
             if save_json_file(AUTHOR_PATH, config_data):
                 print(f"update_timeschedule: schedule_date updated to: {new_schedule_date.strftime('%d/%m/%Y %H:%M')}")
@@ -5444,7 +5183,7 @@ def update_timeschedule():
             return
 
     # ============================================================
-    # STEP 13: BUILD OPERATION STATUS AND UPDATE
+    # STEP 15: BUILD OPERATION STATUS AND UPDATE
     # ============================================================
     operation_parts = [
         f"update_timeschedule: Schedule generated for author '{author}'",
@@ -5457,6 +5196,15 @@ def update_timeschedule():
         f"Last scheduled slot: {new_schedule_date.strftime('%d/%m/%Y %H:%M') if new_schedule_date else 'N/A'}"
     ]
     
+    if has_end_date and end_datetime:
+        operation_parts.append(f"End date: {end_datetime.strftime('%d/%m/%Y %H:%M')}")
+        # Get schedule_time_count safely based on config type
+        if config_is_list:
+            time_count = config_data[-1].get('schedule_time_count', 0) if isinstance(config_data[-1], dict) else 0
+        else:
+            time_count = config_data.get('schedule_time_count', 0) if isinstance(config_data, dict) else 0
+        operation_parts.append(f"Total time slots in period: {time_count}")
+    
     operation_parts.append("SUCCESS: Schedule generated and archived successfully")
     operation_msg = '; '.join(operation_parts)
     
@@ -5466,7 +5214,7 @@ def update_timeschedule():
         print(f"\n⚠️ Failed to update status in AUTHOR_PATH")
 
     # ============================================================
-    # STEP 14: DISPLAY SUMMARY
+    # STEP 16: DISPLAY SUMMARY
     # ============================================================
     print(f"\n{'='*80}")
     print(f"UPDATE TIMESCHEDULE - SUMMARY")
@@ -5480,6 +5228,16 @@ def update_timeschedule():
     print(f"Start Date:          {base_datetime.strftime('%d/%m/%Y %H:%M')}")
     if new_schedule_date:
         print(f"New Schedule Date:   {new_schedule_date.strftime('%d/%m/%Y %H:%M')}")
+    if has_end_date and end_datetime:
+        print(f"End Date:            {end_datetime.strftime('%d/%m/%Y %H:%M')}")
+        # Get schedule_time_count safely for display
+        if config_is_list:
+            time_count = config_data[-1].get('schedule_time_count', 0) if isinstance(config_data[-1], dict) else 0
+        else:
+            time_count = config_data.get('schedule_time_count', 0) if isinstance(config_data, dict) else 0
+        print(f"Total Time Slots:    {time_count}")
+    else:
+        print(f"End Date:            Not set (unlimited)")
     print(f"Schedules Saved:     {schedules_path}")
     print(f"Status:              pending ✅")
     print(f"{'='*80}\n")
@@ -5492,7 +5250,7 @@ def update_timeschedule():
         print()
 
     # ============================================================
-    # STEP 15: OPTIONAL - RANDOMIZE MINUTES
+    # STEP 17: OPTIONAL - RANDOMIZE MINUTES
     # ============================================================
     try:
         print("update_timeschedule: Calling randomize_next_schedule_minutes()...")
@@ -5505,7 +5263,7 @@ def update_timeschedule():
         update_author_status('aborted', error_msg)
 
     # ============================================================
-    # STEP 16: OPTIONAL - RANDOMIZE HOURS
+    # STEP 18: OPTIONAL - RANDOMIZE HOURS
     # ============================================================
     try:
         print("update_timeschedule: Calling randomize_next_schedule_hours()...")
@@ -5517,7 +5275,7 @@ def update_timeschedule():
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
-         
+           
 def randomize_next_schedule_minutes():
     """
     Randomize minutes (01–30) for EACH slot in next_schedule using its OWN hour.
@@ -7080,6 +6838,605 @@ def validate_image_urls():
     
     print(f"\n✅ jpgsurl field updated in AUTHOR_PATH (invalid URLs removed)")
     print(f"{'='*80}\n")
+
+def download_scheduled_images():
+    """
+    Downloads images based on the schedule time count.
+    
+    - Reads jpgsurl field from AUTHOR_PATH
+    - Uses schedule_time_count to determine how many images to download
+    - Checks downloaded_images_url to skip already downloaded images
+    - Downloads images to {FILES_ROOT}/downloaded/{author}/
+    - Records each downloaded URL immediately to AUTHOR_PATH under 'downloaded_images_url'
+    - Retries failed downloads up to 3 times
+    - Verifies each image after download (checks for corruption)
+    - Updates operation_status and status in AUTHOR_PATH
+    
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' only on fatal/critical errors
+    """
+    import os
+    import json
+    import requests
+    import shutil
+    import time
+    from urllib.parse import urlparse
+    from PIL import Image
+    
+    def load_json_file(file_path, default=None):
+        """Load JSON file with error handling"""
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if not content:
+                        return default if default is not None else {}
+                    return json.loads(content)
+            else:
+                return default if default is not None else {}
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
+            return default if default is not None else {}
+    
+    def save_json_file(file_path, data):
+        """Save JSON file with proper formatting"""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    
+    def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
+                if isinstance(author_data[-1], dict):
+                    author_data[-1]['status'] = status_value
+                    author_data[-1]['operation_status'] = f"download_scheduled_images: {operation_message}"
+                    
+                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
+                        author_data[-1]['dynamic_values']['status'] = status_value
+                        author_data[-1]['dynamic_values']['operation_status'] = f"download_scheduled_images: {operation_message}"
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = f"download_scheduled_images: {operation_message}"
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = f"download_scheduled_images: {operation_message}"
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
+            return False
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
+            return False
+    
+    def parse_jpgs_url_field(jpgs_field):
+        """Parse the jpgsurl field which can be a dict or string. Returns list of URLs/paths."""
+        if not jpgs_field:
+            return []
+        
+        if isinstance(jpgs_field, dict):
+            urls = []
+            for key, value in jpgs_field.items():
+                if isinstance(value, str):
+                    items = [u.strip() for u in value.split(',') if u.strip()]
+                    urls.extend(items)
+                elif isinstance(value, list):
+                    urls.extend([str(u).strip() for u in value if u])
+            return urls
+        
+        if isinstance(jpgs_field, str):
+            return [u.strip() for u in jpgs_field.split(',') if u.strip()]
+        
+        return []
+    
+    def is_http_url(url):
+        """Check if the URL/path is an HTTP/HTTPS URL"""
+        return url.lower().startswith(('http://', 'https://'))
+    
+    def download_and_verify_image(url, destination_path, timeout=30, max_retries=3):
+        """
+        Download a single image from URL to destination path with retry logic.
+        Returns (success, message, file_size)
+        """
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/91.0.4472.124 Safari/537.36"
+            )
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    print(f"    Retry attempt {attempt + 1}/{max_retries}...")
+                    time.sleep(2)
+                
+                response = requests.get(url, headers=headers, timeout=timeout, stream=True)
+                
+                if response.status_code != 200:
+                    if attempt < max_retries - 1:
+                        continue
+                    return False, f"HTTP {response.status_code}", 0
+                
+                content_type = response.headers.get('Content-Type', '').lower()
+                if content_type and not content_type.startswith('image/'):
+                    if attempt < max_retries - 1:
+                        continue
+                    return False, f"Not an image: {content_type}", 0
+                
+                with open(destination_path, 'wb') as f:
+                    response.raw.decode_content = True
+                    shutil.copyfileobj(response.raw, f)
+                
+                try:
+                    with Image.open(destination_path) as img:
+                        img.verify()
+                    with Image.open(destination_path) as img:
+                        img.load()
+                        width, height = img.size
+                        mode = img.mode
+                except Exception as e:
+                    if os.path.exists(destination_path):
+                        os.remove(destination_path)
+                    if attempt < max_retries - 1:
+                        continue
+                    return False, f"Corrupted image: {str(e)[:50]}", 0
+                
+                file_size = os.path.getsize(destination_path)
+                return True, f"Downloaded: {width}x{height} {mode} ({file_size:,} bytes)", file_size
+                
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    continue
+                return False, f"Timeout after {timeout}s (attempt {attempt + 1})", 0
+            except requests.exceptions.ConnectionError:
+                if attempt < max_retries - 1:
+                    continue
+                return False, f"Connection error (attempt {attempt + 1})", 0
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    continue
+                return False, f"Request error: {str(e)[:50]}", 0
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    continue
+                return False, f"Error: {str(e)[:50]}", 0
+        
+        return False, f"Failed after {max_retries} attempts", 0
+    
+    def copy_and_verify_local_file(source_path, destination_path, max_retries=3):
+        """Copy a local file to destination with retry logic."""
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    print(f"    Retry attempt {attempt + 1}/{max_retries}...")
+                    time.sleep(1)
+                
+                possible_paths = [
+                    source_path,
+                    os.path.join(FILES_ROOT, source_path),
+                    os.path.join(FILES_ROOT, "jpgs", author, os.path.basename(source_path)),
+                    os.path.join(FILES_ROOT, "jpgfolders", author, os.path.basename(source_path)),
+                    os.path.join(FILES_ROOT, "uploaded jpgs", author, os.path.basename(source_path)),
+                ]
+                
+                found_path = None
+                for path in possible_paths:
+                    if os.path.exists(path) and os.path.isfile(path):
+                        found_path = path
+                        break
+                
+                if not found_path:
+                    if attempt < max_retries - 1:
+                        continue
+                    return False, f"File not found: {source_path}", 0
+                
+                try:
+                    with Image.open(found_path) as img:
+                        img.verify()
+                    with Image.open(found_path) as img:
+                        img.load()
+                        width, height = img.size
+                        mode = img.mode
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        continue
+                    return False, f"Corrupted image: {str(e)[:50]}", 0
+                
+                shutil.copy2(found_path, destination_path)
+                file_size = os.path.getsize(destination_path)
+                
+                return True, f"Copied: {width}x{height} {mode} ({file_size:,} bytes)", file_size
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    continue
+                return False, f"Copy error: {str(e)[:50]}", 0
+        
+        return False, f"Failed after {max_retries} attempts", 0
+
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "download_scheduled_images: ERROR - Invalid config format in AUTHOR_PATH."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        current_status = config.get('status', 'pending')
+        
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status == 'aborted':
+            print(f"download_scheduled_images: SKIPPED - Status is 'aborted'. No action taken.")
+            return
+        
+        if current_status != 'pending':
+            print(f"download_scheduled_images: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return
+        
+        print(f"download_scheduled_images: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"download_scheduled_images: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 2: LOAD CONFIG DETAILS
+    # ============================================================
+    try:
+        author = config.get('author', '').strip()
+        if not author:
+            error_msg = "download_scheduled_images: ERROR - 'author' is missing or empty in config."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        schedule_time_count = config.get('schedule_time_count', 0)
+        
+        if isinstance(schedule_time_count, str):
+            try:
+                schedule_time_count = int(schedule_time_count)
+            except ValueError:
+                schedule_time_count = 0
+        
+        try:
+            schedule_time_count = int(schedule_time_count)
+        except (ValueError, TypeError):
+            schedule_time_count = 0
+        
+        print(f"download_scheduled_images: Author: {author}")
+        print(f"download_scheduled_images: Schedule time count: {schedule_time_count}")
+        print(f"download_scheduled_images: 📥 Downloading {schedule_time_count} images needed for the operation")
+        
+        if schedule_time_count <= 0:
+            print(f"download_scheduled_images: SKIPPED - schedule_time_count is {schedule_time_count}. No images to download.")
+            return
+        
+        jpgs_field = config.get('jpgsurl', '')
+        if not jpgs_field:
+            jpgs_field = config.get('Jpgsurl', '')
+        
+        if not jpgs_field:
+            error_msg = f"download_scheduled_images: ERROR - 'jpgsurl' field is missing or empty in config for author '{author}'."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        print(f"download_scheduled_images: Found jpgsurl field for author '{author}'")
+        
+        all_urls = parse_jpgs_url_field(jpgs_field)
+        if not all_urls:
+            error_msg = f"download_scheduled_images: ERROR - No URLs found in 'jpgsurl' field for author '{author}'."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        print(f"download_scheduled_images: Found {len(all_urls)} URLs/paths available")
+        
+    except Exception as e:
+        error_msg = f"download_scheduled_images: ERROR - Failed to process config: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 3: CHECK WHAT'S ALREADY DOWNLOADED (CHECK DUPLICATES)
+    # ============================================================
+    downloaded_urls = config.get('downloaded_images_url', [])
+    if not isinstance(downloaded_urls, list):
+        downloaded_urls = []
+    
+    print(f"download_scheduled_images: Already downloaded {len(downloaded_urls)} images")
+    
+    # Filter out already downloaded URLs
+    available_urls = [url for url in all_urls if url not in downloaded_urls]
+    skipped_count = len(all_urls) - len(available_urls)
+    
+    if skipped_count > 0:
+        print(f"download_scheduled_images: Skipping {skipped_count} already downloaded URLs")
+    
+    print(f"download_scheduled_images: {len(available_urls)} new URLs available")
+
+    # ============================================================
+    # STEP 4: CHECK IF ENOUGH NEW URLs AVAILABLE
+    # ============================================================
+    if len(available_urls) < schedule_time_count:
+        print(f"download_scheduled_images: Only {len(available_urls)} new URLs available, need {schedule_time_count}")
+        print(f"download_scheduled_images: Resetting downloaded tracking to allow reuse...")
+        
+        # Reset downloaded tracking
+        if config_is_list:
+            config_data[-1]['downloaded_images_url'] = []
+        else:
+            config_data['downloaded_images_url'] = []
+        
+        if save_json_file(AUTHOR_PATH, config_data):
+            print(f"download_scheduled_images: Reset downloaded_images_url")
+            available_urls = all_urls.copy()
+        else:
+            error_msg = "download_scheduled_images: ERROR - Failed to reset downloaded_images_url"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        if len(available_urls) < schedule_time_count:
+            error_msg = f"download_scheduled_images: ERROR - Only {len(available_urls)} total URLs available, need {schedule_time_count}."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+
+    # ============================================================
+    # STEP 5: SETUP DOWNLOAD DIRECTORY
+    # ============================================================
+    download_dir = os.path.join(FILES_ROOT, "downloaded", author)
+    
+    try:
+        os.makedirs(download_dir, exist_ok=True)
+        print(f"download_scheduled_images: Download directory: {download_dir}")
+    except Exception as e:
+        error_msg = f"download_scheduled_images: ERROR - Failed to create download directory {download_dir}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 6: SELECT URLs TO DOWNLOAD (FIRST N)
+    # ============================================================
+    urls_to_download = available_urls[:schedule_time_count]
+    print(f"download_scheduled_images: Selected {len(urls_to_download)} URLs to download")
+
+    # ============================================================
+    # STEP 7: DOWNLOAD EACH IMAGE (WITH RETRY AND DUPLICATE CHECK)
+    # ============================================================
+    print(f"\n{'='*80}")
+    print(f"📥 DOWNLOADING {len(urls_to_download)} IMAGES for author '{author}'")
+    print(f"   {len(urls_to_download)} of {schedule_time_count} images needed")
+    print(f"{'='*80}\n")
+    
+    successful_downloads = []
+    failed_downloads = []
+    downloaded_count = 0
+    total_files_size = 0
+    
+    for i, url in enumerate(urls_to_download, 1):
+        print(f"[{i}/{len(urls_to_download)}] Processing: {url[:100]}...")
+        
+        # DOUBLE CHECK: Skip if already downloaded (safety check)
+        current_config = load_json_file(AUTHOR_PATH, {})
+        if isinstance(current_config, list) and len(current_config) > 0:
+            current_downloaded = current_config[-1].get('downloaded_images_url', [])
+        else:
+            current_downloaded = current_config.get('downloaded_images_url', [])
+        
+        if not isinstance(current_downloaded, list):
+            current_downloaded = []
+        
+        if url in current_downloaded:
+            print(f"  ⏭️ SKIPPED - URL already downloaded")
+            continue
+        
+        # Generate filename from URL
+        parsed = urlparse(url)
+        base_name = os.path.basename(parsed.path) if parsed.path else "image"
+        
+        if not base_name.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
+            base_name += '.jpg'
+        
+        dest_path = os.path.join(download_dir, base_name)
+        root, ext = os.path.splitext(base_name)
+        counter = 1
+        while os.path.exists(dest_path):
+            dest_path = os.path.join(download_dir, f"{root}_{counter}{ext}")
+            counter += 1
+        
+        # Download or copy with retry
+        if is_http_url(url):
+            print(f"  Type: HTTP URL - Downloading...")
+            success, message, file_size = download_and_verify_image(url, dest_path, max_retries=3)
+        else:
+            print(f"  Type: Local Path - Copying...")
+            success, message, file_size = copy_and_verify_local_file(url, dest_path, max_retries=3)
+        
+        if success:
+            successful_downloads.append({
+                "url": url,
+                "path": dest_path,
+                "filename": os.path.basename(dest_path)
+            })
+            downloaded_count += 1
+            total_files_size += file_size
+            print(f"  ✅ SUCCESS - {message}")
+            print(f"  Saved to: {dest_path}")
+            
+            # ============================================================
+            # RECORD URL IMMEDIATELY AFTER SUCCESSFUL DOWNLOAD
+            # ============================================================
+            try:
+                current_config = load_json_file(AUTHOR_PATH, {})
+                
+                if isinstance(current_config, list) and len(current_config) > 0:
+                    current_downloaded = current_config[-1].get('downloaded_images_url', [])
+                    if not isinstance(current_downloaded, list):
+                        current_downloaded = []
+                    if url not in current_downloaded:
+                        current_downloaded.append(url)
+                    current_config[-1]['downloaded_images_url'] = current_downloaded
+                else:
+                    current_downloaded = current_config.get('downloaded_images_url', [])
+                    if not isinstance(current_downloaded, list):
+                        current_downloaded = []
+                    if url not in current_downloaded:
+                        current_downloaded.append(url)
+                    current_config['downloaded_images_url'] = current_downloaded
+                
+                if save_json_file(AUTHOR_PATH, current_config):
+                    print(f"  📝 Recorded URL to downloaded_images_url (total: {len(current_downloaded)})")
+                else:
+                    print(f"  ⚠️ Failed to record URL to downloaded_images_url")
+                    
+            except Exception as e:
+                print(f"  ⚠️ Error recording URL: {e}")
+        else:
+            failed_downloads.append({
+                "url": url,
+                "error": message
+            })
+            print(f"  ❌ FAILED after 3 attempts - {message}")
+        
+        print()
+    
+    # ============================================================
+    # STEP 8: UPDATE CONFIG WITH FINAL DOWNLOADED URLS (if any were missed)
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            current_downloaded = config_data[-1].get('downloaded_images_url', [])
+            if not isinstance(current_downloaded, list):
+                current_downloaded = []
+            
+            for item in successful_downloads:
+                if item["url"] not in current_downloaded:
+                    current_downloaded.append(item["url"])
+            
+            config_data[-1]['downloaded_images_url'] = current_downloaded
+        else:
+            current_downloaded = config_data.get('downloaded_images_url', [])
+            if not isinstance(current_downloaded, list):
+                current_downloaded = []
+            
+            for item in successful_downloads:
+                if item["url"] not in current_downloaded:
+                    current_downloaded.append(item["url"])
+            
+            config_data['downloaded_images_url'] = current_downloaded
+        
+        if save_json_file(AUTHOR_PATH, config_data):
+            print(f"✅ Final downloaded_images_url updated in AUTHOR_PATH")
+            print(f"   Total downloaded: {len(current_downloaded)} images")
+    except Exception as e:
+        print(f"⚠️ Warning - Could not finalize downloaded_images_url: {e}")
+
+    # ============================================================
+    # STEP 9: CHECK RESULTS
+    # ============================================================
+    total_size_mb = total_files_size / (1024 * 1024) if total_files_size > 0 else 0
+    
+    print(f"\n{'='*80}")
+    print(f"📥 DOWNLOAD SUMMARY - Author: {author}")
+    print(f"{'='*80}")
+    print(f"Images needed for operation:  {schedule_time_count}")
+    print(f"URLs selected for download:   {len(urls_to_download)}")
+    print(f"Successfully downloaded:      {len(successful_downloads)}")
+    print(f"Failed downloads:             {len(failed_downloads)}")
+    print(f"Skipped (already done):       {skipped_count if 'skipped_count' in locals() else 0}")
+    print(f"Total download size:          {total_size_mb:.2f} MB")
+    print(f"Download directory:           {download_dir}")
+    
+    # Progress percentage
+    progress_percent = (len(successful_downloads) / schedule_time_count * 100) if schedule_time_count > 0 else 0
+    print(f"Progress:                      {len(successful_downloads)}/{schedule_time_count} ({progress_percent:.1f}%)")
+    
+    if failed_downloads:
+        print(f"\n❌ Failed downloads:")
+        for item in failed_downloads[:5]:
+            filename = os.path.basename(item['url'].split('?')[0]) if '/' in item['url'] else item['url']
+            print(f"  • {filename[:50]}: {item['error']}")
+        if len(failed_downloads) > 5:
+            print(f"  ... and {len(failed_downloads) - 5} more")
+    
+    if successful_downloads:
+        print(f"\n✅ Downloaded files:")
+        for item in successful_downloads[:5]:
+            print(f"  • {item['filename']}")
+        if len(successful_downloads) > 5:
+            print(f"  ... and {len(successful_downloads) - 5} more")
+    
+    # ============================================================
+    # STEP 10: UPDATE STATUS
+    # ============================================================
+    if len(successful_downloads) == schedule_time_count:
+        operation_msg = (
+            f"Successfully downloaded {len(successful_downloads)}/{schedule_time_count} scheduled images for author '{author}'. "
+            f"Total size: {total_size_mb:.2f} MB"
+        )
+        update_author_status('pending', operation_msg)
+        print(f"\n✅ Status updated to 'pending' - All images downloaded successfully")
+        
+    elif len(successful_downloads) > 0:
+        operation_msg = (
+            f"Partially downloaded: {len(successful_downloads)}/{schedule_time_count} scheduled images for author '{author}'. "
+            f"{len(failed_downloads)} failed. Continuing with {len(successful_downloads)} images."
+        )
+        update_author_status('pending', operation_msg)
+        print(f"\n⚠️ Status updated to 'pending' - Partial download: {len(successful_downloads)}/{schedule_time_count}")
+        
+    else:
+        error_msg = (
+            f"ERROR - Failed to download any of the {schedule_time_count} scheduled images for author '{author}'. "
+            f"All {len(failed_downloads)} downloads failed."
+        )
+        print(f"\n❌ {error_msg}")
+        update_author_status('aborted', error_msg)
+        return
+    
+    print(f"{'='*80}\n")
+    
+    return len(successful_downloads) == schedule_time_count
 #====
 
 
@@ -7827,8 +8184,6 @@ def csv_engine():
 
 #=====DRIVER AUTOMATION
 # FORCE SSL BYPASS: This fixes "Could not reach host" in 90% of cases
-AUTHOR_PATH = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"  
-FILES_ROOT = r"C:\xampp\htdocs\AI automation\serenum\files"
 os.environ['WDM_SSL_VERIFY'] = '0'
 def initialize_driver(mode="headed"):
     """
@@ -8450,8 +8805,7 @@ def launch_profile():
                         print(f"Failed to write progress: {e}")
 
                     print(f"URL correct. Proceeding with post actions...")
-                    firstbatch()
-                    secondbatch()
+                    sequence()
                     
                     # Check if post was successful
                     try:
@@ -8620,7 +8974,6 @@ def reset_trackers():
         
         if current_status != 'pending':
             print(f"reset_trackers: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
-            update_author_status('pending', f"reset_trackers: SKIPPED - Status is '{current_status}'")
             return
         
         print(f"reset_trackers: Status is 'pending' - proceeding...")
@@ -8680,1307 +9033,33 @@ def reset_trackers():
         update_author_status('aborted', error_msg)
         return
     
-def randomize_groups():
+def copy_downloaded_to_nextjpg():
     """
-    Handles group switching with proper pipeline tracking
-    Each group is selected once before any group is repeated
-    """
-    import os
-    import json
-    from datetime import datetime
+    Copies images from 'downloaded' to 'next jpg' with cropping if needed.
     
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            return default if default is not None else {}
-        except:
-            return default if default is not None else {}
+    - Checks each image for borders and crops if detected
+    - Copies (not moves) the processed image to next jpg
+    - Creates filename.json with original filename before renaming
+    - Renames to card_x.jpg after recording
+    - Does NOT delete from source
     
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, {})
-            if isinstance(author_data, list):
-                if not author_data:
-                    author_data = [{}]
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-            else:
-                if not isinstance(author_data, dict):
-                    author_data = {}
-                author_data['status'] = status_value
-                author_data['operation_status'] = operation_message
-            return save_json_file(AUTHOR_PATH, author_data)
-        except Exception as e:
-            print(f"Failed to update author status: {e}")
-            return False
-
-    # STEP 1: CHECK STATUS
-    try:
-        config_data = load_json_file(AUTHOR_PATH, {})
-        
-        if isinstance(config_data, list) and len(config_data) > 0:
-            config = config_data[-1]
-            is_list = True
-        elif isinstance(config_data, dict):
-            config = config_data
-            is_list = False
-        else:
-            error_msg = "ERROR - Invalid config format"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return False
-        
-        current_status = config.get('status', 'pending')
-        if current_status != 'pending':
-            print(f"SKIPPED - Status is '{current_status}'")
-            return False
-        
-        print(f"Status is 'pending' - proceeding...")
-        
-    except Exception as e:
-        error_msg = f"ERROR - {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return False
-
-    # STEP 2: GET CONFIG VALUES
-    try:
-        author = config.get('author', '').strip()
-        group_switch = config.get('group_switch', 'no').lower().strip()
-        
-        # Get both fields
-        group_field = config.get('group', '')
-        group_types_field = config.get('group_types', '')
-        
-        # Determine source
-        if group_types_field:
-            source_groups = group_types_field
-            field_used = 'group_types'
-        elif group_field:
-            source_groups = group_field
-            field_used = 'group'
-        else:
-            source_groups = ''
-            field_used = 'none'
-        
-        if group_switch not in ('yes', 'no'):
-            group_switch = 'no'
-        
-        print(f"Author: {author}, group_switch: '{group_switch}', field: '{field_used}'")
-        print(f"Current group value: '{group_field}', group_types: '{group_types_field}'")
-        
-    except Exception as e:
-        error_msg = f"ERROR - {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return False
-
-    # STEP 3: PARSE SOURCE GROUPS
-    try:
-        if isinstance(source_groups, list):
-            parsed_groups = [str(g).strip() for g in source_groups if str(g).strip()]
-        elif isinstance(source_groups, str) and source_groups.strip():
-            parsed_groups = [g.strip() for g in source_groups.split(',') if g.strip()]
-        else:
-            parsed_groups = []
-        
-        print(f"Parsed {len(parsed_groups)} groups from source: {parsed_groups}")
-        
-    except Exception as e:
-        error_msg = f"ERROR parsing groups - {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return False
-
-    # STEP 4: LOAD DEBUG DATA
-    try:
-        debug = config.get('group_switch_debug', {})
-        
-        # New simplified tracking
-        all_groups = debug.get('all_groups', [])
-        selected_groups = debug.get('selected_groups', [])
-        awaiting_selection = debug.get('awaiting_selection', [])
-        pipeline_complete = debug.get('pipeline_complete', False)
-        current_group = debug.get('current_group', '')
-        
-        print(f"DEBUG: all_groups={all_groups}")
-        print(f"DEBUG: selected_groups={selected_groups}")
-        print(f"DEBUG: awaiting_selection={awaiting_selection}")
-        print(f"DEBUG: current_group='{current_group}'")
-        print(f"DEBUG: pipeline_complete={pipeline_complete}")
-        
-    except Exception as e:
-        error_msg = f"ERROR loading debug - {e}"
-        print(error_msg)
-        all_groups = []
-        selected_groups = []
-        awaiting_selection = []
-        pipeline_complete = False
-        current_group = ''
-
-    # STEP 5: DETECT NEW GROUPS AND RE-INITIALIZE IF NEEDED
-    if group_switch == "no":
-        # Clear everything
-        all_groups = []
-        selected_groups = []
-        awaiting_selection = []
-        pipeline_complete = False
-        current_group = ''
-        action = "group_switch is no - cleared all"
-        print("CLEARED: group_switch is no")
-        
-    elif parsed_groups:
-        # Check if we need to re-initialize based on new groups
-        current_source_groups = sorted(parsed_groups)
-        current_debug_groups = sorted(all_groups) if all_groups else []
-        
-        # If debug has no data OR source groups are different from debug groups
-        if not all_groups or current_source_groups != current_debug_groups:
-            # New groups detected or first time - re-initialize
-            all_groups = parsed_groups.copy()
-            # Reset everything
-            selected_groups = []
-            awaiting_selection = all_groups.copy()
-            pipeline_complete = False
-            current_group = ''
-            action = f"RE-INITIALIZED with {len(all_groups)} groups from source"
-            print(f"🔄 RE-INITIALIZED: {len(all_groups)} groups, awaiting={awaiting_selection}")
-        else:
-            # Use existing debug data - groups unchanged
-            print(f"✅ Using existing debug data - no new groups detected")
-            action = "Using existing debug data"
-    
-    # STEP 6: MAIN PIPELINE LOGIC
-    if group_switch == "yes" and all_groups:
-        
-        # Check if pipeline is complete (all groups selected)
-        if pipeline_complete:
-            # Reset pipeline
-            selected_groups = []
-            awaiting_selection = all_groups.copy()
-            pipeline_complete = False
-            current_group = ''
-            action = f"🔄 PIPELINE RESET: all groups selected, restarting"
-            print(f"🔄 PIPELINE RESET: {len(all_groups)} groups available")
-        
-        # Move to next group if awaiting has items
-        if awaiting_selection and not pipeline_complete:
-            # Select next group from awaiting
-            current_group = awaiting_selection[0]
-            # Remove from awaiting
-            awaiting_selection.pop(0)
-            # Add to selected
-            selected_groups.append(current_group)
-            
-            action = f"SELECTED '{current_group}' ({len(selected_groups)}/{len(all_groups)} selected)"
-            print(f"✅ SELECTED: '{current_group}'")
-            print(f"📊 Progress: {len(selected_groups)}/{len(all_groups)} groups selected")
-            print(f"⏳ Remaining: {awaiting_selection}")
-            
-        elif not awaiting_selection and not pipeline_complete:
-            # All groups have been selected - mark pipeline as complete
-            pipeline_complete = True
-            action = f"✅ PIPELINE COMPLETE: All {len(all_groups)} groups have been selected"
-            print(f"✅ PIPELINE COMPLETE: All groups selected!")
-            current_group = ''  # Clear current group when done
-            
-        else:
-            action = f"WAITING: No groups to process"
-            print(f"⏳ WAITING: No groups to process")
-
-    # STEP 7: UPDATE BOTH FIELDS WITH CURRENT GROUP - HIGHEST PRIORITY
-    if group_switch == "yes":
-        if current_group:
-            # ALWAYS update both fields with the current group
-            config['group'] = current_group
-            config['group_types'] = current_group
-            print(f"📝 Updated 'group' = '{current_group}'")
-            print(f"📝 Updated 'group_types' = '{current_group}'")
-        else:
-            # If no current group, clear both fields
-            config['group'] = ''
-            config['group_types'] = ''
-            print(f"📝 Cleared 'group' and 'group_types'")
-
-    # STEP 8: SAVE DEBUG DATA
-    try:
-        debug_output = {
-            "author": author,
-            "group_switch": group_switch,
-            "field_used": field_used,
-            "all_groups": all_groups,
-            "selected_groups": selected_groups,
-            "awaiting_selection": awaiting_selection,
-            "pipeline_complete": pipeline_complete,
-            "current_group": current_group,
-            "total_groups": len(all_groups),
-            "selected_count": len(selected_groups),
-            "remaining_count": len(awaiting_selection),
-            "action": action,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        config['group_switch_debug'] = debug_output
-        
-        if is_list:
-            config_data[-1] = config
-        else:
-            config_data = config
-        
-        if save_json_file(AUTHOR_PATH, config_data):
-            print(f"✅ SAVED: {action}")
-            status_msg = f"Group: '{current_group}' ({len(selected_groups)}/{len(all_groups)})" if current_group else f"Pipeline: {len(selected_groups)}/{len(all_groups)} complete"
-            update_author_status('pending', status_msg)
-            return True
-        else:
-            error_msg = "ERROR saving"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return False
-        
-    except Exception as e:
-        error_msg = f"ERROR saving - {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return False
-                                 
-def corruptedjpgs():
-    """
-    Scans ALL .jpg, .jpeg, .png, .gif files in:
-      - files/jpgs/{author}/
-      - files/next jpg/{author}/
-      - files/uploaded jpgs/{author}/
-      - files/downloaded/{author}/
-
-    - Moves corrupted files from the first 3 → files/corruptedjpgs/{author}/
-    - Deletes corrupted files from 'downloaded' folder (they're temporary)
-    - Logs results in corrupted_jpgs.json
-    - UPDATES operation_status and status in AUTHOR_PATH
-    - ONLY executes if status is 'pending'
-    - Sets status to 'aborted' if corrupted files fail to move or delete
-    """
-    import os
-    import json
-    import shutil
-    from typing import List, Tuple
-    from PIL import Image
-    
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except json.JSONDecodeError:
-            return default if default is not None else {}
-        except Exception:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                # Find the last config or create one
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    # Also update in dynamic_values if present
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except Exception as e:
-            print(f"Failed to update author status: {e}")
-            return False
-    
-    # ============================================================
-    # STEP 1: LOAD AUTHOR FROM CONFIG
-    # ============================================================
-    try:
-        config = load_json_file(AUTHOR_PATH, {})
-        # If config is a list, get the last item
-        if isinstance(config, list) and len(config) > 0:
-            config = config[-1]
-        elif not isinstance(config, dict):
-            error_msg = "corruptedjpgs: ERROR - Invalid config format in AUTHOR_PATH."
-            print(error_msg)
-            return
-        
-        author = config.get('author', '').strip()
-        if not author:
-            error_msg = "corruptedjpgs: ERROR - 'author' is missing or empty in config."
-            print(error_msg)
-            return
-    except Exception as e:
-        error_msg = f"corruptedjpgs: ERROR - Failed to load or parse {AUTHOR_PATH}: {e}"
-        print(error_msg)
-        return
-    
-    # ============================================================
-    # STEP 2: CHECK STATUS - ONLY execute if 'pending'
-    # ============================================================
-    current_status = config.get('status', 'pending')
-    
-    # Also check in dynamic_values if present
-    if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-        dyn_status = config['dynamic_values'].get('status', 'pending')
-        if dyn_status:
-            current_status = dyn_status
-    
-    # If status is NOT 'pending', skip execution WITHOUT updating anything
-    if current_status != 'pending':
-        print(f"corruptedjpgs: SKIPPED - Status is '{current_status}' for author '{author}'. Function only executes when status is 'pending'.")
-        return
-    
-    print(f"corruptedjpgs: Starting scan for author '{author}' (current status: {current_status})")
-    
-    # ============================================================
-    # STEP 3: DEFINE DIRECTORIES USING GLOBAL PATHS
-    # ============================================================
-    directories_to_check = [
-        os.path.join(FILES_ROOT, "jpgs", author),
-        os.path.join(FILES_ROOT, "next jpg", author),
-        os.path.join(FILES_ROOT, "uploaded jpgs", author),
-        os.path.join(FILES_ROOT, "downloaded", author)
-    ]
-    corrupted_dir = os.path.join(FILES_ROOT, "corruptedjpgs", author)
-    
-    # ============================================================
-    # STEP 4: VALIDATE INPUT DIRECTORIES
-    # ============================================================
-    valid_dirs = []
-    for dir_path in directories_to_check:
-        if os.path.exists(dir_path):
-            valid_dirs.append(dir_path)
-        else:
-            print(f"Directory not found (skipping): {dir_path}")
-    
-    if not valid_dirs:
-        # This is a warning, not an error - no files to scan
-        print(f"corruptedjpgs: No valid directories found to scan for author '{author}'. No action taken.")
-        return
-    
-    # Create corrupted directory
-    if not os.path.exists(corrupted_dir):
-        try:
-            os.makedirs(corrupted_dir)
-            print(f"Created corrupted directory: {corrupted_dir}")
-        except Exception as e:
-            error_msg = f"corruptedjpgs: Failed to create corrupted directory {corrupted_dir}: {e}"
-            print(f"❌ {error_msg}")
-            update_author_status('aborted', error_msg)
-            return
-    
-    # ============================================================
-    # STEP 5: SUPPORTED IMAGE EXTENSIONS
-    # ============================================================
-    IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif')
-    moved_files: List[Tuple[str, str, str]] = []
-    deleted_files: List[Tuple[str, str]] = []
-    failed_files: List[Tuple[str, str, str]] = []  # (filename, source_dir, error)
-    total_scanned = 0
-    total_corrupted = 0
-    total_failed = 0
-    
-    print(f"\nScanning {len(valid_dirs)} directories for corrupted images...\n")
-    
-    # ============================================================
-    # STEP 6: SCAN EACH DIRECTORY
-    # ============================================================
-    try:
-        for directory in valid_dirs:
-            is_downloaded_folder = directory.endswith(os.path.join("downloaded", author))
-            action = "DELETE" if is_downloaded_folder else "MOVE"
-            
-            print(f"Checking ({action}): {directory}")
-            try:
-                files = os.listdir(directory)
-            except Exception as e:
-                print(f"Could not read directory {directory}: {e}")
-                continue
-            
-            image_files = [
-                f for f in files
-                if f.lower().endswith(IMAGE_EXTENSIONS)
-                and os.path.isfile(os.path.join(directory, f))
-            ]
-            
-            total_scanned += len(image_files)
-            
-            for file in image_files:
-                file_path = os.path.join(directory, file)
-                is_corrupted = False
-                error_msg = ""
-                
-                # ------------------- Pillow Double Check -------------------
-                try:
-                    with Image.open(file_path) as img:
-                        img.verify()
-                    with Image.open(file_path) as img:
-                        img.load()
-                except Exception as e:
-                    is_corrupted = True
-                    error_msg = str(e)
-                
-                # ------------------- Handle Corrupted -------------------
-                if is_corrupted:
-                    total_corrupted += 1
-                    print(f"  [CORRUPTED] {file} → {error_msg}")
-                    
-                    if is_downloaded_folder:
-                        # DELETE from downloaded folder
-                        try:
-                            os.remove(file_path)
-                            print(f"  [DELETED] {file_path}")
-                            deleted_files.append((file, directory))
-                        except Exception as del_e:
-                            print(f"  [FAILED TO DELETE] {file}: {del_e}")
-                            failed_files.append((file, directory, f"Delete failed: {str(del_e)}"))
-                            total_failed += 1
-                    else:
-                        # MOVE to corrupted folder
-                        dest_path = os.path.join(corrupted_dir, file)
-                        base, ext = os.path.splitext(file)
-                        counter = 1
-                        while os.path.exists(dest_path):
-                            dest_path = os.path.join(corrupted_dir, f"{base}_{counter}{ext}")
-                            counter += 1
-                        
-                        try:
-                            shutil.move(file_path, dest_path)
-                            print(f"  [MOVED] → {dest_path}")
-                            moved_files.append((file, directory, dest_path))
-                        except Exception as move_e:
-                            print(f"  [FAILED TO MOVE] {file}: {move_e}")
-                            failed_files.append((file, directory, f"Move failed: {str(move_e)}"))
-                            total_failed += 1
-                else:
-                    print(f"  [OK] {file}")
-    
-    except Exception as e:
-        # Critical error during scanning - abort
-        error_msg = f"corruptedjpgs: CRITICAL ERROR during image scanning: {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 7: WRITE SUMMARY JSON
-    # ============================================================
-    try:
-        json_path = os.path.join(corrupted_dir, 'corrupted_jpgs.json')
-        summary = {
-            "author": author,
-            "scanned_directories": valid_dirs,
-            "total_scanned": total_scanned,
-            "total_corrupted": total_corrupted,
-            "total_moved": len(moved_files),
-            "total_deleted": len(deleted_files),
-            "total_failed": total_failed,
-            "moved_files": [
-                {
-                    "filename": orig,
-                    "from_directory": src_dir,
-                    "moved_to": dest
-                }
-                for orig, src_dir, dest in moved_files
-            ],
-            "deleted_files": [
-                {
-                    "filename": orig,
-                    "from_directory": src_dir
-                }
-                for orig, src_dir in deleted_files
-            ],
-            "failed_files": [
-                {
-                    "filename": orig,
-                    "from_directory": src_dir,
-                    "error": err
-                }
-                for orig, src_dir, err in failed_files
-            ],
-            "note": (
-                "Corrupted files in 'downloaded' folder are DELETED. "
-                "Others are MOVED to corruptedjpgs folder. "
-                "All .jpg/.jpeg/.png/.gif checked with Pillow verify() + load()."
-            )
-        }
-        
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=4, ensure_ascii=False)
-        print(f"\nLog saved: {json_path}")
-    except Exception as e:
-        error_msg = f"corruptedjpgs: Failed to write summary JSON: {e}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 8: DETERMINE STATUS BASED ON RESULTS
-    # ============================================================
-    operation_parts = [f"corruptedjpgs: Scanned {total_scanned} image files for author '{author}'"]
-    
-    # Check if ANY files failed to move or delete
-    if total_failed > 0:
-        # CRITICAL ERROR - Set status to 'aborted'
-        operation_parts.append(f"CRITICAL ERROR: {total_failed} corrupted file(s) could not be handled!")
-        operation_parts.append(f"Files that failed: {len(failed_files)}")
-        
-        # List failed files with their errors
-        failed_details = []
-        for orig, src_dir, err in failed_files[:10]:
-            failed_details.append(f"'{orig}' from {os.path.basename(src_dir)}: {err}")
-        if len(failed_files) > 10:
-            failed_details.append(f"... and {len(failed_files) - 10} more failed files")
-        
-        operation_parts.append(f"Failure details: {'; '.join(failed_details)}")
-        operation_parts.append("ACTION REQUIRED: Manual intervention needed to remove or repair these corrupted files.")
-        
-        status_value = 'aborted'
-        operation_msg = '; '.join(operation_parts)
-        
-        print(f"\n❌ Setting status to 'aborted' due to failed file operations")
-        update_author_status(status_value, operation_msg)
-        
-    elif total_corrupted > 0:
-        # Successfully handled corrupted files
-        operation_parts.append(f"Found {total_corrupted} corrupted file(s) and handled successfully")
-        operation_parts.append(f"Moved: {len(moved_files)} files to corruptedjpgs folder")
-        operation_parts.append(f"Deleted: {len(deleted_files)} files from downloaded folder")
-        
-        if moved_files:
-            moved_names = [f[0] for f in moved_files[:5]]
-            if len(moved_files) > 5:
-                moved_names.append(f"... and {len(moved_files) - 5} more")
-            operation_parts.append(f"Moved files: {', '.join(moved_names)}")
-        
-        if deleted_files:
-            deleted_names = [f[0] for f in deleted_files[:5]]
-            if len(deleted_files) > 5:
-                deleted_names.append(f"... and {len(deleted_files) - 5} more")
-            operation_parts.append(f"Deleted files: {', '.join(deleted_names)}")
-        
-        operation_parts.append("SUCCESS: All corrupted files handled successfully.")
-        status_value = 'pending'
-        operation_msg = '; '.join(operation_parts)
-        
-        print(f"\n✅ Status remains 'pending' - all corrupted files handled")
-        update_author_status(status_value, operation_msg)
-        
-    else:
-        # No corrupted files found
-        operation_parts.append("SUCCESS: No corrupted files found. All images are valid!")
-        status_value = 'pending'
-        operation_msg = '; '.join(operation_parts)
-        
-        print(f"\n✅ Status remains 'pending' - no corrupted files found")
-        update_author_status(status_value, operation_msg)
-    
-    # ============================================================
-    # STEP 9: DISPLAY SUMMARY
-    # ============================================================
-    print("\n" + "="*80)
-    print(f"SUMMARY: {total_corrupted} corrupted file(s) found and cleaned.")
-    print(f"   • Scanned: {total_scanned} images")
-    print(f"   • Moved: {len(moved_files)} → {corrupted_dir}")
-    print(f"   • Deleted: {len(deleted_files)} (from downloaded folder)")
-    print(f"   • Failed: {total_failed} files could not be handled")
-    print(f"   • Status set to: {status_value}")
-    print(f"   • Operation: {operation_msg[:200]}...")
-    print("="*80)
-    
-    if moved_files:
-        print("\nMoved corrupted files (first 10):")
-        for orig, _, dest in moved_files[:10]:
-            print(f"   {orig} → {os.path.basename(dest)}")
-        if len(moved_files) > 10:
-            print(f"   ... and {len(moved_files) - 10} more.")
-    
-    if deleted_files:
-        print("\nDeleted corrupted files from downloaded (first 10):")
-        for orig, _ in deleted_files[:10]:
-            print(f"   {orig}")
-        if len(deleted_files) > 10:
-            print(f"   ... and {len(deleted_files) - 10} more.")
-    
-    if failed_files:
-        print("\n❌ FAILED FILES (require manual intervention):")
-        for orig, src_dir, err in failed_files[:10]:
-            print(f"   • {orig} from {os.path.basename(src_dir)}: {err}")
-        if len(failed_files) > 10:
-            print(f"   ... and {len(failed_files) - 10} more failures.")
-    
-    if total_corrupted == 0:
-        print("\n✅ No corrupted files found. All images are valid!")
-    
-    print("="*80 + "\n")
-    
-    return total_failed == 0
-
-def crop_and_moveto_jpgs():
-    """
-    Moves images from 'downloaded' to 'jpgfolders'.
-    If borders detected → crop them + fixed 10/40px top/bottom.
-    If no borders → move as-is.
-    Always MOVES (not copies) to save space.
-    Detailed logs.
     UPDATES operation_status and status in AUTHOR_PATH
     ONLY executes if status is 'pending'
     Sets status to 'aborted' if critical errors occur
     """
+    import os
+    import json
+    import re
+    import shutil
+    import numpy as np
+    from PIL import Image
+    
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, FILES_ROOT are already defined globally
+    
     CROP_THRESHOLD = 40
     CROP_TOP = 10
     CROP_BOTTOM = 40
-
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except json.JSONDecodeError:
-            return default if default is not None else {}
-        except Exception:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                # Find the last config or create one
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    # Also update in dynamic_values if present
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except Exception as e:
-            print(f"Failed to update author status: {e}")
-            return False
-
-    def process_image(src_path, dst_path, threshold, crop_top, crop_bottom):
-        try:
-            print(f"[OPEN] Loading: {os.path.basename(src_path)}")
-            img = Image.open(src_path).convert("RGB")
-            img_array = np.array(img)
-            h, w = img_array.shape[:2]
-            print(f"[INFO] Original size: {w}x{h}")
-
-            gray = np.mean(img_array, axis=2)
-            mask = (gray > threshold) & (gray < (255 - threshold))
-            coords = np.argwhere(mask)
-
-            # Case 1: No content at all
-            if coords.size == 0:
-                print(f"[CHECK] No content (all near black/white). Moving as-is.")
-                shutil.move(src_path, dst_path)
-                print(f"[MOVED] As-is → {os.path.basename(dst_path)}")
-                return True, "no_content"
-
-            y0, x0 = coords.min(axis=0)
-            y1, x1 = coords.max(axis=0)
-
-            # Case 2: Content fills entire image → no border
-            if x0 == 0 and y0 == 0 and x1 == w - 1 and y1 == h - 1:
-                print(f"[CHECK] No borders detected. Moving as-is.")
-                shutil.move(src_path, dst_path)
-                print(f"[MOVED] As-is → {os.path.basename(dst_path)}")
-                return True, "no_border"
-
-            # === BORDERS DETECTED ===
-            removed = {'L': x0, 'T': y0, 'R': w - 1 - x1, 'B': h - 1 - y1}
-            content_w = x1 - x0 + 1
-            content_h = y1 - y0 + 1
-            print(f"[BORDER] Removed: L={removed['L']}, T={removed['T']}, R={removed['R']}, B={removed['B']}")
-            print(f"[BORDER] Content: {content_w}x{content_h}")
-
-            cropped = img.crop((x0, y0, x1 + 1, y1 + 1))
-
-            # Apply fixed crop only if enough height
-            if content_h <= crop_top + crop_bottom:
-                print(f"[WARN] Too small for fixed crop. Saving border-cropped only.")
-                cropped.save(dst_path, quality=95)
-                os.remove(src_path)  # delete original
-                print(f"[SAVED] Border-only → {os.path.basename(dst_path)}")
-                return True, "border_only"
-
-            new_top = crop_top
-            new_bottom = content_h - crop_bottom
-            if new_bottom <= new_top:
-                print(f"[WARN] Fixed crop would remove all. Saving border-cropped only.")
-                cropped.save(dst_path, quality=95)
-                os.remove(src_path)
-                print(f"[SAVED] Border-only → {os.path.basename(dst_path)}")
-                return True, "border_only"
-
-            final_cropped = cropped.crop((0, new_top, content_w, new_bottom))
-            final_h = new_bottom - new_top
-            print(f"[FIXED] Cropped: {crop_top}px top, {crop_bottom}px bottom → {final_h}px tall")
-            final_cropped.save(dst_path, quality=95)
-            os.remove(src_path)
-            print(f"[SAVED] Fully cropped → {os.path.basename(dst_path)}")
-            return True, "full_crop"
-
-        except Exception as e:
-            print(f"[ERROR] Failed: {e}")
-            return False, "error"
-
-    # ============================================================
-    # STEP 1: LOAD AUTHOR FROM CONFIG
-    # ============================================================
-    if not os.path.exists(AUTHOR_PATH):
-        error_msg = f"crop_and_moveto_jpgs: ERROR - AUTHOR_PATH not found: {AUTHOR_PATH}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    try:
-        config = load_json_file(AUTHOR_PATH, {})
-        # If config is a list, get the last item
-        if isinstance(config, list) and len(config) > 0:
-            config = config[-1]
-        elif not isinstance(config, dict):
-            error_msg = "crop_and_moveto_jpgs: ERROR - Invalid config format in AUTHOR_PATH."
-            print(error_msg)
-            return
-        
-        author = config.get('author', '').strip()
-        if not author:
-            error_msg = "crop_and_moveto_jpgs: ERROR - 'author' is missing or empty in config."
-            print(error_msg)
-            return
-    except Exception as e:
-        error_msg = f"crop_and_moveto_jpgs: ERROR - Failed to load or parse {AUTHOR_PATH}: {e}"
-        print(error_msg)
-        return
-
-    # ============================================================
-    # STEP 2: CHECK STATUS - ONLY execute if 'pending'
-    # ============================================================
-    current_status = config.get('status', 'pending')
-    
-    # Also check in dynamic_values if present
-    if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-        dyn_status = config['dynamic_values'].get('status', 'pending')
-        if dyn_status:
-            current_status = dyn_status
-    
-    # If status is NOT 'pending', skip execution WITHOUT updating anything
-    if current_status != 'pending':
-        print(f"crop_and_moveto_jpgs: SKIPPED - Status is '{current_status}' for author '{author}'. Function only executes when status is 'pending'.")
-        return
-
-    print(f"crop_and_moveto_jpgs: Starting crop/move for author '{author}' (current status: {current_status})")
-
-    # ============================================================
-    # STEP 3: SETUP DIRECTORIES
-    # ============================================================
-    source_dir = os.path.join(FILES_ROOT, "downloaded", author)
-    output_dir = os.path.join(FILES_ROOT, "jpgfolders", author)
-
-    if not os.path.exists(source_dir):
-        warning_msg = f"crop_and_moveto_jpgs: Source dir not found: {source_dir}"
-        print(warning_msg)
-        # This is a warning, not an error - no files to process
-        return
-
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        print(f"Output directory ready: {output_dir}")
-    except Exception as e:
-        error_msg = f"crop_and_moveto_jpgs: Failed to create output directory {output_dir}: {e}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return
-
-    # ============================================================
-    # STEP 4: GET IMAGE FILES
-    # ============================================================
-    image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')
-    
-    try:
-        image_files = [f for f in os.listdir(source_dir) if f.lower().endswith(image_extensions)]
-        image_files.sort()
-    except Exception as e:
-        error_msg = f"crop_and_moveto_jpgs: Failed to read source directory {source_dir}: {e}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return
-
-    if not image_files:
-        warning_msg = f"crop_and_moveto_jpgs: No images in {source_dir}"
-        print(warning_msg)
-        return
-
-    print(f"Found {len(image_files)} image(s) in {source_dir}\n")
-
-    # ============================================================
-    # STEP 5: PROCESS IMAGES
-    # ============================================================
-    stats = {k: 0 for k in ["total", "saved", "no_border", "border_only", "full_crop", "no_content", "error"]}
-    stats["total"] = len(image_files)
-    processed_files = []
-
-    try:
-        for img_file in image_files:
-            src_path = os.path.join(source_dir, img_file)
-            dst_path = os.path.join(output_dir, img_file)
-
-            print(f"\n{'='*60}")
-            print(f"PROCESSING: {img_file}")
-            print(f"{'='*60}")
-
-            success, action = process_image(src_path, dst_path, CROP_THRESHOLD, CROP_TOP, CROP_BOTTOM)
-            if success:
-                stats["saved"] += 1
-                stats[action] += 1
-                processed_files.append({
-                    "filename": img_file,
-                    "action": action,
-                    "destination": dst_path
-                })
-            else:
-                stats["error"] += 1
-                print(f"[FAILED] Keeping original due to error.")
-    except Exception as e:
-        error_msg = f"crop_and_moveto_jpgs: CRITICAL ERROR during image processing: {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return
-
-    # ============================================================
-    # STEP 6: BUILD OPERATION STATUS MESSAGE
-    # ============================================================
-    operation_parts = [f"crop_and_moveto_jpgs: Processed {stats['total']} images for author '{author}'"]
-    
-    if stats['saved'] > 0:
-        operation_parts.append(f"Successfully processed: {stats['saved']} images")
-        operation_parts.append(f"  • Moved as-is (no crop): {stats['no_border']}")
-        operation_parts.append(f"  • Border crop only: {stats['border_only']}")
-        operation_parts.append(f"  • Full crop (border + fixed): {stats['full_crop']}")
-        operation_parts.append(f"  • No content (all border): {stats['no_content']}")
-        
-        # Add sample of processed files
-        if processed_files:
-            sample_files = processed_files[:3]
-            file_names = [f['filename'] for f in sample_files]
-            file_actions = [f['action'] for f in sample_files]
-            operation_parts.append(f"  • Sample: {', '.join([f'{name} ({action})' for name, action in zip(file_names[:3], file_actions[:3])])}")
-            if len(processed_files) > 3:
-                operation_parts.append(f"  • ... and {len(processed_files) - 3} more files")
-    
-    if stats['error'] > 0:
-        operation_parts.append(f"Errors: {stats['error']} images failed to process")
-    
-    # ============================================================
-    # STEP 7: DETERMINE STATUS
-    # ============================================================
-    if stats['error'] > 0:
-        if stats['saved'] > 0:
-            # Partial success - some images succeeded, some failed
-            status_value = 'pending'  # Stay pending but with warnings
-            operation_parts.append("WARNING: Some images failed to process but others succeeded. Check error logs for details.")
-            print(f"\n⚠️ Partial success - {stats['error']} images failed")
-        else:
-            # All failed - set to aborted
-            status_value = 'aborted'
-            operation_parts.append("ERROR: All images failed to process. Manual intervention required.")
-            print(f"\n❌ All images failed - setting status to 'aborted'")
-    elif stats['saved'] > 0:
-        status_value = 'pending'
-        operation_parts.append("SUCCESS: All images processed successfully.")
-        print(f"\n✅ All images processed successfully")
-    else:
-        status_value = 'pending'
-        operation_parts.append("No images were processed.")
-        print(f"\nℹ️ No images processed")
-
-    operation_msg = '; '.join(operation_parts)
-
-    # ============================================================
-    # STEP 8: FINAL SUMMARY
-    # ============================================================
-    print(f"\n{'='*60}")
-    print(f"FINAL SUMMARY - Author: {author}")
-    print(f"{'='*60}")
-    print(f"Total images: {stats['total']}")
-    print(f"Successfully processed: {stats['saved']}")
-    if stats['saved'] > 0:
-        print(f"  • Moved as-is (no crop):      {stats['no_border']}")
-        print(f"  • Border crop only:           {stats['border_only']}")
-        print(f"  • Full crop (border + fixed): {stats['full_crop']}")
-        print(f"  • No content (all border):    {stats['no_content']}")
-    print(f"Errors: {stats['error']}")
-    print(f"Status set to: {status_value}")
-    print(f"Operation: {operation_msg[:200]}...")
-    print(f"{'='*60}")
-
-    # ============================================================
-    # STEP 9: UPDATE STATUS IN AUTHOR_PATH
-    # ============================================================
-    if update_author_status(status_value, operation_msg):
-        print(f"\n✅ Status updated to '{status_value}' in AUTHOR_PATH")
-    else:
-        print(f"\n⚠️ Failed to update status in AUTHOR_PATH")
-
-    return stats['error'] == 0
-
-def check_single_url(
-    url: str,
-    timeout: int = 30,
-    temp_dir: str | None = None,
-    final_dir: str | None = None,
-) -> Tuple[bool, str, str]:
-    """
-    Downloads a single image, verifies it with Pillow and returns:
-        (is_valid: bool, debug_info: str, saved_path: str)
-
-    The **original URL** is returned unchanged so the caller can store it.
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    ONLY executes if status is 'pending'
-    Sets status to 'aborted' if critical errors occur
-    """
-    import os
-    import json
-    import shutil
-    import requests
-    from PIL import Image
-    from typing import Tuple
-    
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except json.JSONDecodeError:
-            return default if default is not None else {}
-        except Exception:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        """Save JSON file with proper formatting"""
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH"""
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except Exception as e:
-            print(f"Failed to update author status: {e}")
-            return False
-    
-    # ============================================================
-    # STEP 1: LOAD AUTHOR AND CHECK STATUS
-    # ============================================================
-    try:
-        config = load_json_file(AUTHOR_PATH, {})
-        # If config is a list, get the last item
-        if isinstance(config, list) and len(config) > 0:
-            config = config[-1]
-        elif not isinstance(config, dict):
-            error_msg = "check_single_url: Invalid config format in AUTHOR_PATH."
-            print(error_msg)
-            return False, error_msg, ""
-        
-        author = config.get('author', '').strip()
-        if not author:
-            error_msg = "check_single_url: 'author' is missing or empty in config."
-            print(error_msg)
-            return False, error_msg, ""
-    except Exception as e:
-        error_msg = f"check_single_url: Failed to load or parse {AUTHOR_PATH}: {e}"
-        print(error_msg)
-        return False, error_msg, ""
-    
-    # ============================================================
-    # STEP 2: CHECK STATUS - ONLY execute if 'pending'
-    # ============================================================
-    current_status = config.get('status', 'pending')
-    
-    # Also check in dynamic_values if present
-    if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
-        dyn_status = config['dynamic_values'].get('status', 'pending')
-        if dyn_status:
-            current_status = dyn_status
-    
-    # If status is NOT 'pending', skip execution WITHOUT updating anything
-    if current_status != 'pending':
-        print(f"check_single_url: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
-        return False, f"SKIPPED: Status is '{current_status}'", ""
-    
-    print(f"check_single_url: Processing URL for author '{author}' (status: {current_status})")
-    
-    # ============================================================
-    # STEP 3: VALIDATE URL
-    # ============================================================
-    if not url or not isinstance(url, str) or not url.strip():
-        error_msg = "check_single_url: Invalid URL provided - URL is empty or invalid."
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, error_msg, ""
-    
-    url = url.strip()
-    
-    # ============================================================
-    # STEP 4: DOWNLOAD IMAGE
-    # ============================================================
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/91.0.4472.124 Safari/537.36"
-        )
-    }
-    
-    try:
-        print(f"check_single_url: Downloading {url[:100]}...")
-        resp = requests.get(
-            url, headers=headers, timeout=timeout,
-            allow_redirects=True, stream=True
-        )
-        
-        if resp.status_code != 200:
-            error_msg = f"check_single_url: HTTP {resp.status_code} - Failed to download image."
-            print(f"❌ {error_msg}")
-            update_author_status('aborted', error_msg)
-            return False, f"HTTP {resp.status_code}", ""
-            
-    except requests.exceptions.Timeout:
-        error_msg = f"check_single_url: Request timeout after {timeout} seconds."
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, f"Timeout: {timeout}s", ""
-        
-    except requests.exceptions.ConnectionError as e:
-        error_msg = f"check_single_url: Connection error - {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, f"Connection error: {e}", ""
-        
-    except requests.exceptions.InvalidURL as e:
-        error_msg = f"check_single_url: Invalid URL format - {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, f"Invalid URL: {e}", ""
-        
-    except Exception as e:
-        error_msg = f"check_single_url: Request error - {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, f"Request error: {e}", ""
-    
-    # ============================================================
-    # STEP 5: SETUP TEMP DIRECTORY
-    # ============================================================
-    if not temp_dir:
-        error_msg = "check_single_url: temp_dir is required but was not provided."
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, error_msg, ""
-    
-    try:
-        os.makedirs(temp_dir, exist_ok=True)
-    except Exception as e:
-        error_msg = f"check_single_url: Failed to create temp directory {temp_dir}: {e}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, error_msg, ""
-    
-    # ============================================================
-    # STEP 6: BUILD FILENAME AND SAVE
-    # ============================================================
-    base_name = os.path.basename(url.split("?")[0])
-    if not base_name.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-        base_name += ".jpg"
-    
-    temp_path = os.path.join(temp_dir, base_name)
-    root, ext = os.path.splitext(base_name)
-    counter = 1
-    while os.path.exists(temp_path):
-        temp_path = os.path.join(temp_dir, f"{root}_{counter}{ext}")
-        counter += 1
-    
-    # Save to disk
-    try:
-        with open(temp_path, "wb") as f:
-            resp.raw.decode_content = True
-            shutil.copyfileobj(resp.raw, f)
-        print(f"check_single_url: Downloaded to {os.path.basename(temp_path)}")
-    except Exception as e:
-        error_msg = f"check_single_url: Failed to save image - {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, f"Save failed: {e}", ""
-    
-    # ============================================================
-    # STEP 7: VERIFY IMAGE WITH PILLOW
-    # ============================================================
-    try:
-        print(f"check_single_url: Verifying image...")
-        # Verify structure
-        with Image.open(temp_path) as img:
-            img.verify()
-        # Verify load
-        with Image.open(temp_path) as img:
-            img.load()
-            width, height = img.size
-            mode = img.mode
-        print(f"check_single_url: Verified - {width}x{height}, {mode}")
-        
-    except Exception as e:
-        # Delete corrupted file
-        try:
-            os.remove(temp_path)
-            print(f"check_single_url: Deleted corrupted file")
-        except:
-            pass
-        
-        error_msg = f"check_single_url: Image is corrupted or invalid - {str(e)}"
-        print(f"❌ {error_msg}")
-        update_author_status('aborted', error_msg)
-        return False, f"Corrupted image: {e}", ""
-    
-    # ============================================================
-    # STEP 8: MOVE TO FINAL DIRECTORY (if provided)
-    # ============================================================
-    final_path = temp_path
-    
-    if final_dir and final_dir != temp_dir:
-        try:
-            os.makedirs(final_dir, exist_ok=True)
-            dest_name = os.path.basename(temp_path)
-            final_path = os.path.join(final_dir, dest_name)
-            root, ext = os.path.splitext(dest_name)
-            counter = 1
-            while os.path.exists(final_path):
-                final_path = os.path.join(final_dir, f"{root}_{counter}{ext}")
-                counter += 1
-            
-            shutil.move(temp_path, final_path)
-            print(f"check_single_url: Moved to {final_path}")
-            
-        except Exception as e:
-            # Try to clean up temp file
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-            
-            error_msg = f"check_single_url: Failed to move image to final directory - {str(e)}"
-            print(f"❌ {error_msg}")
-            update_author_status('aborted', error_msg)
-            return False, f"Move failed: {e}", ""
-    
-    # ============================================================
-    # STEP 9: SUCCESS - Update status
-    # ============================================================
-    file_size = os.path.getsize(final_path)
-    success_msg = f"check_single_url: Successfully downloaded and verified image - {file_size} bytes, saved to {final_path}"
-    print(f"✅ {success_msg}")
-    
-    # Status remains 'pending' on success
-    update_author_status('pending', success_msg)
-    
-    return True, f"OK → {file_size} bytes at {final_path}", final_path
-
-def markjpgs():
-    """
-    Manages JPG image selection and download process.
-    - Loads config from AUTHOR_PATH
-    - Parses jpgsurl field (comma-separated string of URLs)
-    - Filters out already uploaded URLs
-    - Validates existing files vs required count (cardamount)
-    - Copies valid images to jpgfolders
-    - Updates next_jpgcard.json with selected URLs
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    ONLY executes if status is 'pending'
-    Sets status to 'aborted' if critical errors occur
-    """
-    import os
-    import json
-    import shutil
-    from typing import List, Tuple, Set
     
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling"""
@@ -10009,20 +9088,375 @@ def markjpgs():
             return False
     
     def update_author_status(status_value, operation_message):
-        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
-            # Load the ENTIRE config
             author_data = load_json_file(AUTHOR_PATH, {})
             
-            # Check if the config is a list or dict
             is_list = isinstance(author_data, list)
             
             if is_list:
-                # It's a list - work with the list
                 if not author_data:
                     author_data = [{}]
                 
-                # Get the last config (most recent)
+                if isinstance(author_data[-1], dict):
+                    author_data[-1]['status'] = status_value
+                    author_data[-1]['operation_status'] = f"copy_cropped_to_nextjpg: {operation_message}"
+                    
+                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
+                        author_data[-1]['dynamic_values']['status'] = status_value
+                        author_data[-1]['dynamic_values']['operation_status'] = f"copy_cropped_to_nextjpg: {operation_message}"
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = f"copy_cropped_to_nextjpg: {operation_message}"
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = f"copy_cropped_to_nextjpg: {operation_message}"
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
+            return False
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
+            return False
+    
+    def process_image_with_crop(src_path, dst_path, threshold, crop_top, crop_bottom):
+        """
+        Process image: crop borders if detected, apply fixed crop, save to destination.
+        Returns (success, action_type, filename)
+        """
+        try:
+            print(f"[OPEN] Loading: {os.path.basename(src_path)}")
+            img = Image.open(src_path).convert("RGB")
+            img_array = np.array(img)
+            h, w = img_array.shape[:2]
+            print(f"[INFO] Original size: {w}x{h}")
+
+            gray = np.mean(img_array, axis=2)
+            mask = (gray > threshold) & (gray < (255 - threshold))
+            coords = np.argwhere(mask)
+
+            # Case 1: No content at all
+            if coords.size == 0:
+                print(f"[CHECK] No content (all near black/white). Moving as-is.")
+                img.save(dst_path, quality=95)
+                print(f"[COPIED] As-is → {os.path.basename(dst_path)}")
+                return True, "no_content", os.path.basename(src_path)
+
+            y0, x0 = coords.min(axis=0)
+            y1, x1 = coords.max(axis=0)
+
+            # Case 2: Content fills entire image → no border
+            if x0 == 0 and y0 == 0 and x1 == w - 1 and y1 == h - 1:
+                print(f"[CHECK] No borders detected. Moving as-is.")
+                img.save(dst_path, quality=95)
+                print(f"[COPIED] As-is → {os.path.basename(dst_path)}")
+                return True, "no_border", os.path.basename(src_path)
+
+            # === BORDERS DETECTED ===
+            removed = {'L': x0, 'T': y0, 'R': w - 1 - x1, 'B': h - 1 - y1}
+            content_w = x1 - x0 + 1
+            content_h = y1 - y0 + 1
+            print(f"[BORDER] Removed: L={removed['L']}, T={removed['T']}, R={removed['R']}, B={removed['B']}")
+            print(f"[BORDER] Content: {content_w}x{content_h}")
+
+            cropped = img.crop((x0, y0, x1 + 1, y1 + 1))
+
+            # Apply fixed crop only if enough height
+            if content_h <= crop_top + crop_bottom:
+                print(f"[WARN] Too small for fixed crop. Saving border-cropped only.")
+                cropped.save(dst_path, quality=95)
+                print(f"[SAVED] Border-only → {os.path.basename(dst_path)}")
+                return True, "border_only", os.path.basename(src_path)
+
+            new_top = crop_top
+            new_bottom = content_h - crop_bottom
+            if new_bottom <= new_top:
+                print(f"[WARN] Fixed crop would remove all. Saving border-cropped only.")
+                cropped.save(dst_path, quality=95)
+                print(f"[SAVED] Border-only → {os.path.basename(dst_path)}")
+                return True, "border_only", os.path.basename(src_path)
+
+            final_cropped = cropped.crop((0, new_top, content_w, new_bottom))
+            final_h = new_bottom - new_top
+            print(f"[FIXED] Cropped: {crop_top}px top, {crop_bottom}px bottom → {final_h}px tall")
+            final_cropped.save(dst_path, quality=95)
+            print(f"[SAVED] Fully cropped → {os.path.basename(dst_path)}")
+            return True, "full_crop", os.path.basename(src_path)
+
+        except Exception as e:
+            print(f"[ERROR] Failed: {e}")
+            return False, "error", None
+
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "copy_cropped_to_nextjpg: ERROR - Invalid config format in AUTHOR_PATH."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        current_status = config.get('status', 'pending')
+        
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status == 'aborted':
+            print(f"copy_cropped_to_nextjpg: SKIPPED - Status is 'aborted'. No action taken.")
+            return
+        
+        if current_status != 'pending':
+            print(f"copy_cropped_to_nextjpg: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return
+        
+        print(f"copy_cropped_to_nextjpg: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"copy_cropped_to_nextjpg: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 2: LOAD AUTHOR FROM CONFIG
+    # ============================================================
+    try:
+        author = config.get('author', '').strip()
+        if not author:
+            error_msg = "copy_cropped_to_nextjpg: ERROR - 'author' is missing or empty in config."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        print(f"copy_cropped_to_nextjpg: Author: {author}")
+        
+    except Exception as e:
+        error_msg = f"copy_cropped_to_nextjpg: ERROR - Failed to process config: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 3: SETUP DIRECTORIES USING FILES_ROOT
+    # ============================================================
+    downloaded_dir = os.path.join(FILES_ROOT, "downloaded", author)
+    next_jpg_dir = os.path.join(FILES_ROOT, "next jpg", author)
+    
+    print(f"copy_cropped_to_nextjpg: Downloaded directory: {downloaded_dir}")
+    print(f"copy_cropped_to_nextjpg: Next JPG directory: {next_jpg_dir}")
+    
+    # Create directories if they don't exist
+    try:
+        os.makedirs(next_jpg_dir, exist_ok=True)
+        print(f"copy_cropped_to_nextjpg: Created/verified next jpg directory")
+    except Exception as e:
+        error_msg = f"copy_cropped_to_nextjpg: ERROR - Failed to create next jpg directory {next_jpg_dir}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 4: CHECK DOWNLOADED DIRECTORY
+    # ============================================================
+    if not os.path.exists(downloaded_dir):
+        warning_msg = f"Downloaded directory does not exist: {downloaded_dir}"
+        print(warning_msg)
+        update_author_status('pending', warning_msg)
+        return
+    
+    # Supported image extensions
+    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
+    
+    # Get all image files from downloaded directory
+    try:
+        all_files = os.listdir(downloaded_dir)
+        image_files = [f for f in all_files if f.lower().endswith(image_extensions)]
+        image_files.sort()
+    except Exception as e:
+        error_msg = f"copy_cropped_to_nextjpg: ERROR - Failed to read downloaded directory {downloaded_dir}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    if not image_files:
+        warning_msg = f"No image files found in downloaded directory: {downloaded_dir}"
+        print(warning_msg)
+        update_author_status('pending', warning_msg)
+        return
+    
+    print(f"copy_cropped_to_nextjpg: Found {len(image_files)} image files in downloaded directory")
+    
+    # ============================================================
+    # STEP 5: TAKE THE FIRST IMAGE AND PROCESS IT
+    # ============================================================
+    target_file = image_files[0]
+    src_path = os.path.join(downloaded_dir, target_file)
+    
+    # Generate filename for destination
+    base_name, ext = os.path.splitext(target_file)
+    dest_filename = f"{base_name}.jpg"
+    temp_dst_path = os.path.join(next_jpg_dir, dest_filename)
+    
+    # Ensure unique filename
+    root, ext = os.path.splitext(dest_filename)
+    counter = 1
+    while os.path.exists(temp_dst_path):
+        temp_dst_path = os.path.join(next_jpg_dir, f"{root}_{counter}{ext}")
+        counter += 1
+    
+    print(f"\n{'='*60}")
+    print(f"PROCESSING: {target_file}")
+    print(f"{'='*60}")
+    
+    # ============================================================
+    # STEP 6: PROCESS IMAGE (CROP IF NEEDED)
+    # ============================================================
+    success, action_type, original_filename = process_image_with_crop(
+        src_path, temp_dst_path, CROP_THRESHOLD, CROP_TOP, CROP_BOTTOM
+    )
+    
+    if not success:
+        error_msg = f"Failed to process image: {target_file}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 7: CREATE filename.json BEFORE RENAMING
+    # ============================================================
+    filename_json_path = os.path.join(next_jpg_dir, "filename.json")
+    
+    try:
+        # Load existing filename.json if it exists
+        if os.path.exists(filename_json_path):
+            with open(filename_json_path, 'r', encoding='utf-8') as f:
+                filename_data = json.load(f)
+        else:
+            filename_data = {}
+        
+        # Store the original filename (before renaming to card_x.jpg)
+        filename_data["original_filename"] = os.path.basename(temp_dst_path)
+        filename_data["original_source"] = os.path.basename(src_path)
+        filename_data["action"] = action_type
+        filename_data["timestamp"] = __import__('time').strftime('%Y-%m-%d %H:%M:%S')
+        filename_data["author"] = author
+        
+        with open(filename_json_path, 'w', encoding='utf-8') as f:
+            json.dump(filename_data, f, indent=4)
+        
+        print(f"copy_cropped_to_nextjpg: Created filename.json with: {filename_data}")
+        
+    except Exception as e:
+        error_msg = f"copy_cropped_to_nextjpg: ERROR - Failed to create filename.json: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 8: RENAME TO card_x.jpg
+    # ============================================================
+    dst_path = os.path.join(next_jpg_dir, "card_x.jpg")
+    
+    try:
+        # Remove existing card_x.jpg if it exists
+        if os.path.exists(dst_path):
+            os.remove(dst_path)
+            print(f"copy_cropped_to_nextjpg: Removed existing card_x.jpg")
+        
+        # Rename the processed file to card_x.jpg
+        os.rename(temp_dst_path, dst_path)
+        print(f"copy_cropped_to_nextjpg: RENAMED → card_x.jpg (from {os.path.basename(temp_dst_path)})")
+        
+    except Exception as e:
+        error_msg = f"copy_cropped_to_nextjpg: ERROR - Failed to rename to card_x.jpg: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 9: UPDATE STATUS AND RETURN
+    # ============================================================
+    print(f"\ncopy_cropped_to_nextjpg: COMPLETED SUCCESSFULLY")
+    print(f"  • Source: {src_path}")
+    print(f"  • Destination: {dst_path}")
+    print(f"  • Action: {action_type}")
+    print(f"  • Original filename recorded in filename.json")
+    print(f"  • Source file KEPT in downloaded directory")
+    
+    success_msg = f"Successfully processed '{target_file}' ({action_type}) and copied to card_x.jpg for author '{author}'"
+    update_author_status('pending', success_msg)
+    print(f"copy_cropped_to_nextjpg: {success_msg}")
+
+def randomize_group_types():
+    """
+    Check AUTHOR_PATH for group_types field and manage randomization of group types.
+    
+    This function:
+    1. ONLY executes if status is 'pending'
+    2. Prioritizes group_types over groups/group
+    3. Supports both list format ["group1","group2"] and string format "group1, group2"
+    4. Processes ONLY ONE group at a time
+    5. If group_types has 2+ groups, reset tracker with all groups
+    6. If tracker is empty and group_types has 1 group, use it
+    7. If group_types is empty, check for 'groups' or 'group' fields
+    8. When all groups used, restart the revolution
+    9. group_types is NEVER empty
+    10. Sets status to 'aborted' ONLY on critical errors
+    11. Updates operation_status with success/error messages
+    
+    Returns:
+        bool: True if successful, False if error
+    """
+    
+    def load_json_file(file_path, default=None):
+        """Load JSON file with error handling"""
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                return default if default is not None else {}
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
+            return default if default is not None else {}
+    
+    def save_json_file(file_path, data):
+        """Save JSON file with proper formatting"""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    
+    def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH - PRESERVES ALL DATA AND FORMAT"""
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
                     author_data[-1]['operation_status'] = operation_message
@@ -10031,7 +9465,6 @@ def markjpgs():
                         author_data[-1]['dynamic_values']['status'] = status_value
                         author_data[-1]['dynamic_values']['operation_status'] = operation_message
             else:
-                # It's a dict - work with the dict directly
                 if not isinstance(author_data, dict):
                     author_data = {}
                 
@@ -10042,7 +9475,6 @@ def markjpgs():
                     author_data['dynamic_values']['status'] = status_value
                     author_data['dynamic_values']['operation_status'] = operation_message
             
-            # Save the COMPLETE config back in the same format
             if save_json_file(AUTHOR_PATH, author_data):
                 return True
             return False
@@ -10050,1340 +9482,311 @@ def markjpgs():
             print(f"Failed to update author status: {e}")
             return False
     
-    def parse_jpgs_url_field(jpgs_field):
+    def extract_groups_from_field(value):
         """
-        Parse the jpgsurl field which can be:
-        - A dict: {"username": "url1, url2, url3"}
-        - A string: "url1, url2, url3"
-        Returns: list of URLs
+        Extract groups from a field value that can be either:
+        - String: "group1, group2, group3"
+        - List: ["group1", "group2", "group3"]
+        
+        Returns:
+            list: Extracted groups, or empty list if none found
         """
-        if not jpgs_field:
+        if not value:
             return []
         
-        # If it's a dict, get the values and split
-        if isinstance(jpgs_field, dict):
-            urls = []
-            for key, value in jpgs_field.items():
-                if isinstance(value, str):
-                    # Split by comma and clean
-                    items = [u.strip() for u in value.split(',') if u.strip()]
-                    urls.extend(items)
-                elif isinstance(value, list):
-                    urls.extend(value)
-            return urls
-        
-        # If it's a string, split by comma
-        if isinstance(jpgs_field, str):
-            return [u.strip() for u in jpgs_field.split(',') if u.strip()]
-        
-        return []
+        if isinstance(value, list):
+            # It's already a list
+            return [str(item).strip() for item in value if str(item).strip()]
+        elif isinstance(value, str):
+            # It's a string - split by comma
+            return [g.strip() for g in value.split(',') if g.strip()]
+        else:
+            return []
     
-    def filename_from_url(url: str) -> str:
-        """Extract filename from URL"""
-        return os.path.basename(url.split("?")[0])
+    def get_groups_from_config(config):
+        """
+        Get groups from config with priority:
+        1. group_types (highest priority)
+        2. groups
+        3. group (lowest priority)
+        
+        Returns:
+            tuple: (source_field_name, groups_list)
+        """
+        # Priority 1: group_types
+        if 'group_types' in config:
+            group_types_value = config.get('group_types')
+            groups = extract_groups_from_field(group_types_value)
+            if groups:
+                return ('group_types', groups)
+        
+        # Priority 2: groups
+        if 'groups' in config:
+            groups_value = config.get('groups')
+            groups = extract_groups_from_field(groups_value)
+            if groups:
+                return ('groups', groups)
+        
+        # Priority 3: group
+        if 'group' in config:
+            group_value = config.get('group')
+            groups = extract_groups_from_field(group_value)
+            if groups:
+                return ('group', groups)
+        
+        # No groups found
+        return (None, [])
     
     # ============================================================
-    # STEP 1: CHECK STATUS FIRST - BEFORE ANYTHING ELSE
+    # STEP 1: LOAD AND CHECK STATUS - ONLY execute if 'pending'
     # ============================================================
     try:
-        config_data = load_json_file(AUTHOR_PATH, {})
+        author_data = load_json_file(AUTHOR_PATH, {})
         
         # Handle both list and dict formats
-        if isinstance(config_data, list) and len(config_data) > 0:
-            config = config_data[-1]  # Use the last config in the list
-            config_is_list = True
-        elif isinstance(config_data, dict):
-            config = config_data
-            config_is_list = False
+        if isinstance(author_data, list) and len(author_data) > 0:
+            config = author_data[-1]
+            is_list_format = True
+        elif isinstance(author_data, dict):
+            config = author_data
+            is_list_format = False
         else:
-            error_msg = "markjpgs: ERROR - Invalid config format in AUTHOR_PATH."
+            error_msg = "randomize_group_types: ERROR - Invalid config format in AUTHOR_PATH."
             print(error_msg)
             update_author_status('aborted', error_msg)
-            return
+            return False
         
-        # Get current status - if not 'pending', skip WITHOUT updating
+        # Check status - only proceed if 'pending'
         current_status = config.get('status', 'pending')
         
-        # Also check in dynamic_values if present
         if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
             dyn_status = config['dynamic_values'].get('status', 'pending')
             if dyn_status:
                 current_status = dyn_status
         
-        # If status is NOT 'pending', skip execution WITHOUT updating anything
         if current_status != 'pending':
-            print(f"markjpgs: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
-            return
+            return False
         
-        print(f"markjpgs: Status is 'pending' - proceeding...")
+        print(f"randomize_group_types: Status is 'pending' - proceeding...")
         
     except Exception as e:
-        error_msg = f"markjpgs: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        error_msg = f"randomize_group_types: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
-        return
+        return False
     
     # ============================================================
-    # STEP 2: LOAD CONFIG DETAILS
+    # STEP 2: GET GROUPS FROM CONFIG WITH PRIORITY
     # ============================================================
     try:
-        author = config.get('author', '').strip()
-        if not author:
-            error_msg = "markjpgs: ERROR - 'author' is missing or empty in config."
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
+        # Get groups with priority (group_types > groups > group)
+        source_field, current_groups = get_groups_from_config(config)
         
-        # Get cardamount - ensure it's an integer
-        try:
-            cardamount = max(1, int(config.get('cardamount', 1)))
-        except (ValueError, TypeError):
-            print("markjpgs: Warning: Invalid cardamount. Using 1.")
-            cardamount = 1
+        if not current_groups:
+            # No groups found in any field
+            msg = "randomize_group_types: No groups found in group_types, groups, or group fields."
+            print(msg)
+            update_author_status('pending', msg)
+            return False
         
-        # Get jpgsurl field - try both 'jpgsurl' and 'Jpgsurl'
-        jpgs_field = config.get('jpgsurl', '')
-        if not jpgs_field:
-            jpgs_field = config.get('Jpgsurl', '')
+        print(f"randomize_group_types: Using '{source_field}' as source: {current_groups}")
         
-        if not jpgs_field:
-            error_msg = f"markjpgs: ERROR - 'jpgsurl' field is missing or empty in config for author '{author}'."
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
+        # Get tracker
+        tracker = config.get('randomizing_group_tracker', {})
         
-        print(f"markjpgs: Found jpgsurl field for author '{author}'")
-        
-        # Parse the jpgsurl field
-        all_image_urls = parse_jpgs_url_field(jpgs_field)
-        if not all_image_urls:
-            error_msg = f"markjpgs: ERROR - Could not parse 'jpgsurl' field for author '{author}'. No valid URLs found."
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-        
-        print(f"markjpgs: Found {len(all_image_urls)} image URLs for author '{author}'")
-        
-    except Exception as e:
-        error_msg = f"markjpgs: ERROR - Failed to process config: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 3: SETUP DIRECTORIES USING GLOBAL PATHS
-    # ============================================================
-    jpgfolders_dir = os.path.join(FILES_ROOT, "jpgfolders", author)
-    next_json_dir = os.path.join(FILES_ROOT, "next jpg", author)
-    download_dir = os.path.join(FILES_ROOT, "downloaded", author)
-    uploaded_json_path = os.path.join(FILES_ROOT, "uploaded jpgs", author, "uploadedjpgs.json")
-    next_json_path = os.path.join(next_json_dir, 'next_jpgcard.json')
-    
-    # Create directories
-    for d in [jpgfolders_dir, next_json_dir, download_dir]:
-        try:
-            os.makedirs(d, exist_ok=True)
-        except Exception as e:
-            error_msg = f"markjpgs: ERROR - Failed to create directory {d}: {e}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-    
-    # ============================================================
-    # STEP 4: LOAD UPLOADED URLs - SKIP ALREADY ARCHIVED
-    # ============================================================
-    uploaded_urls = set()
-    if os.path.exists(uploaded_json_path):
-        try:
-            data = load_json_file(uploaded_json_path, {})
-            raw = data.get("uploaded_jpgs", [])
+        # ============================================================
+        # STEP 3: HANDLE EMPTY OR INVALID GROUPS
+        # ============================================================
+        if not current_groups:
+            # Clear tracker if no groups
+            print("randomize_group_types: No valid groups found. Clearing tracker...")
+            config['group_types'] = ''  # Clear main field
+            config['randomizing_group_tracker'] = {}
             
-            if isinstance(raw, str):
-                items = [u.strip() for u in raw.strip().split(',') if u.strip()]
-            elif isinstance(raw, list):
-                items = [str(u).strip() for u in raw if u]
+            if is_list_format:
+                author_data[-1] = config
             else:
-                items = []
+                author_data = config
             
-            uploaded_urls = set(items)
-            print(f"markjpgs: Loaded {len(uploaded_urls)} already-uploaded URLs")
-        except Exception as e:
-            print(f"markjpgs: Warning - Could not read uploadedjpgs.json: {e}")
-    
-    # ============================================================
-    # STEP 5: FILTER OUT UPLOADED URLs
-    # ============================================================
-    original_count = len(all_image_urls)
-    candidate_urls = [u for u in all_image_urls if u not in uploaded_urls]
-    skipped = original_count - len(candidate_urls)
-    print(f"markjpgs: {len(candidate_urls)} new URLs available ({skipped} already uploaded)")
-    
-    if len(candidate_urls) < cardamount:
-        error_msg = f"markjpgs: ERROR - Only {len(candidate_urls)} NEW URLs available, need {cardamount}. Not enough images."
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 6: LOAD EXISTING next_jpgcard.json
-    # ============================================================
-    next_urls = []
-    if os.path.exists(next_json_path):
-        try:
-            data = load_json_file(next_json_path, {})
-            next_urls = data.get("next_jpgcard", [])
-            if not isinstance(next_urls, list):
-                next_urls = []
-            # Filter out uploaded URLs from next list
-            next_urls = [u for u in next_urls if u not in uploaded_urls]
-            print(f"markjpgs: Loaded {len(next_urls)} URL(s) from next_jpgcard.json")
-        except Exception as e:
-            print(f"markjpgs: Warning - Could not read next_jpgcard.json: {e}")
-            next_urls = []
-    
-    # ============================================================
-    # STEP 7: COUNT FILES IN jpgfolders
-    # ============================================================
-    image_exts = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
-    try:
-        existing_files = [
-            f for f in os.listdir(jpgfolders_dir)
-            if f.lower().endswith(image_exts) and os.path.isfile(os.path.join(jpgfolders_dir, f))
-        ]
-        file_count = len(existing_files)
-        print(f"markjpgs: Found {file_count} image(s) in jpgfolders")
-    except Exception as e:
-        error_msg = f"markjpgs: ERROR - Failed to read jpgfolders directory {jpgfolders_dir}: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 8: VALIDATION - Check if perfect sync
-    # ============================================================
-    url_filenames = {filename_from_url(u) for u in next_urls}
-    file_names = set(existing_files)
-    
-    files_match_urls = file_names == url_filenames
-    url_count_ok = len(next_urls) == cardamount
-    file_count_ok = file_count == cardamount
-    
-    print("\nmarkjpgs: VALIDATION CHECK:")
-    print(f"  • Required count         : {cardamount}")
-    print(f"  • Files in folder        : {file_count}")
-    print(f"  • URLs in JSON           : {len(next_urls)}")
-    print(f"  • 1:1 filename match     : {'YES' if files_match_urls else 'NO'}")
-    
-    # ============================================================
-    # STEP 9: DECISION - Perfect sync or rebuild
-    # ============================================================
-    if file_count_ok and url_count_ok and files_match_urls:
-        print("\nmarkjpgs: PERFECT MATCH – skipping download.")
-        success_msg = f"markjpgs: Perfect match found for author '{author}' - {cardamount} images ready (skipped download)"
-        update_author_status('pending', success_msg)
-        return
-    
-    # Mismatch detected - wipe and rebuild
-    reasons = []
-    if not file_count_ok:
-        reasons.append(f"File count ({file_count} ≠ {cardamount})")
-    if not url_count_ok:
-        reasons.append(f"URL count ({len(next_urls)} ≠ {cardamount})")
-    if not files_match_urls:
-        reasons.append("Filename mismatch")
-    
-    print("\nmarkjpgs: MISMATCH DETECTED:")
-    for r in reasons:
-        print(f"  → {r}")
-    
-    # ============================================================
-    # STEP 10: WIPE EXISTING FILES AND RESET
-    # ============================================================
-    print("markjpgs: Wiping jpgfolders and resetting next_jpgcard.json...")
-    
-    # Delete all files in jpgfolders
-    for f in existing_files:
-        try:
-            os.remove(os.path.join(jpgfolders_dir, f))
-        except Exception as e:
-            print(f"  markjpgs: Warning - Could not delete {f}: {e}")
-    
-    # Delete all files in download_dir
-    try:
-        for f in os.listdir(download_dir):
-            p = os.path.join(download_dir, f)
-            if os.path.isfile(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    
-    # Reset next_jpgcard.json
-    try:
-        save_json_file(next_json_path, {"next_jpgcard": []})
-        print("  markjpgs: [RESET] next_jpgcard.json")
-    except Exception as e:
-        error_msg = f"markjpgs: ERROR - Failed to reset next_jpgcard.json: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 11: SELECT AND COPY NEW IMAGES
-    # ============================================================
-    print(f"\nmarkjpgs: Selecting {cardamount} images...")
-    
-    # Select the first N candidate URLs
-    selected_urls = candidate_urls[:cardamount]
-    
-    # Track successful copies
-    successful_urls = []
-    successful_files = []
-    failed_files = []
-    
-    for i, url in enumerate(selected_urls, 1):
-        print(f"[{i}/{cardamount}] Processing: {url[:80]}...")
-        
-        # Get filename from URL
-        dest_name = filename_from_url(url)
-        if not dest_name:
-            failed_files.append((url, "Could not extract filename"))
-            continue
-        
-        # Determine source path
-        src_path = None
-        
-        # Try to find the file in FILES_ROOT
-        if not url.startswith(('http://', 'https://')):
-            # It's a relative path - try to find it
-            possible_paths = [
-                os.path.join(FILES_ROOT, url),  # Direct path
-                os.path.join(FILES_ROOT, "jpgs", author, dest_name),  # In jpgs folder
-                os.path.join(FILES_ROOT, "uploaded jpgs", author, dest_name),  # In uploaded folder
-            ]
-            
-            for path in possible_paths:
-                if os.path.exists(path):
-                    src_path = path
-                    break
-        
-        if not src_path:
-            # Try to find by filename in common locations
-            search_dirs = [
-                os.path.join(FILES_ROOT, "jpgs", author),
-                os.path.join(FILES_ROOT, "uploaded jpgs", author),
-                os.path.join(FILES_ROOT, "jpgfolders", author),
-            ]
-            for search_dir in search_dirs:
-                if os.path.exists(search_dir):
-                    for f in os.listdir(search_dir):
-                        if f.lower() == dest_name.lower():
-                            src_path = os.path.join(search_dir, f)
-                            break
-                    if src_path:
-                        break
-        
-        if not src_path:
-            failed_files.append((url, f"Source file not found: {dest_name}"))
-            print(f"  ❌ [FAILED] Source file not found: {dest_name}")
-            continue
-        
-        # Copy to jpgfolders
-        dest_path = os.path.join(jpgfolders_dir, dest_name)
-        
-        # Handle duplicates in destination
-        root, ext = os.path.splitext(dest_name)
-        counter = 1
-        while os.path.exists(dest_path):
-            dest_path = os.path.join(jpgfolders_dir, f"{root}_{counter}{ext}")
-            counter += 1
-        
-        try:
-            shutil.copy2(src_path, dest_path)
-            successful_urls.append(url)
-            successful_files.append((url, dest_path))
-            print(f"  ✅ [SUCCESS] Copied to {os.path.basename(dest_path)}")
-        except Exception as e:
-            failed_files.append((url, f"Copy failed: {e}"))
-            print(f"  ❌ [FAILED] Copy failed: {e}")
-    
-    # ============================================================
-    # STEP 12: CHECK IF WE HAVE ENOUGH IMAGES
-    # ============================================================
-    if len(successful_urls) < cardamount:
-        error_msg = f"markjpgs: ERROR - Only {len(successful_urls)}/{cardamount} images were successfully copied."
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 13: SAVE next_jpgcard.json
-    # ============================================================
-    try:
-        save_json_file(next_json_path, {"next_jpgcard": successful_urls})
-        print(f"\nmarkjpgs: SUCCESS - Saved {len(successful_urls)} URLs to next_jpgcard.json")
-    except Exception as e:
-        error_msg = f"markjpgs: ERROR - Failed to save next_jpgcard.json: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # ============================================================
-    # STEP 14: FINAL REPORT & STATUS UPDATE
-    # ============================================================
-    print("\n" + "="*80)
-    print("markjpgs: COMPLETED SUCCESSFULLY")
-    print("="*80)
-    print(f"Author             : {author}")
-    print(f"Required           : {cardamount}")
-    print(f"Total Available    : {len(all_image_urls)}")
-    print(f"Skipped (uploaded) : {skipped}")
-    print(f"Selected           : {len(selected_urls)}")
-    print(f"Successfully Copied: {len(successful_urls)}")
-    print(f"Failed             : {len(failed_files)}")
-    print(f"jpgfolders         : {jpgfolders_dir}")
-    print(f"JSON Path          : {next_json_path}")
-    print("="*80)
-    
-    if failed_files:
-        print("\nmarkjpgs: FAILED FILES:")
-        for url, err in failed_files[:5]:
-            print(f"  • {filename_from_url(url)}: {err}")
-        if len(failed_files) > 5:
-            print(f"  ... and {len(failed_files) - 5} more")
-    
-    # Build operation message
-    operation_parts = [
-        f"markjpgs: Processed {cardamount} images for author '{author}'",
-        f"Available: {len(candidate_urls)} new URLs",
-        f"Skipped: {skipped} already uploaded",
-        f"Selected: {len(selected_urls)}",
-        f"Copied: {len(successful_urls)} to jpgfolders"
-    ]
-    
-    if failed_files:
-        operation_parts.append(f"WARNING: {len(failed_files)} files failed to copy")
-        operation_parts.append("Some images could not be processed. Check logs for details.")
-        status_value = 'pending'  # Still pending but with warnings
-    else:
-        operation_parts.append("SUCCESS: All required images processed successfully")
-        status_value = 'pending'
-    
-    operation_msg = '; '.join(operation_parts)
-    update_author_status(status_value, operation_msg)
-    print(f"\n✅ Status updated to '{status_value}'")
-        
-def orderjpgs():
-    """
-    Orders JPG files in the directory, renames them sequentially, and updates card_x.jpg.
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json
-    import re
-    import shutil
-    from datetime import datetime
-    from PIL import Image
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            if save_json_file(AUTHOR_PATH, author_data):
+                msg = "randomize_group_types: No valid groups found. Tracker cleared."
+                print(msg)
+                update_author_status('pending', msg)
+                return False
             else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    if current_status == 'aborted':
-        print(f"orderjpgs: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"orderjpgs: SKIPPED - Status is 'aborted'. No action taken.")
-        return
-
-    print(f"orderjpgs: Starting JPG ordering process")
-    update_author_status('pending', f"orderjpgs: Starting JPG ordering process")
-    
-    # Load configuration from JSON
-    try:
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
-        author = config['author']
-        processjpgfrom = config.get('processjpgfrom', 'freshjpgs')
-        freshjpgs_directory = config['inputpath'].replace('authorvalue', author)
-        output_dir = config['outputpath'].replace('authorvalue', author)
-    except Exception as e:
-        error_msg = f"orderjpgs: ERROR - Failed to load or parse {JSON_CONFIG_PATH}: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # Verify that output path ends with the author folder
-    if not output_dir.endswith(author):
-        error_msg = f"orderjpgs: ERROR - outputpath ({output_dir}) does not end with author folder '{author}'"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    # Create output directory if it doesn't exist
-    if not os.path.exists(output_dir):
-        try:
-            os.makedirs(output_dir)
-            print(f"Created output directory: {output_dir}")
-        except Exception as e:
-            error_msg = f"orderjpgs: ERROR - Failed to create output directory {output_dir}: {e}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-    
-    # Supported image extensions
-    image_extensions = {'.jpg', '.png', '.jpeg', '.bmp', '.gif', '.tiff'}
-    directory = None
-    
-    # === HANDLE uploadedjpgs LOGIC ===
-    if processjpgfrom == 'uploadedjpgs':
-        base_uploaded_path = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\uploaded jpgs\\{author}"
-        if not os.path.exists(base_uploaded_path):
-            print(f"Base uploaded jpgs directory does not exist: {base_uploaded_path}")
-            processjpgfrom = 'freshjpgs'
-            directory = freshjpgs_directory
-        else:
-            date_folders = []
-            for f in os.listdir(base_uploaded_path):
-                folder_path = os.path.join(base_uploaded_path, f)
-                if os.path.isdir(folder_path):
-                    try:
-                        datetime.strptime(f, "%d-%B-%Y")
-                        date_folders.append(f)
-                    except ValueError:
-                        print(f"Skipping invalid date folder: {f}")
-            if not date_folders:
-                # No valid date folders → check root for files
-                base_files = [f for f in os.listdir(base_uploaded_path) if f.lower().endswith(tuple(image_extensions))]
-                if base_files:
-                    today_folder = datetime.now().strftime("%d-%B-%Y")
-                    today_path = os.path.join(base_uploaded_path, today_folder)
-                    os.makedirs(today_path, exist_ok=True)
-                    for file in base_files:
-                        src = os.path.join(base_uploaded_path, file)
-                        dst = os.path.join(today_path, file)
-                        shutil.move(src, dst)
-                        print(f"Moved {file} → {today_folder}/")
-                    date_folders.append(today_folder)
-                else:
-                    print(f"No images in base uploaded folder. Falling back to freshjpgs.")
-                    processjpgfrom = 'freshjpgs'
-                    directory = freshjpgs_directory
-            else:
-                # Sort date folders: oldest first
-                date_folders.sort(key=lambda x: datetime.strptime(x, "%d-%B-%Y"))
-                # Look for first folder with >20 images
-                for date_folder in date_folders:
-                    dir_path = os.path.join(base_uploaded_path, date_folder)
-                    img_files = [f for f in os.listdir(dir_path) if f.lower().endswith(tuple(image_extensions))]
-                    if len(img_files) > 20:
-                        directory = dir_path
-                        print(f"Selected directory with {len(img_files)} images: {directory}")
-                        break
-                # If none >20, consolidate into oldest folder
-                if not directory:
-                    oldest_folder = date_folders[0]
-                    oldest_path = os.path.join(base_uploaded_path, oldest_folder)
-                    os.makedirs(oldest_path, exist_ok=True)
-                    # Move all root-level images into oldest folder
-                    root_files = [f for f in os.listdir(base_uploaded_path) if f.lower().endswith(tuple(image_extensions))]
-                    for file in root_files:
-                        src = os.path.join(base_uploaded_path, file)
-                        dst = os.path.join(oldest_path, file)
-                        shutil.move(src, dst)
-                        print(f"Moved {file} → {oldest_folder}/")
-                    # Re-check count
-                    final_files = [f for f in os.listdir(oldest_path) if f.lower().endswith(tuple(image_extensions))]
-                    if len(final_files) > 20:
-                        directory = oldest_path
-                        print(f"Consolidated into {oldest_folder} with {len(final_files)} images.")
-                    else:
-                        print(f"Even after consolidation, <=20 images. Falling back to freshjpgs.")
-                        processjpgfrom = 'freshjpgs'
-                        directory = freshjpgs_directory
-    
-    # === FALLBACK TO freshjpgs ===
-    if processjpgfrom == 'freshjpgs':
-        directory = freshjpgs_directory
-        if not directory.endswith(author):
-            error_msg = f"orderjpgs: ERROR - input directory ({directory}) does not end with author folder '{author}'"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-    
-    # Final directory validation
-    if not directory or not os.path.exists(directory):
-        error_msg = f"orderjpgs: ERROR - Invalid or missing directory: {directory}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    image_files = [f for f in os.listdir(directory) if f.lower().endswith(tuple(image_extensions))]
-    if not image_files:
-        warning_msg = f"orderjpgs: WARNING - No image files found in {directory}"
-        print(warning_msg)
-        update_author_status('pending', warning_msg)
-        return
-    
-    # === STEP 1: Parse existing card_N.jpg numbers ===
-    existing_numbers = []
-    for file in image_files:
-        match = re.match(r'card_(\d+)\.jpg$', file, re.IGNORECASE)
-        if match:
-            existing_numbers.append(int(match.group(1)))
-    highest_num = max(existing_numbers) if existing_numbers else 0
-    existing_numbers.sort()
-    
-    # Find isolated low numbers (before first big gap)
-    isolated_numbers = []
-    for i in range(len(existing_numbers) - 1):
-        if existing_numbers[i + 1] - existing_numbers[i] > 1:
-            isolated_numbers = existing_numbers[:i + 1]
-            break
-    else:
-        # No gap found → all are sequential from 1
-        if existing_numbers and existing_numbers[0] == 1:
-            isolated_numbers = []
-    
-    next_num = highest_num + 1
-    all_card_numbers = [n for n in existing_numbers if n not in isolated_numbers]
-    
-    # === STEP 2: Move isolated low cards to the end ===
-    for num in sorted(isolated_numbers):
-        old_name = f'card_{num}.jpg'
-        new_name = f'card_{next_num}.jpg'
-        old_path = os.path.join(directory, old_name)
-        new_path = os.path.join(directory, new_name)
-        while os.path.exists(new_path):
-            next_num += 1
-            new_name = f'card_{next_num}.jpg'
-            new_path = os.path.join(directory, new_name)
-        os.rename(old_path, new_path)
-        print(f"Renamed {old_name} → {new_name}")
-        all_card_numbers.append(next_num)
-        next_num += 1
-    
-    # === STEP 3: Rename unnumbered .jpg files ===
-    non_card_jpgs = [
-        f for f in image_files
-        if f.lower().endswith('.jpg') and not re.match(r'card_\d+\.jpg$', f, re.IGNORECASE)
-    ]
-    non_card_jpgs.sort()
-    for file in non_card_jpgs:
-        old_path = os.path.join(directory, file)
-        new_name = f'card_{next_num}.jpg'
-        new_path = os.path.join(directory, new_name)
-        while os.path.exists(new_path):
-            next_num += 1
-            new_name = f'card_{next_num}.jpg'
-            new_path = os.path.join(directory, new_name)
-        os.rename(old_path, new_path)
-        print(f"Renamed {file} → {new_name}")
-        all_card_numbers.append(next_num)
-        next_num += 1
-    
-    # === STEP 4: Convert & rename non-JPG images ===
-    non_jpg_images = [
-        f for f in image_files
-        if f.lower().endswith(tuple(image_extensions - {'.jpg'}))
-    ]
-    non_jpg_images.sort()
-    for file in non_jpg_images:
-        old_path = os.path.join(directory, file)
-        new_name = f'card_{next_num}.jpg'
-        new_path = os.path.join(directory, new_name)
-        while os.path.exists(new_path):
-            next_num += 1
-            new_name = f'card_{next_num}.jpg'
-            new_path = os.path.join(directory, new_name)
-        try:
-            with Image.open(old_path) as img:
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    img = img.convert('RGB')
-                img.save(new_path, 'JPEG', quality=95)
-            os.remove(old_path)
-            print(f"Converted {file} → {new_name}")
-            all_card_numbers.append(next_num)
-            next_num += 1
-        except Exception as e:
-            print(f"Failed to convert {file}: {e}")
-    
-    # === STEP 5: ALWAYS REPLACE card_x.jpg (NO JSON WRITING) ===
-    if all_card_numbers:
-        lowest_num = min(all_card_numbers)
-        lowest_card = f'card_{lowest_num}.jpg'
-        src_path = os.path.join(directory, lowest_card)
-        dst_path = os.path.join(output_dir, 'card_x.jpg')
-        # Always overwrite card_x.jpg
-        try:
-            if os.path.exists(dst_path):
-                os.remove(dst_path)
-                print(f"Removed existing card_x.jpg")
-            shutil.copy2(src_path, dst_path)
-            print(f"Replaced → card_x.jpg (from {lowest_card})")
-        except Exception as e:
-            error_msg = f"orderjpgs: ERROR - Failed to replace card_x.jpg: {e}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-    else:
-        warning_msg = "orderjpgs: WARNING - No card images processed. Nothing to output."
-        print(warning_msg)
-        update_author_status('pending', warning_msg)
-        return
-    
-    success_msg = f"orderjpgs: Successfully ordered {len(all_card_numbers)} images for author '{author}'"
-    update_author_status('pending', success_msg)
-    print(f"orderjpgs: {success_msg}")
-
-def move_card_needed():
-    """
-    1. Archives the existing 'card_x.jpg' (the old finished task).
-    2. Takes the NEXT image from 'downloaded' and moves it to 'next jpg' as 'card_x.jpg'.
-    3. No longer needs 'card_needed' config—it is strictly 1-at-a-time.
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json
-    import shutil
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    if current_status == 'aborted':
-        print(f"move_card_needed: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"move_card_needed: SKIPPED - Status is 'aborted'. No action taken.")
-        return
-
-    print(f"move_card_needed: Starting card move process")
-    update_author_status('pending', f"move_card_needed: Starting card move process")
-    
-    # === 1. ARCHIVE THE OLD CARD FIRST ===
-    # This clears the slot for the new 'card_x.jpg'
-    archive_processed_card()
-
-    # === 2. SETUP FOR NEW MOVE ===
-    config_path = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
-    base_files_dir = r"C:\xampp\htdocs\AI automation\serenum\files"
-
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        author = config.get('author', '').strip()
-    except Exception as e:
-        error_msg = f"move_card_needed: ERROR - Failed to load config: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    if not author:
-        error_msg = "move_card_needed: ERROR - No author found in config"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    # Path to look for raw downloads
-    source_dir = os.path.join(base_files_dir, "downloaded", author)
-    # Target path: Moving directly to 'next jpg' as the ready-to-upload file
-    destination_dir = os.path.join(base_files_dir, "next jpg", author)
-
-    if not os.path.exists(source_dir):
-        warning_msg = f"move_card_needed: WARNING - Source dir not found: {source_dir}"
-        print(warning_msg)
-        update_author_status('pending', warning_msg)
-        return
-
-    os.makedirs(destination_dir, exist_ok=True)
-
-    # Find available images
-    image_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')
-    available_files = sorted([f for f in os.listdir(source_dir) if f.lower().endswith(image_extensions)])
-
-    if not available_files:
-        print(f"[INFO] No fresh images in 'downloaded' for {author}. Queue empty.")
-        update_author_status('pending', f"move_card_needed: No fresh images in downloaded for {author}")
-        return
-
-    # TAKE THE FIRST IMAGE
-    target_filename = available_files[0]
-    src_path = os.path.join(source_dir, target_filename)
-    
-    # RENAME TO card_x.jpg during the move
-    dst_path = os.path.join(destination_dir, "card_x.jpg")
-
-    try:
-        shutil.move(src_path, dst_path)
-        print(f"\n[NEW CARD READY]")
-        print(f"  Source: {target_filename}")
-        print(f"  Target: {dst_path}")
-        success_msg = f"move_card_needed: Successfully moved '{target_filename}' to card_x.jpg for {author}"
-        update_author_status('pending', success_msg)
-    except Exception as e:
-        error_msg = f"move_card_needed: ERROR - Failed to move and rename: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    print(f"[SUCCESS] System ready for selectmedia().")
-
-def archive_processed_card():
-    """
-    Specifically looks for 'card_x.jpg' in 'next jpg'.
-    Archives the URL and moves the physical file to the dated folder.
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json
-    import shutil
-    from datetime import datetime
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    if current_status == 'aborted':
-        print(f"archive_processed_card: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"archive_processed_card: SKIPPED - Status is 'aborted'. No action taken.")
-        return
-
-    print(f"archive_processed_card: Starting archive process")
-    update_author_status('pending', f"archive_processed_card: Starting archive process")
-    
-    config_path = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
-    base_dir = r"C:\xampp\htdocs\AI automation\serenum\files"
-    
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        author = config.get('author', '').strip()
-    except Exception as e:
-        error_msg = f"archive_processed_card: ERROR - Failed to load config: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    if not author:
-        error_msg = "archive_processed_card: ERROR - No author found in config"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    # Paths
-    next_dir = os.path.join(base_dir, "next jpg", author)
-    uploaded_base = os.path.join(base_dir, "uploaded jpgs", author)
-    today_str = datetime.now().strftime("%d-%B-%Y")
-    archive_dir = os.path.join(uploaded_base, today_str)
-    
-    next_json = os.path.join(next_dir, 'next_jpgcard.json')
-    history_json = os.path.join(uploaded_base, 'uploadedjpgs.json')
-
-    # --- PART A: ARCHIVE THE URL ---
-    url_archived = False
-    if os.path.exists(next_json):
-        try:
-            with open(next_json, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            pending = data.get("next_jpgcard", [])
-            if pending:
-                finished_url = pending[0] if isinstance(pending, list) else pending
-                remaining = pending[1:] if isinstance(pending, list) else []
-                
-                # Update history (comma-separated string)
-                history_urls = []
-                if os.path.exists(history_json):
-                    with open(history_json, 'r', encoding='utf-8') as f:
-                        h_data = json.load(f)
-                        raw = h_data.get("uploaded_jpgs", "")
-                        history_urls = [u.strip() for u in raw.split(',') if u.strip()]
-                
-                if finished_url not in history_urls:
-                    history_urls.append(finished_url)
-
-                with open(history_json, 'w', encoding='utf-8') as f:
-                    json.dump({"uploaded_jpgs": ",".join(history_urls), "author": author}, f, indent=4)
-                
-                # Update next_jpgcard list
-                data["next_jpgcard"] = remaining
-                with open(next_json, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4)
-                print(f"[ARCHIVE] URL stored for: {author}")
-                url_archived = True
-        except Exception as e:
-            error_msg = f"archive_processed_card: ERROR - URL archive failed: {e}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-
-    # --- PART B: ARCHIVE THE PHYSICAL card_x.jpg ---
-    card_file = os.path.join(next_dir, "card_x.jpg")
-    
-    if os.path.exists(card_file):
-        os.makedirs(archive_dir, exist_ok=True)
+                error_msg = "randomize_group_types: ERROR - Failed to save config after clearing tracker."
+                print(error_msg)
+                update_author_status('aborted', error_msg)
+                return False
         
-        # Use a timestamp for the archived filename so you can see history
-        timestamp_name = f"archived_{datetime.now().strftime('%H%M%S')}_card.jpg"
-        dst_archive_path = os.path.join(archive_dir, timestamp_name)
+        print(f"randomize_group_types: Current groups: {current_groups}")
         
-        try:
-            shutil.move(card_file, dst_archive_path)
-            print(f"  [ARCHIVE JPG] card_x.jpg -> {archive_dir}")
-            success_msg = f"archive_processed_card: Successfully archived card_x.jpg for {author}"
-            update_author_status('pending', success_msg)
-        except Exception as e:
-            error_msg = f"archive_processed_card: ERROR - JPG archive failed: {e}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return
-    else:
-        print("[INFO] No 'card_x.jpg' found to archive. Skipping file move.")
-        update_author_status('pending', f"archive_processed_card: No card_x.jpg to archive for {author}")
+        # ============================================================
+        # STEP 4: DECIDE SOURCE OF TRUTH
+        # ============================================================
+        tracker_groups = tracker.get('original_groups', [])
+        should_reset = False
         
-def sync_last_schedule_between_groups():
-    """
-    PURE DATA COPY ONLY.
-    - If post_filter == 'uk' → copy others → uk (last_schedule only)
-    - If post_filter == 'others' → copy uk → others (last_schedule only)
-    Overwrites destination file. No other actions.
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
+        # Condition 1: If group_types has 2+ groups, reset tracker
+        if len(current_groups) >= 2:
+            should_reset = True
+            print(f"randomize_group_types: Source has {len(current_groups)} groups. Resetting tracker...")
+            groups_to_process = current_groups
             
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    if current_status == 'aborted':
-        print(f"sync_last_schedule_between_groups: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"sync_last_schedule_between_groups: SKIPPED - Status is 'aborted'. No action taken.")
-        return
-
-    print(f"sync_last_schedule_between_groups: Starting sync process")
-    update_author_status('pending', f"sync_last_schedule_between_groups: Starting sync process")
-
-    # 1. Read config
-    config_path = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            cfg = json.load(f)
-    except Exception as e:
-        error_msg = f"sync_last_schedule_between_groups: ERROR - Failed to load config: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    author = cfg.get('author')
-    post_filter = cfg.get('post_filter', '').strip().lower()
-    
-    if not author:
-        error_msg = "sync_last_schedule_between_groups: ERROR - No author found in config"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-    
-    if post_filter not in ['uk', 'others']:
-        warning_msg = f"sync_last_schedule_between_groups: WARNING - post_filter '{post_filter}' not in ['uk', 'others']. Skipping."
-        print(warning_msg)
-        update_author_status('pending', warning_msg)
-        return
-
-    # 2. Determine source and dest
-    source_group = 'others' if post_filter == 'uk' else 'uk'
-    dest_group = post_filter
-    
-    print(f"sync_last_schedule_between_groups: Copying from '{source_group}' to '{dest_group}'")
-
-    base_dir = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\next jpg\\{author}\\jsons"
-
-    # 3. Get all type names
-    timeorders_path = r"C:\xampp\htdocs\AI automation\serenum\timeorders.json"
-    try:
-        with open(timeorders_path, 'r', encoding='utf-8') as f:
-            types = list(json.load(f).keys())
-    except Exception as e:
-        error_msg = f"sync_last_schedule_between_groups: ERROR - Failed to load timeorders.json: {e}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
-
-    if not types:
-        warning_msg = "sync_last_schedule_between_groups: WARNING - No types found in timeorders.json"
-        print(warning_msg)
-        update_author_status('pending', warning_msg)
-        return
-
-    # 4. Copy last_schedule for each type
-    copied_count = 0
-    for t in types:
-        src_file = os.path.join(base_dir, source_group, f"{t}schedules.json")
-        dst_file = os.path.join(base_dir, dest_group, f"{t}schedules.json")
-
-        if not os.path.exists(src_file):
-            print(f"sync_last_schedule_between_groups: Source file not found: {src_file}")
-            continue
-
-        try:
-            with open(src_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            last_schedule = data.get("last_schedule", [])
-
-            # Write only last_schedule (preserve next_schedule if exists, else empty)
-            output = {
-                "last_schedule": last_schedule,
-                "next_schedule": data.get("next_schedule", [])
+            # Create new tracker with all groups
+            tracker = {
+                'original_groups': groups_to_process.copy(),
+                'remaining_groups': groups_to_process[1:].copy(),  # All except first
+                'used_groups': [groups_to_process[0]],  # First group is used
+                'current_group': groups_to_process[0],
+                'total_groups': len(groups_to_process),
+                'used_count': 1,
+                'is_complete': False,
+                'last_updated': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'source_field': source_field  # Track which field we're using
             }
-
-            os.makedirs(os.path.dirname(dst_file), exist_ok=True)
-            with open(dst_file, 'w', encoding='utf-8') as f:
-                json.dump(output, f, indent=4, ensure_ascii=False)
-            copied_count += 1
-            print(f"sync_last_schedule_between_groups: Copied {t} ({copied_count} slots)")
-        except Exception as e:
-            print(f"sync_last_schedule_between_groups: ERROR - Failed to copy {t}: {e}")
-
-    if copied_count > 0:
-        success_msg = f"sync_last_schedule_between_groups: Successfully synced {copied_count} schedule types from '{source_group}' to '{dest_group}'"
-        update_author_status('pending', success_msg)
-        print(f"sync_last_schedule_between_groups: {success_msg}")
-    else:
-        warning_msg = f"sync_last_schedule_between_groups: WARNING - No schedules were copied"
-        update_author_status('pending', warning_msg)
-        print(warning_msg)
-
-def resetgroupswitchandscheduledate():
-    """
-    Resets the group_switch to 'no' and schedule_date to 'none' in pageandgroupauthors.json.
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
             
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+            # Update the source field with first group (ONLY ONE group)
+            config[source_field] = groups_to_process[0]
+            # Also update group_types for backward compatibility
+            config['group_types'] = groups_to_process[0]
+            
+            msg = f"randomize_group_types: Tracker reset with {len(groups_to_process)} groups from '{source_field}'. Using first group: {groups_to_process[0]}. Remaining: {len(tracker['remaining_groups'])}"
+            print(msg)
+            update_author_status('pending', msg)
+            
+        # Condition 2: Tracker is empty but source has 1 group
+        elif not tracker_groups and len(current_groups) == 1:
+            print("randomize_group_types: Tracker empty, source has 1 group. Initializing tracker...")
+            groups_to_process = current_groups
+            
+            # Create tracker with this single group
+            tracker = {
+                'original_groups': groups_to_process.copy(),
+                'remaining_groups': [],
+                'used_groups': [groups_to_process[0]],
+                'current_group': groups_to_process[0],
+                'total_groups': 1,
+                'used_count': 1,
+                'is_complete': True,  # Only group is already used
+                'last_updated': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'source_field': source_field
+            }
+            
+            # Keep source field as is (single group)
+            config[source_field] = groups_to_process[0]
+            config['group_types'] = groups_to_process[0]
+            
+            msg = f"randomize_group_types: Tracker initialized with single group: {groups_to_process[0]} from '{source_field}'"
+            print(msg)
+            update_author_status('pending', msg)
+            
+        # Condition 3: Use existing tracker
+        elif tracker_groups:
+            print(f"randomize_group_types: Using existing tracker as source of truth (originally from '{tracker.get('source_field', 'unknown')}')...")
+            groups_to_process = tracker_groups
+            
+            # Check if all groups have been used (revolution complete)
+            if tracker.get('is_complete', False) or len(tracker.get('used_groups', [])) >= len(groups_to_process):
+                print("randomize_group_types: All groups used. Restarting revolution...")
+                
+                # Reset the revolution - move all used groups to remaining
+                tracker['remaining_groups'] = groups_to_process.copy()
+                tracker['used_groups'] = []
+                tracker['used_count'] = 0
+                tracker['is_complete'] = False
+                tracker['last_updated'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Pick first group as current
+                next_group = groups_to_process[0]
+                tracker['current_group'] = next_group
+                tracker['remaining_groups'] = groups_to_process[1:].copy()
+                tracker['used_groups'] = [next_group]
+                tracker['used_count'] = 1
+                
+                # Update source field with first group
+                source_field_to_use = tracker.get('source_field', 'group_types')
+                config[source_field_to_use] = next_group
+                config['group_types'] = next_group
+                
+                msg = f"randomize_group_types: Revolution restarted! Using first group: {next_group}. Remaining: {len(tracker['remaining_groups'])}"
+                print(msg)
+                update_author_status('pending', msg)
+            else:
+                # Normal flow - get next unused group
+                remaining = tracker.get('remaining_groups', [])
+                
+                if remaining:
+                    # Get next group
+                    next_group = remaining[0]
+                    tracker['current_group'] = next_group
+                    tracker['used_groups'].append(next_group)
+                    tracker['remaining_groups'] = remaining[1:] if len(remaining) > 1 else []
+                    tracker['used_count'] = len(tracker['used_groups'])
+                    tracker['last_updated'] = time.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                    # Check if this was the last group
+                    if not tracker['remaining_groups']:
+                        tracker['is_complete'] = True
+                        msg = f"randomize_group_types: Last group used: {next_group}. Revolution complete!"
+                        print(msg)
+                    else:
+                        msg = f"randomize_group_types: Using next group: {next_group}. Used: {tracker['used_count']}/{tracker['total_groups']}. Remaining: {len(tracker['remaining_groups'])}"
+                        print(msg)
                     
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    if current_status == 'aborted':
-        print(f"resetgroupswitchandscheduledate: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"resetgroupswitchandscheduledate: SKIPPED - Status is 'aborted'. No action taken.")
-        return False
-
-    config_json_path = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
-    
-    print(f"resetgroupswitchandscheduledate: Starting reset process")
-    update_author_status('pending', f"resetgroupswitchandscheduledate: Starting reset process")
-    
-    # Read existing pageandgroupauthors.json
-    config_data = {}
-    if os.path.exists(config_json_path) and os.path.getsize(config_json_path) > 0:
-        try:
-            with open(config_json_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                print(f"Read from {config_json_path}: {config_data}")
-        except Exception as e:
-            error_msg = f"resetgroupswitchandscheduledate: ERROR - Error reading JSON file {config_json_path}: {str(e)}"
+                    # Update source field with next group (ONLY ONE group)
+                    source_field_to_use = tracker.get('source_field', 'group_types')
+                    config[source_field_to_use] = next_group
+                    config['group_types'] = next_group
+                    update_author_status('pending', msg)
+                    
+                else:
+                    # No remaining groups but not marked complete - this shouldn't happen
+                    # Force restart
+                    print("randomize_group_types: No remaining groups but not complete. Forcing restart...")
+                    tracker['is_complete'] = True
+                    source_field_to_use = tracker.get('source_field', 'group_types')
+                    config[source_field_to_use] = tracker.get('current_group', groups_to_process[0])
+                    config['group_types'] = tracker.get('current_group', groups_to_process[0])
+                    msg = "randomize_group_types: No remaining groups. Marking as complete."
+                    update_author_status('pending', msg)
+        
+        # ============================================================
+        # STEP 5: SAVE UPDATED CONFIG
+        # ============================================================
+        # Save the updated tracker back to config
+        config['randomizing_group_tracker'] = tracker
+        
+        # Update the author data structure
+        if is_list_format:
+            author_data[-1] = config
+        else:
+            author_data = config
+        
+        if save_json_file(AUTHOR_PATH, author_data):
+            final_msg = f"randomize_group_types: SUCCESS - '{source_field if source_field else 'group_types'}' set to '{config['group_types']}'. Tracker: {tracker['used_count']}/{tracker['total_groups']} groups used. Remaining: {len(tracker.get('remaining_groups', []))}"
+            print(final_msg)
+            update_author_status('pending', final_msg)
+            return True
+        else:
+            error_msg = "randomize_group_types: ERROR - Failed to save updated config."
             print(error_msg)
             update_author_status('aborted', error_msg)
-            print("Initializing with empty config_data due to error.")
-    
-    # Get author for status message
-    author = config_data.get('author', 'Unknown')
-    
-    # Update fields
-    config_data['group_switch'] = 'no'
-    config_data['schedule_date'] = 'none'
-    print(f"Updated config_data: group_switch='no', schedule_date='none'")
-    
-    # Write back to pageandgroupauthors.json
-    try:
-        os.makedirs(os.path.dirname(config_json_path), exist_ok=True)
-        with open(config_json_path, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, indent=4)
-        print(f"Successfully updated {config_json_path} with group_switch='no' and schedule_date='none'")
-        
-        success_msg = f"resetgroupswitchandscheduledate: Successfully reset group_switch and schedule_date for '{author}'"
-        update_author_status('pending', success_msg)
-        print(success_msg)
-        return True
+            return False
+            
     except Exception as e:
-        error_msg = f"resetgroupswitchandscheduledate: ERROR - Error writing to JSON file {config_json_path}: {str(e)}"
+        error_msg = f"randomize_group_types: ERROR - Failed to process: {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return False
-    
+                
 def selectgroups():
-    """Locate and click the dropdown element associated with 'Post to' text, check pageandgroupauthors.json for page, group, and post_filter fields, select or unselect page profile under 'Post to Facebook and Instagram' based on page field, and based on group and post_filter fields: if group is 'include', select the groups listed in post_filter array (case-insensitive, ignoring spaces and special characters). If group is 'none', unselect all groups. Verify selections, save to JSON, and click Save.
+    """Locate and click the dropdown element associated with 'Post to' text, check pageandgroupauthors.json for page, group, and post_filter fields, select or unselect page profile under 'Post to Facebook and Instagram' based on page field, and based on group and post_filter fields: if group is 'include', select the groups listed in post_filter array (case-insensitive, ignoring spaces and special characters). If group is 'none', unselect all groups. Verify selections, save to AUTHOR_PATH, and click Save.
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
     Sets status to 'aborted' if groups cannot be selected
+    Stores group selections in 'groups_selected' field in AUTHOR_PATH
     """
     global driver, wait
     
@@ -11391,10 +9794,12 @@ def selectgroups():
     import json
     import re
     import time
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE CENTRALIZED CONFIGURATION =====
+    # AUTHOR_PATH is already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -11424,16 +9829,70 @@ def selectgroups():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"selectgroups: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"selectgroups: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
             return False
         except:
+            return False
+    
+    def save_groups_selection_to_author_path(groups_list, status_message):
+        """Save group selections directly to AUTHOR_PATH in the 'groups_selected' field"""
+        try:
+            author_data = load_json_file(AUTHOR_PATH, [])
+            
+            # Handle both list and dict formats
+            if isinstance(author_data, list) and len(author_data) > 0:
+                config = author_data[-1]
+                is_list_format = True
+            elif isinstance(author_data, dict):
+                config = author_data
+                is_list_format = False
+            else:
+                print("selectgroups: ERROR - Invalid config format in AUTHOR_PATH")
+                return False
+            
+            # Create groups_selected structure
+            if not groups_list:
+                groups_selected = {
+                    "1st": "",
+                    "2nd": "",
+                    "3rd": ""
+                }
+            else:
+                groups_selected = {
+                    "1st": groups_list[0] if len(groups_list) > 0 else "",
+                    "2nd": groups_list[1] if len(groups_list) > 1 else "",
+                    "3rd": groups_list[2] if len(groups_list) > 2 else ""
+                }
+            
+            # Save to config
+            config['groups_selected'] = {
+                "current_selected": groups_selected,
+                "status": status_message,
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Update the author data structure
+            if is_list_format:
+                author_data[-1] = config
+            else:
+                author_data = config
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                print(f"selectgroups: Saved groups_selected to AUTHOR_PATH: {groups_selected}")
+                return True
+            else:
+                print("selectgroups: ERROR - Failed to save groups_selected to AUTHOR_PATH")
+                return False
+                
+        except Exception as e:
+            print(f"selectgroups: ERROR - Failed to save groups_selection: {e}")
             return False
 
     # ===== CHECK STATUS - Skip if 'aborted' =====
@@ -11450,11 +9909,10 @@ def selectgroups():
     
     if current_status == 'aborted':
         print(f"selectgroups: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"selectgroups: SKIPPED - Status is 'aborted'. No action taken.")
         return False
 
     print(f"selectgroups: Starting group selection process")
-    update_author_status('pending', f"selectgroups: Starting group selection process")
+    update_author_status('pending', f"Starting group selection process")
     
     # Initialize trackers if not already set
     if not hasattr(selectgroups, 'is_dropdown_opened'):
@@ -11468,76 +9926,86 @@ def selectgroups():
     if not hasattr(selectgroups, 'failed_attempts'):
         selectgroups.failed_attempts = 0
 
-    # JSON file path for groups
-    json_path = r"C:\xampp\htdocs\AI automation\serenum\files\groups\uploadgroups.json"
-    
-    # Last state JSON path
-    laststate_path = r"C:\xampp\htdocs\AI automation\serenum\laststate.json"
-
-    # Check if JSON exists and read last_selected
-    last_selected = []
-    json_exists = os.path.exists(json_path) and os.path.getsize(json_path) > 0
-    if json_exists:
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                last_selected = data.get('groups_selected', {}).get('last_selected', [])
-                print(f"Read last_selected from JSON: {last_selected}")
-        except Exception as e:
-            print(f"Error reading JSON file {json_path}: {str(e)}")
-            last_selected = []
-
     # Check if function should retry or skip
     if selectgroups.is_dropdown_opened or selectgroups.is_see_more_clicked or selectgroups.groups_selected:
         selectgroups.failed_attempts += 1
         if selectgroups.failed_attempts >= 3:
             print("selectgroups has failed too many times (3 attempts). Skipping to prevent blocking other functions.")
-            update_author_status('aborted', f"selectgroups: Failed after 3 attempts - group selection could not be completed")
+            update_author_status('aborted', f"Failed after 3 attempts - group selection could not be completed")
             return False
         print(f"Retry attempt {selectgroups.failed_attempts} due to prior state (is_dropdown_opened={selectgroups.is_dropdown_opened}, is_see_more_clicked={selectgroups.is_see_more_clicked}, groups_selected={selectgroups.groups_selected})")
 
-    # Check pageandgroupauthors.json for page, group, and post_filter fields
+    # ===== READ CONFIG FROM AUTHOR_PATH =====
     page_config = 'none'
     group_config = 'none'
-    target_group_list = []  # List of target group names to select
+    target_group_list = []
     
-    if os.path.exists(JSON_CONFIG_PATH) and os.path.getsize(JSON_CONFIG_PATH) > 0:
-        try:
-            with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                page_config = config_data.get('page', 'none')
-                group_config = config_data.get('group', 'none')
-                
-                # ===== SUPPORT BOTH STRING AND ARRAY FOR post_filter =====
-                raw_post_filter = config_data.get('post_filter', [])
-                
-                # Handle different formats
-                if isinstance(raw_post_filter, list):
-                    target_group_list = raw_post_filter
-                elif isinstance(raw_post_filter, str):
-                    # Handle comma-separated string like "group1, group2, group3"
-                    if ',' in raw_post_filter:
-                        # Split by comma and strip whitespace
-                        target_group_list = [g.strip() for g in raw_post_filter.split(',') if g.strip()]
+    try:
+        with open(AUTHOR_PATH, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+            
+            # Handle both list and dict formats
+            if isinstance(config_data, list) and len(config_data) > 0:
+                config = config_data[-1]
+            elif isinstance(config_data, dict):
+                config = config_data
+            else:
+                print(f"selectgroups: ERROR - Invalid config format in AUTHOR_PATH")
+                update_author_status('aborted', f"Invalid config format in AUTHOR_PATH")
+                return False
+            
+            page_config = config.get('page', 'none')
+            group_config = config.get('group', 'none')
+            
+            # ===== GET GROUPS WITH PRIORITY (group_types > groups > group) =====
+            raw_group_types = config.get('group_types', '')
+            raw_groups = config.get('groups', '')
+            raw_group = config.get('group', '')
+            
+            # Priority 1: group_types
+            if raw_group_types:
+                if isinstance(raw_group_types, list):
+                    target_group_list = [str(g).strip() for g in raw_group_types if str(g).strip()]
+                elif isinstance(raw_group_types, str):
+                    if ',' in raw_group_types:
+                        target_group_list = [g.strip() for g in raw_group_types.split(',') if g.strip()]
                     else:
-                        # Single group name
-                        target_group_list = [raw_post_filter]
-                else:
-                    target_group_list = []
+                        target_group_list = [raw_group_types.strip()] if raw_group_types.strip() else []
+                print(f"Using group_types as source: {target_group_list}")
+            
+            # Priority 2: groups (if group_types empty or invalid)
+            elif raw_groups and not target_group_list:
+                if isinstance(raw_groups, list):
+                    target_group_list = [str(g).strip() for g in raw_groups if str(g).strip()]
+                elif isinstance(raw_groups, str):
+                    if ',' in raw_groups:
+                        target_group_list = [g.strip() for g in raw_groups.split(',') if g.strip()]
+                    else:
+                        target_group_list = [raw_groups.strip()] if raw_groups.strip() else []
+                print(f"Using groups as source: {target_group_list}")
+            
+            # Priority 3: group (if both group_types and groups empty/invalid)
+            elif raw_group and not target_group_list:
+                if isinstance(raw_group, list):
+                    target_group_list = [str(g).strip() for g in raw_group if str(g).strip()]
+                elif isinstance(raw_group, str):
+                    if ',' in raw_group:
+                        target_group_list = [g.strip() for g in raw_group.split(',') if g.strip()]
+                    else:
+                        target_group_list = [raw_group.strip()] if raw_group.strip() else []
+                print(f"Using group as source: {target_group_list}")
+            
+            print(f"Read config from {AUTHOR_PATH}: page={page_config}, group={group_config}, target_groups={target_group_list}")
+            
+            # Validate target_group_list
+            if not target_group_list and group_config == 'include':
+                print("Warning: group is 'include' but no groups found in group_types, groups, or group fields!")
                 
-                print(f"Read config from {JSON_CONFIG_PATH}: page={page_config}, group={group_config}, post_filter={target_group_list}")
-                
-                # Validate target_group_list
-                if not target_group_list and group_config == 'include':
-                    print("Warning: group is 'include' but post_filter list is empty!")
-                    
-        except Exception as e:
-            print(f"Error reading JSON file {JSON_CONFIG_PATH}: {str(e)}")
-            page_config = 'none'
-            group_config = 'none'
-            target_group_list = []
-    else:
-        print(f"JSON file {JSON_CONFIG_PATH} does not exist or is empty. Defaulting page to 'none', group to 'none'.")
+    except Exception as e:
+        print(f"Error reading JSON file {AUTHOR_PATH}: {str(e)}")
+        page_config = 'none'
+        group_config = 'none'
+        target_group_list = []
 
     # Function to normalize group names for comparison
     def normalize_group_name(name):
@@ -12024,18 +10492,18 @@ def selectgroups():
             print(f"Failed to process 'See more groups' operation: {str(e)}")
             return False
 
-    def handle_groups(group_config, target_group_list, normalized_targets, json_path, json_exists, last_selected):
+    def handle_groups(group_config, target_group_list, normalized_targets):
         """Handle group selection/unselection based on config"""
         if group_config == 'none':
-            return handle_unselect_all_groups(json_path, json_exists, last_selected)
+            return handle_unselect_all_groups()
         elif group_config == 'include':
-            return handle_select_target_groups(target_group_list, normalized_targets, json_path, json_exists, last_selected)
+            return handle_select_target_groups(target_group_list, normalized_targets)
         else:
             print(f"Invalid group config: '{group_config}'. Defaulting to no group selection.")
             return False
 
-    def handle_unselect_all_groups(json_path, json_exists, last_selected):
-        """Unselect all groups and save to JSON"""
+    def handle_unselect_all_groups():
+        """Unselect all groups and save to AUTHOR_PATH"""
         try:
             popup_window = wait.until(
                 EC.presence_of_element_located((
@@ -12183,18 +10651,22 @@ def selectgroups():
                     except Exception as e:
                         print(f"Failed to process unselection for group {group_name}: {str(e)}")
 
-            return click_save_button(popup_window, json_path, json_exists, last_selected, current_selected=[])
+            # Click Save and save empty selection to AUTHOR_PATH
+            if click_save_button(popup_window, []):
+                # Save empty selection to AUTHOR_PATH
+                return save_groups_selection_to_author_path([], "no groups selected - all unselected")
+            return False
 
         except Exception as e:
             print(f"Failed to locate popup window or process groups: {str(e)}")
-            update_author_status('aborted', f"selectgroups: Failed to unselect groups - {str(e)}")
+            update_author_status('aborted', f"Failed to unselect groups - {str(e)}")
             return False
 
-    def handle_select_target_groups(target_group_list, normalized_targets, json_path, json_exists, last_selected):
+    def handle_select_target_groups(target_group_list, normalized_targets):
         """Select target groups based on config"""
         if not target_group_list:
-            print("No target groups specified in post_filter. Skipping group selection.")
-            update_author_status('aborted', f"selectgroups: No target groups specified in post_filter")
+            print("No target groups specified. Skipping group selection.")
+            update_author_status('aborted', f"No target groups specified")
             return False
         
         if selectgroups.groups_selected:
@@ -12344,14 +10816,14 @@ def selectgroups():
             
             # ===== CHECK IF ALL TARGETS WERE FOUND =====
             if not groups_to_select:
-                error_msg = f"selectgroups: ERROR - No target groups found in the popup window. Targets: {target_group_list}"
+                error_msg = f"No target groups found in the popup window. Targets: {target_group_list}"
                 print(error_msg)
                 update_author_status('aborted', error_msg)
                 return False
             
             # Check if any targets were unmatched
             if unmatched_targets:
-                warning_msg = f"selectgroups: WARNING - Some targets not found: {unmatched_targets}"
+                warning_msg = f"Some targets not found: {unmatched_targets}"
                 print(warning_msg)
                 # Don't abort if we found at least some groups
             
@@ -12467,20 +10939,25 @@ def selectgroups():
             # ===== CHECK IF WE SELECTED ALL TARGETS =====
             if len(current_selected) < len(target_group_list):
                 missing = [t for t in target_group_list if t not in current_selected]
-                warning_msg = f"selectgroups: WARNING - Could not select all target groups. Selected: {len(current_selected)}/{len(target_group_list)}. Missing: {missing}"
+                warning_msg = f"Could not select all target groups. Selected: {len(current_selected)}/{len(target_group_list)}. Missing: {missing}"
                 print(warning_msg)
                 # Don't abort - we selected some groups
             
-            return click_save_button(popup_window, json_path, json_exists, last_selected, current_selected)
+            # Click Save and save selection to AUTHOR_PATH
+            if click_save_button(popup_window, current_selected):
+                # Save selection to AUTHOR_PATH
+                status_msg = f"selection verified (target groups: {len(current_selected)} selected)"
+                return save_groups_selection_to_author_path(current_selected, status_msg)
+            return False
 
         except Exception as e:
-            error_msg = f"selectgroups: ERROR - Failed to locate popup window or process groups: {str(e)}"
+            error_msg = f"Failed to locate popup window or process groups: {str(e)}"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return False
 
-    def click_save_button(popup_window, json_path, json_exists, last_selected, current_selected):
-        """Click the Save button and update JSON"""
+    def click_save_button(popup_window, current_selected):
+        """Click the Save button"""
         try:
             save_button = None
             for attempt in range(3):
@@ -12536,60 +11013,13 @@ def selectgroups():
                 )
                 if not popup_still_present:
                     print("Popup window closed successfully.")
+                    return True
                 else:
                     print("Popup window did not close after clicking Save.")
                     return False
             except Exception as e:
                 print(f"Error verifying popup closure: {str(e)}")
                 return False
-            
-            # Save to JSON
-            if not current_selected:
-                # No groups selected case
-                json_data = {
-                    "groups_selected": {
-                        "last_selected": last_selected,
-                        "current_selected": {
-                            "1st": "",
-                            "2nd": "",
-                            "3rd": ""
-                        },
-                        "status": "no groups selected"
-                    }
-                }
-            else:
-                # Groups selected case
-                json_data = {
-                    "groups_selected": {
-                        "last_selected": last_selected,
-                        "current_selected": {
-                            "1st": current_selected[0] if len(current_selected) > 0 else "",
-                            "2nd": current_selected[1] if len(current_selected) > 1 else "",
-                            "3rd": current_selected[2] if len(current_selected) > 2 else ""
-                        },
-                        "status": f"selection verified (target groups: {len(current_selected)} selected)"
-                    }
-                }
-
-            try:
-                if not json_exists:
-                    print(f"JSON file does not exist. Creating {json_path}")
-                    os.makedirs(os.path.dirname(json_path), exist_ok=True)
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(json_data, f, indent=4)
-                    print(f"Created JSON file with current_selected: {json_data['groups_selected']['current_selected']}")
-                else:
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        existing_data = json.load(f)
-                    existing_data['groups_selected']['current_selected'] = json_data['groups_selected']['current_selected']
-                    existing_data['groups_selected']['status'] = json_data['groups_selected']['status']
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(existing_data, f, indent=4)
-                    print(f"Updated JSON file with current_selected: {json_data['groups_selected']['current_selected']}")
-            except Exception as e:
-                print(f"Error writing to JSON file: {str(e)}")
-            
-            return True
 
         except Exception as e:
             print(f"Failed to locate or click 'Save' button: {str(e)}")
@@ -12606,26 +11036,25 @@ def selectgroups():
         # Step 1: Toggle dropdown
         if not toggle_dropdown():
             print("Failed to open dropdown. Exiting.")
-            update_author_status('aborted', f"selectgroups: Failed to open dropdown")
+            update_author_status('aborted', f"Failed to open dropdown")
             return False
         
         # Step 2: Handle page selection
         if not handle_page_selection(page_config):
             print("Failed to handle page selection. Exiting.")
-            update_author_status('aborted', f"selectgroups: Failed to handle page selection")
+            update_author_status('aborted', f"Failed to handle page selection")
             return False
         
         # Step 3: Click 'See more groups' if needed
         if group_config in ['none', 'include']:
             if not click_see_more_groups():
                 print("Failed to click 'See more groups'. Exiting.")
-                update_author_status('aborted', f"selectgroups: Failed to click 'See more groups'")
+                update_author_status('aborted', f"Failed to click 'See more groups'")
                 return False
         
         # Step 4: Handle groups based on config
-        if not handle_groups(group_config, target_group_list, normalized_targets, json_path, json_exists, last_selected):
+        if not handle_groups(group_config, target_group_list, normalized_targets):
             print("Failed to handle groups. Exiting.")
-            # Status already set in handle_groups
             return False
         
         # Update trackers
@@ -12635,13 +11064,13 @@ def selectgroups():
         
         # Build success message
         if group_config == 'include' and target_group_list:
-            success_msg = f"selectgroups: Successfully selected {len(target_group_list)} groups for author"
+            success_msg = f"Successfully selected {len(target_group_list)} groups"
             update_author_status('pending', success_msg)
         elif group_config == 'none':
-            success_msg = f"selectgroups: Successfully unselected all groups for author"
+            success_msg = f"Successfully unselected all groups"
             update_author_status('pending', success_msg)
         else:
-            success_msg = f"selectgroups: Group selection completed for author"
+            success_msg = f"Group selection completed"
             update_author_status('pending', success_msg)
         
         print("="*80)
@@ -12653,134 +11082,14 @@ def selectgroups():
     # Execute main function
     return main()
 
-def switch_post_filter():
-    """
-    Toggle the 'post_filter' field in the JSON config between 'uk' and 'others'.
-    If current value is 'uk' → rewrite to 'others'
-    If current value is 'others' → rewrite to 'uk'
-    If missing or invalid → default to 'others'
-    
-    UPDATES operation_status and status in AUTHOR_PATH
-    Skips execution if status is 'aborted'
-    """
-    import os
-    import json
-    
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    
-    def load_json_file(file_path, default=None):
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except:
-            return default if default is not None else {}
-    
-    def save_json_file(file_path, data):
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return True
-        except:
-            return False
-    
-    def update_author_status(status_value, operation_message):
-        try:
-            author_data = load_json_file(AUTHOR_PATH, [])
-            if not isinstance(author_data, list):
-                author_data = []
-            
-            if author_data:
-                if isinstance(author_data[-1], dict):
-                    author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
-                    
-                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                        author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
-                    
-                    if save_json_file(AUTHOR_PATH, author_data):
-                        return True
-            return False
-        except:
-            return False
-
-    # ===== CHECK STATUS - Skip if 'aborted' =====
-    author_data = load_json_file(AUTHOR_PATH, [])
-    current_status = 'pending'
-    
-    if author_data and isinstance(author_data, list) and len(author_data) > 0:
-        if isinstance(author_data[-1], dict):
-            current_status = author_data[-1].get('status', 'pending')
-            if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
-                dyn_status = author_data[-1]['dynamic_values'].get('status', 'pending')
-                if dyn_status:
-                    current_status = dyn_status
-    
-    if current_status == 'aborted':
-        print(f"switch_post_filter: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"switch_post_filter: SKIPPED - Status is 'aborted'. No action taken.")
-        return False
-
-    print(f"switch_post_filter: Starting post_filter toggle")
-    update_author_status('pending', f"switch_post_filter: Starting post_filter toggle")
-
-    if not os.path.exists(JSON_CONFIG_PATH):
-        print(f"Config file {JSON_CONFIG_PATH} does not exist. Creating with default 'post_filter': 'others'.")
-        config_data = {"post_filter": "others"}
-        os.makedirs(os.path.dirname(JSON_CONFIG_PATH), exist_ok=True)
-        try:
-            with open(JSON_CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=4)
-            print("Created config with post_filter = 'others'")
-            update_author_status('pending', f"switch_post_filter: Created config with post_filter = 'others'")
-            return True
-        except Exception as e:
-            error_msg = f"switch_post_filter: ERROR - Failed to create config: {str(e)}"
-            print(error_msg)
-            update_author_status('aborted', error_msg)
-            return False
-
-    try:
-        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as f:
-            config_data = json.load(f)
-    except Exception as e:
-        error_msg = f"switch_post_filter: ERROR - Error reading config {JSON_CONFIG_PATH}: {str(e)}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        config_data = {}
-
-    current_type = config_data.get('post_filter', 'others').strip().lower()
-    
-    new_type = 'uk' if current_type == 'others' else 'others'
-    
-    config_data['post_filter'] = new_type
-
-    try:
-        with open(JSON_CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, indent=4)
-        print(f"Successfully toggled post_filter: '{current_type}' → '{new_type}'")
-        success_msg = f"switch_post_filter: Toggled post_filter from '{current_type}' to '{new_type}'"
-        update_author_status('pending', success_msg)
-        sync_last_schedule_between_groups()
-        return True
-    except Exception as e:
-        error_msg = f"switch_post_filter: ERROR - Failed to write to config {JSON_CONFIG_PATH}: {str(e)}"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return False
-
 def toggleaddphoto():
     """
     Toggle the 'Add photo/video' button using image matching.
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses GUI_PATH for image templates
+    Stores last state in AUTHOR_PATH under 'toggleaddphoto_last_state'
     """
     import os
     import json
@@ -12789,8 +11098,8 @@ def toggleaddphoto():
     import pyautogui
     from PIL import ImageGrab
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -12812,6 +11121,7 @@ def toggleaddphoto():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -12820,11 +11130,11 @@ def toggleaddphoto():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"toggleaddphoto: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"toggleaddphoto: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -12846,11 +11156,10 @@ def toggleaddphoto():
     
     if current_status == 'aborted':
         print(f"toggleaddphoto: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"toggleaddphoto: SKIPPED - Status is 'aborted'. No action taken.")
         return
 
     print(f"toggleaddphoto: Starting toggle add photo/video")
-    update_author_status('pending', f"toggleaddphoto: Starting toggle add photo/video")
+    update_author_status('pending', f"Starting toggle add photo/video")
 
     # ---- STATE TRACKER ----
     if getattr(toggleaddphoto, 'is_toggled', False):
@@ -12861,33 +11170,27 @@ def toggleaddphoto():
     try:
         retry_count = 0
         max_retries = 3
-        save_path = r"C:\xampp\htdocs\AI automation\serenum\files\gui"
-        laststate_path = r"C:\xampp\htdocs\AI automation\serenum\laststate.json"
 
-        # Template image paths
-        addphoto_path = os.path.join(save_path, "addphoto.png")
-        addmedia_path = os.path.join(save_path, "addmedia.png")
+        # ---- USE GLOBAL PATHS ----
+        addphoto_path = os.path.join(GUI_PATH, "addphoto.png")
+        addmedia_path = os.path.join(GUI_PATH, "addmedia.png")
 
         if not os.path.exists(addphoto_path) and not os.path.exists(addmedia_path):
-            error_msg = "toggleaddphoto: ERROR - Neither addphoto.png nor addmedia.png found in gui folder!"
+            error_msg = "Neither addphoto.png nor addmedia.png found in gui folder!"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return
 
-        # --- LOAD OR CREATE laststate.json ---
-        full_state = {}
-        if os.path.exists(laststate_path):
-            try:
-                with open(laststate_path, 'r') as f:
-                    full_state = json.load(f)
-                print("Loaded laststate.json")
-            except Exception as e:
-                print(f"Error reading laststate.json: {e}. Starting fresh.")
-                full_state = {}
+        # ---- LOAD OR CREATE LAST STATE IN AUTHOR_PATH ----
+        config = author_data[-1] if author_data and isinstance(author_data[-1], dict) else {}
+        full_state = config.get('toggleaddphoto_last_state', {})
+        
+        if full_state:
+            print(f"Loaded last state from AUTHOR_PATH: {full_state}")
         else:
-            print(f"laststate.json not found – will create at: {laststate_path}")
+            print("No last state found in AUTHOR_PATH. Will create new.")
 
-        last_region = full_state.get("toggleaddphoto_last_region")
+        last_region = full_state.get("last_region")
         print(f"Last visited region: {last_region}")
 
         while retry_count < max_retries:
@@ -12910,15 +11213,15 @@ def toggleaddphoto():
                     print(f"Error during locateOnScreen({os.path.basename(template_path)}): {e}")
 
             if button_location is None:
-                os.makedirs(save_path, exist_ok=True)
-                screenshot_file = os.path.join(save_path, "windowstext_debug.png")
+                os.makedirs(GUI_PATH, exist_ok=True)
+                screenshot_file = os.path.join(GUI_PATH, "windowstext_debug.png")
                 screenshot = ImageGrab.grab()
                 screenshot.save(screenshot_file)
                 print(f"Button not found on attempt {retry_count + 1}. Screenshot saved: {screenshot_file}")
 
                 retry_count += 1
                 if retry_count >= max_retries:
-                    error_msg = "toggleaddphoto: ERROR - Max retries reached – giving up."
+                    error_msg = "Max retries reached – giving up."
                     print(error_msg)
                     update_author_status('aborted', error_msg)
                 else:
@@ -12992,18 +11295,27 @@ def toggleaddphoto():
             pyautogui.click()
             print("Clicked 'Add photo/video' button")
 
-            # ---- Mark as toggled & persist last region ----
+            # ---- Mark as toggled & persist last state to AUTHOR_PATH ----
             toggleaddphoto.is_toggled = True
 
-            if current_region:
-                full_state["toggleaddphoto_last_region"] = list(current_region)
+            # Update state
+            full_state = {
+                "last_region": list(current_region) if current_region else None,
+                "last_click_time": time.strftime('%Y-%m-%d %H:%M:%S'),
+                "button_found": True,
+                "method": "image_matching"
+            }
 
-            os.makedirs(os.path.dirname(laststate_path), exist_ok=True)
-            with open(laststate_path, 'w') as f:
-                json.dump(full_state, f, indent=2)
-            print(f"SAVED: laststate.json (region {current_region})")
+            # Save to AUTHOR_PATH
+            author_data = load_json_file(AUTHOR_PATH, [])
+            if author_data and isinstance(author_data, list) and len(author_data) > 0:
+                if isinstance(author_data[-1], dict):
+                    author_data[-1]['toggleaddphoto_last_state'] = full_state
+                    if save_json_file(AUTHOR_PATH, author_data):
+                        print(f"SAVED: last state to AUTHOR_PATH: {full_state}")
 
-            success_msg = "toggleaddphoto: Successfully clicked 'Add photo/video' button"
+            success_msg = "Successfully clicked 'Add photo/video' button"
+            print(success_msg)
             update_author_status('pending', success_msg)
 
             time.sleep(3)
@@ -13011,16 +11323,18 @@ def toggleaddphoto():
             return
 
     except Exception as e:
-        error_msg = f"toggleaddphoto: ERROR - {str(e)}"
+        error_msg = f"ERROR - {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
 
-def toggleaddphoto_():
+def toggleaddphoto_ocr():
     """
     Toggle the 'Add photo/video' button using OCR text detection.
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Stores last state in AUTHOR_PATH under 'toggleaddphoto_last_state'
+    Falls back to image-based toggle if OCR fails
     """
     import os
     import json
@@ -13032,8 +11346,8 @@ def toggleaddphoto_():
     import pytesseract
     from PIL import ImageGrab
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -13055,6 +11369,7 @@ def toggleaddphoto_():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -13063,11 +11378,11 @@ def toggleaddphoto_():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"toggleaddphoto_: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"toggleaddphoto_: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -13089,11 +11404,10 @@ def toggleaddphoto_():
     
     if current_status == 'aborted':
         print(f"toggleaddphoto_: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"toggleaddphoto_: SKIPPED - Status is 'aborted'. No action taken.")
         return
 
     print(f"toggleaddphoto_: Starting toggle add photo/video via OCR")
-    update_author_status('pending', f"toggleaddphoto_: Starting toggle add photo/video via OCR")
+    update_author_status('pending', f"Starting toggle add photo/video via OCR")
 
     # ---- STATE TRACKER ----
     if getattr(toggleaddphoto, 'is_toggled', False):
@@ -13104,23 +11418,17 @@ def toggleaddphoto_():
     try:
         retry_count = 0
         max_retries = 3
-        save_path = r"C:\xampp\htdocs\AI automation\serenum\files\gui"
-        laststate_path = r"C:\xampp\htdocs\AI automation\serenum\laststate.json"
 
-        # --- LOAD OR CREATE laststate.json ---
-        full_state = {}
-        if os.path.exists(laststate_path):
-            try:
-                with open(laststate_path, 'r') as f:
-                    full_state = json.load(f)
-                print("Loaded laststate.json")
-            except Exception as e:
-                print(f"Error reading laststate.json: {e}. Starting fresh.")
-                full_state = {}
+        # ---- LOAD OR CREATE LAST STATE IN AUTHOR_PATH ----
+        config = author_data[-1] if author_data and isinstance(author_data[-1], dict) else {}
+        full_state = config.get('toggleaddphoto_last_state', {})
+        
+        if full_state:
+            print(f"Loaded last state from AUTHOR_PATH: {full_state}")
         else:
-            print(f"laststate.json not found – will create at: {laststate_path}")
+            print("No last state found in AUTHOR_PATH. Will create new.")
 
-        last_region = full_state.get("toggleaddphoto_last_region")
+        last_region = full_state.get("last_region")
         print(f"Last visited region: {last_region}")
 
         while retry_count < max_retries:
@@ -13129,8 +11437,8 @@ def toggleaddphoto_():
             screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
 
             # Save for debugging
-            os.makedirs(save_path, exist_ok=True)
-            screenshot_file = os.path.join(save_path, "windowstext.png")
+            os.makedirs(GUI_PATH, exist_ok=True)
+            screenshot_file = os.path.join(GUI_PATH, "windowstext.png")
             cv2.imwrite(screenshot_file, screenshot_cv)
             print(f"Screenshot captured: '{screenshot_file}'")
 
@@ -13241,18 +11549,28 @@ def toggleaddphoto_():
                 pyautogui.click()
                 print("Clicked 'Add photo/video'")
 
-                # ---- Mark as toggled & persist last region ----
+                # ---- Mark as toggled & persist last state to AUTHOR_PATH ----
                 toggleaddphoto.is_toggled = True
 
-                if current_region:
-                    full_state["toggleaddphoto_last_region"] = list(current_region)
+                # Update state
+                full_state = {
+                    "last_region": list(current_region) if current_region else None,
+                    "last_click_time": time.strftime('%Y-%m-%d %H:%M:%S'),
+                    "button_found": True,
+                    "method": "ocr",
+                    "detected_phrase": detected_phrase
+                }
 
-                os.makedirs(os.path.dirname(laststate_path), exist_ok=True)
-                with open(laststate_path, 'w') as f:
-                    json.dump(full_state, f, indent=2)
-                print(f"SAVED: laststate.json (region {current_region})")
+                # Save to AUTHOR_PATH
+                author_data = load_json_file(AUTHOR_PATH, [])
+                if author_data and isinstance(author_data, list) and len(author_data) > 0:
+                    if isinstance(author_data[-1], dict):
+                        author_data[-1]['toggleaddphoto_last_state'] = full_state
+                        if save_json_file(AUTHOR_PATH, author_data):
+                            print(f"SAVED: last state to AUTHOR_PATH: {full_state}")
 
-                success_msg = "toggleaddphoto_: Successfully clicked 'Add photo/video' via OCR"
+                success_msg = "Successfully clicked 'Add photo/video' via OCR"
+                print(success_msg)
                 update_author_status('pending', success_msg)
 
                 time.sleep(3)
@@ -13267,15 +11585,16 @@ def toggleaddphoto_():
                     print("Detected 'loading' – giving it one more second...")
                     time.sleep(1)
                     continue
-                error_msg = "toggleaddphoto_: ERROR - Max retries reached – giving up. Falling back to image-based toggle."
+                error_msg = "Max retries reached – giving up. Falling back to image-based toggle."
                 print(error_msg)
                 update_author_status('pending', error_msg)
                 toggleaddphoto()
+                return
                 
             time.sleep(1)
 
     except Exception as e:
-        error_msg = f"toggleaddphoto_: ERROR - {str(e)}"
+        error_msg = f"ERROR - {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
 
@@ -13288,6 +11607,7 @@ def selectmedia():
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses FILES_ROOT for media file path
     """
     import os
     import json
@@ -13296,9 +11616,8 @@ def selectmedia():
     import pyautogui
     import pyperclip
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -13320,6 +11639,7 @@ def selectmedia():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -13328,11 +11648,11 @@ def selectmedia():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"selectmedia: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"selectmedia: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -13354,7 +11674,6 @@ def selectmedia():
     
     if current_status == 'aborted':
         print(f"selectmedia: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"selectmedia: SKIPPED - Status is 'aborted'. No action taken.")
         return
 
     # Initialize tracker if not already set
@@ -13367,25 +11686,32 @@ def selectmedia():
         return
 
     print(f"selectmedia: Starting media selection")
-    update_author_status('pending', f"selectmedia: Starting media selection")
+    update_author_status('pending', f"Starting media selection")
 
     try:
-        # Load configuration to get author and construct file path
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
-        author = config.get('author', '')
-        
-        if not author:
-            error_msg = "selectmedia: ERROR - No author found in config"
+        # Load configuration to get author
+        author_data = load_json_file(AUTHOR_PATH, [])
+        if not author_data or not isinstance(author_data, list) or len(author_data) == 0:
+            error_msg = "No author data found in AUTHOR_PATH"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return
             
-        file_path = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\next jpg\\{author}\\card_x.jpg"
+        config = author_data[-1] if isinstance(author_data[-1], dict) else {}
+        author = config.get('author', '')
+        
+        if not author:
+            error_msg = "No author found in config"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+            
+        # ==== USE FILES_ROOT FOR MEDIA PATH ====
+        file_path = os.path.join(FILES_ROOT, "next jpg", author, "card_x.jpg")
 
         # Ensure the file exists before attempting to input the path
         if not os.path.exists(file_path):
-            error_msg = f"selectmedia: ERROR - Media file does not exist: {file_path}"
+            error_msg = f"Media file does not exist: {file_path}"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return
@@ -13418,18 +11744,18 @@ def selectmedia():
         selectmedia.has_uploaded = True
         print("Updated tracker: has_uploaded set to True")
         
-        success_msg = f"selectmedia: Successfully selected media for author '{author}'"
+        success_msg = f"Successfully selected media for author '{author}'"
+        print(success_msg)
         update_author_status('pending', success_msg)
 
         time.sleep(3)  # Final wait for upload dialog to process
         confirmselectedmedia()
 
     except Exception as e:
-        error_msg = f"selectmedia: ERROR - Failed to select media: {str(e)}"
+        error_msg = f"ERROR - Failed to select media: {str(e)}"
         print(error_msg)
         selectmedia.has_uploaded = True  # Prevent retry loop
         update_author_status('aborted', error_msg)
-        raise
 
 def confirmselectedmedia():
     """
@@ -13439,15 +11765,15 @@ def confirmselectedmedia():
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses GUI_PATH for template images
     """
     import os
     import json
     import time
     import pyautogui
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    GUI_PATH = r"C:\xampp\htdocs\AI automation\serenum\files\gui"
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -13469,6 +11795,7 @@ def confirmselectedmedia():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -13477,11 +11804,11 @@ def confirmselectedmedia():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"confirmselectedmedia: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"confirmselectedmedia: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -13503,7 +11830,6 @@ def confirmselectedmedia():
     
     if current_status == 'aborted':
         print(f"confirmselectedmedia: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"confirmselectedmedia: SKIPPED - Status is 'aborted'. No action taken.")
         return False
 
     screen_width, screen_height = pyautogui.size()
@@ -13517,10 +11843,10 @@ def confirmselectedmedia():
     
     # === FAILURE: All retries used ===
     if confirmselectedmedia.retry_count >= MAX_RETRIES:
-        error_msg = "confirmselectedmedia: ERROR - All 5 retries exhausted - MEDIA SELECTION FAILED"
+        error_msg = "All 5 retries exhausted - MEDIA SELECTION FAILED"
         print("BREAKDOWN REPORT: All 5 retries exhausted - MEDIA SELECTION FAILED")
         print(f"   Total retries attempted: {MAX_RETRIES}")
-        print(f"   editmedia.png NOT FOUND after all attempts")
+        print(f"   cropandfilter.png NOT FOUND after all attempts")
         print(f"   RECOMMENDED ACTION: Manual intervention required")
         
         update_author_status('aborted', error_msg)
@@ -13534,16 +11860,17 @@ def confirmselectedmedia():
     # === INCREMENT & LOG RETRY ===
     confirmselectedmedia.retry_count += 1
     attempt = confirmselectedmedia.retry_count
-    print(f"RETRY #{attempt}/{MAX_RETRIES} - Looking for editmedia.png...")
+    print(f"RETRY #{attempt}/{MAX_RETRIES} - Looking for cropandfilter.png...")
 
     # === PROGRESSIVE WAIT TIMES ===
     wait_times = {1: 2, 2: 3, 3: 4, 4: 6, 5: 10}
     wait_sec = wait_times.get(attempt, 4)
 
-    # === SEARCH FOR editmedia.png ===
+    # === SEARCH FOR cropandfilter.png USING GUI_PATH ===
     try:
+        template_path = os.path.join(GUI_PATH, "cropandfilter.png")
         editmedia = pyautogui.locateOnScreen(
-            f'{GUI_PATH}\\cropandfilter.png',
+            template_path,
             confidence=0.8,
             region=top,
             grayscale=True  # Faster + more robust
@@ -13555,14 +11882,15 @@ def confirmselectedmedia():
             
             # Reset on SUCCESS
             confirmselectedmedia.retry_count = 0
-            success_msg = f"confirmselectedmedia: Media confirmed selected on retry #{attempt}"
+            success_msg = f"Media confirmed selected on retry #{attempt}"
+            print(success_msg)
             update_author_status('pending', success_msg)
             return True
     except Exception as e:
         print(f"   Search error on retry #{attempt}: {e}")
 
     # === NOT FOUND → WAIT & RETRY ===
-    print(f"   editmedia.png NOT FOUND → waiting {wait_sec} sec before retry...")
+    print(f"   cropandfilter.png NOT FOUND → waiting {wait_sec} sec before retry...")
     time.sleep(wait_sec)
     
     # Recursive call (safe: max depth 5)
@@ -13574,15 +11902,15 @@ def confirm_fileisready():
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses GUI_PATH for template images
     """
     import os
     import json
     import time
     import pyautogui
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    GUI_PATH = r"C:\xampp\htdocs\AI automation\serenum\files\gui"
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -13604,6 +11932,7 @@ def confirm_fileisready():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -13612,11 +11941,11 @@ def confirm_fileisready():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"confirm_fileisready: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"confirm_fileisready: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -13638,21 +11967,39 @@ def confirm_fileisready():
     
     if current_status == 'aborted':
         print(f"confirm_fileisready: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"confirm_fileisready: SKIPPED - Status is 'aborted'. No action taken.")
         return False
 
     print(f"confirm_fileisready: Checking file dialog")
-    update_author_status('pending', f"confirm_fileisready: Checking file dialog")
+    update_author_status('pending', f"Checking file dialog")
 
     try:
-        file_name = pyautogui.locateOnScreen(f'{GUI_PATH}\\file_name.png', confidence=0.8)
-        pc = pyautogui.locateOnScreen(f'{GUI_PATH}\\pc.png', confidence=0.8)
-        new_folder = pyautogui.locateOnScreen(f'{GUI_PATH}\\new_folder.png', confidence=0.8)
-        customised_files = pyautogui.locateOnScreen(f'{GUI_PATH}\\customised_files.png', confidence=0.8)
+        # === USE GUI_PATH FOR ALL TEMPLATES ===
+        templates = [
+            "file_name.png",
+            "pc.png", 
+            "new_folder.png",
+            "customised_files.png"
+        ]
         
-        if file_name or pc or new_folder or customised_files:
-            print("✅ File dialog confirmed - selecting media")
-            success_msg = "confirm_fileisready: File dialog confirmed - proceeding to select media"
+        found_template = None
+        for template in templates:
+            template_path = os.path.join(GUI_PATH, template)
+            if os.path.exists(template_path):
+                try:
+                    result = pyautogui.locateOnScreen(template_path, confidence=0.8)
+                    if result:
+                        found_template = template
+                        print(f"✅ Found template: {template}")
+                        break
+                except Exception as e:
+                    print(f"   Error searching for {template}: {e}")
+            else:
+                print(f"   Template not found: {template_path}")
+        
+        if found_template:
+            print(f"✅ File dialog confirmed - selecting media")
+            success_msg = f"File dialog confirmed via '{found_template}' - proceeding to select media"
+            print(success_msg)
             update_author_status('pending', success_msg)
             selectmedia()
             print("✅ File selected")
@@ -13660,26 +12007,29 @@ def confirm_fileisready():
         else:
             print("❌ File dialog not confirmed - closing")
             pyautogui.hotkey('alt', 'f4')
-            warning_msg = "confirm_fileisready: File dialog not found - closed dialog"
+            warning_msg = "File dialog not found - closed dialog"
+            print(warning_msg)
             update_author_status('pending', warning_msg)
             return False
     except Exception as e:
-        error_msg = f"confirm_fileisready: ERROR - {str(e)}"
+        error_msg = f"ERROR - {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return False
-    
+      
 def writecaption_element():
     """
     Write caption to the composer element using Selenium with human-like typing.
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses FILES_ROOT for caption files
+    Uses AUTHOR_PATH for config/status
     """
     reset_used_captions_record()
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -13701,6 +12051,7 @@ def writecaption_element():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -13709,11 +12060,11 @@ def writecaption_element():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"writecaption_element: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"writecaption_element: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -13735,11 +12086,10 @@ def writecaption_element():
     
     if current_status == 'aborted':
         print(f"writecaption_element: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"writecaption_element: SKIPPED - Status is 'aborted'. No action taken.")
         return None
 
     print(f"writecaption_element: Starting caption writing")
-    update_author_status('pending', f"writecaption_element: Starting caption writing")
+    update_author_status('pending', f"Starting caption writing")
 
     # Initialize function attributes if not already set
     if not hasattr(writecaption_element, 'has_written'):
@@ -13761,64 +12111,48 @@ def writecaption_element():
         """Extract caption values from various JSON structures."""
         captions_list = []
         
-        # Case 1: List of strings
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, str):
                     captions_list.append(item)
                 elif isinstance(item, dict):
-                    # If list contains dicts, extract values (skip 'id' keys)
                     for key, value in item.items():
                         if key.lower() != 'id' and isinstance(value, str) and value.strip():
                             captions_list.append(value)
             return captions_list
         
-        # Case 2: Dictionary
         elif isinstance(data, dict):
-            # Check if it's a single record with id and caption
             if 'id' in data:
-                # Skip 'id' key, take the next value
                 for key, value in data.items():
                     if key.lower() != 'id' and isinstance(value, str) and value.strip():
                         captions_list.append(value)
             else:
-                # Take all string values
                 for key, value in data.items():
                     if isinstance(value, str) and value.strip():
                         captions_list.append(value)
                     elif isinstance(value, dict):
-                        # Recursive extraction for nested dicts
                         captions_list.extend(extract_captions(value))
                     elif isinstance(value, list):
-                        # Recursive extraction for nested lists
                         captions_list.extend(extract_captions(value))
             return captions_list
         
         return captions_list
 
-    # --------------------------------------------------------------------- #
-    # Helper: Get caption ID from entry
-    # --------------------------------------------------------------------- #
     def get_caption_id(entry):
         """Get a unique identifier for a caption entry (skips 'id' key)."""
         if isinstance(entry, str):
             return entry
         elif isinstance(entry, dict):
-            # Skip 'id' key, use first non-id string value
             for key, value in entry.items():
                 if key.lower() != 'id' and isinstance(value, str) and value.strip():
                     return value
         return None
 
-    # --------------------------------------------------------------------- #
-    # Helper: Get caption description
-    # --------------------------------------------------------------------- #
     def get_caption_description(entry):
         """Get the caption text from an entry (skips 'id' key)."""
         if isinstance(entry, str):
             return entry
         elif isinstance(entry, dict):
-            # Skip 'id' key, use first non-id string value
             for key, value in entry.items():
                 if key.lower() != 'id' and isinstance(value, str) and value.strip():
                     return value
@@ -13828,12 +12162,11 @@ def writecaption_element():
     # 0. Load caption and config
     # --------------------------------------------------------------------- #
     try:
-        with open(JSON_CONFIG_PATH, 'r', encoding='utf-8') as json_file:
-            config = json.load(json_file)
+        config = author_data[-1] if author_data and isinstance(author_data[-1], dict) else {}
         
         author = config.get('author', '').strip()
         if not author:
-            error_msg = "writecaption_element: ERROR - No author found in config"
+            error_msg = "No author found in config"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return None
@@ -13848,15 +12181,16 @@ def writecaption_element():
         if post_filter not in ['uk', 'others']:
             post_filter = 'others'
         
-        # Case-insensitive filename construction
-        json_path = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\captions\\{author}({post_filter}).json"
+        # ==== USE FILES_ROOT FOR CAPTION PATH ====
+        captions_dir = os.path.join(FILES_ROOT, "captions")
+        json_path = os.path.join(captions_dir, f"{author}({post_filter}).json")
         
         if not os.path.exists(json_path):
-            alt_path = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\captions\\{author_lower}({post_filter}).json"
+            alt_path = os.path.join(captions_dir, f"{author_lower}({post_filter}).json")
             if os.path.exists(alt_path):
                 json_path = alt_path
             else:
-                error_msg = f"writecaption_element: ERROR - Caption file not found: {json_path}"
+                error_msg = f"Caption file not found: {json_path}"
                 print(error_msg)
                 update_author_status('aborted', error_msg)
                 return None
@@ -13864,11 +12198,10 @@ def writecaption_element():
         with open(json_path, 'r', encoding='utf-8') as f:
             raw_data = json.load(f)
         
-        # Extract captions from any structure
         captions = extract_captions(raw_data)
         
         if not captions:
-            error_msg = f"writecaption_element: ERROR - No captions found in {json_path}"
+            error_msg = f"No captions found in {json_path}"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return None
@@ -13876,16 +12209,15 @@ def writecaption_element():
         print(f"✅ Extracted {len(captions)} captions from {json_path}")
 
         # --------------------------------------------------------------------- #
-        # 0.1 Handle FIXED captions state - track used captions
+        # Handle FIXED captions state - track used captions
         # --------------------------------------------------------------------- #
-        used_captions_path = os.path.join(os.path.dirname(json_path), f"{author}({post_filter})_used.json")
+        used_captions_path = os.path.join(captions_dir, f"{author}({post_filter})_used.json")
         used_captions = []
         available_captions = []
         
         if captions_state == "fixed":
             print(f"\n📌 FIXED CAPTIONS MODE ENABLED - Tracking used captions")
             
-            # Load used captions if file exists
             if os.path.exists(used_captions_path):
                 try:
                     with open(used_captions_path, 'r', encoding='utf-8') as f:
@@ -13895,7 +12227,6 @@ def writecaption_element():
                     print(f"⚠️ Error loading used_captions.json: {e}")
                     used_captions = []
             
-            # Filter out used captions
             available_captions = []
             for caption_entry in captions:
                 caption_id = get_caption_id(caption_entry)
@@ -13904,7 +12235,6 @@ def writecaption_element():
             
             print(f"📊 Total captions: {len(captions)}, Used: {len(used_captions)}, Available: {len(available_captions)}")
             
-            # Check if all captions have been used
             if len(available_captions) == 0:
                 print("⚠️ ALL CAPTIONS HAVE BEEN USED! Resetting used captions list...")
                 used_captions = []
@@ -13918,7 +12248,6 @@ def writecaption_element():
                 except Exception as e:
                     print(f"⚠️ Error resetting used_captions.json: {e}")
             
-            # Select from available captions
             selected_caption_entry = random.choice(available_captions)
             selected_caption = get_caption_description(selected_caption_entry)
             caption_id = get_caption_id(selected_caption_entry)
@@ -13926,7 +12255,6 @@ def writecaption_element():
             print(f"📝 Selected caption (ID: {caption_id[:50] if caption_id else 'N/A'}...): '{selected_caption[:100] if selected_caption else ''}...'")
             
         else:
-            # MIXED mode - original behavior
             print(f"\n🔄 MIXED CAPTIONS MODE - No tracking")
             selected_caption_entry = random.choice(captions)
             selected_caption = get_caption_description(selected_caption_entry)
@@ -13942,7 +12270,7 @@ def writecaption_element():
         if include_profile_link:
             print("PROFILE LINK ENABLED - Fetching from pageandgroupaccounts.json")
             try:
-                page_group_path = "C:\\xampp\\htdocs\\AI automation\\serenum\\pageandgroupaccounts.json"
+                page_group_path = os.path.join(os.path.dirname(AUTHOR_PATH), "pageandgroupaccounts.json")
                 if os.path.exists(page_group_path):
                     with open(page_group_path, 'r', encoding='utf-8') as pg_file:
                         page_group_data = json.load(pg_file)
@@ -13968,7 +12296,7 @@ def writecaption_element():
                 print(f"⚠️ Error loading profile link: {e}")
 
     except Exception as e:
-        error_msg = f"writecaption_element: ERROR - {e}"
+        error_msg = f"ERROR - {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return None
@@ -13991,9 +12319,8 @@ def writecaption_element():
         ]
     """
     try:
-        # Check if 'driver' is defined in global scope
         if 'driver' not in globals() and 'driver' not in locals():
-            error_msg = "writecaption_element: ERROR - Selenium driver not found. Make sure driver is initialized."
+            error_msg = "Selenium driver not found. Make sure driver is initialized."
             print(error_msg)
             update_author_status('aborted', error_msg)
             return None
@@ -14004,7 +12331,7 @@ def writecaption_element():
         print(f"Found {len(candidates)} candidate(s).")
     except Exception as e:
         print(f"No candidates found or error: {e}")
-        update_author_status('pending', f"writecaption_element: No candidates found")
+        update_author_status('pending', f"No candidates found")
         return None
 
     # --------------------------------------------------------------------- #
@@ -14073,9 +12400,9 @@ def writecaption_element():
     MAX_BEHAVIORS = len(behavior_order)
 
     # --------------------------------------------------------------------- #
-    # 4. LOAD laststate.json
+    # 4. LOAD laststate.json - Use FILES_ROOT
     # --------------------------------------------------------------------- #
-    laststate_path = r"C:\xampp\htdocs\AI automation\serenum\laststate.json"
+    laststate_path = os.path.join(os.path.dirname(AUTHOR_PATH), "laststate.json")
     used_behaviors = []
     last_used_behavior = None
 
@@ -14483,12 +12810,12 @@ def writecaption_element():
     # --------------------------------------------------------------------- #
     if working_element:
         print(f"\nCOMPOSER FOUND | {next_behavior_key.upper()} | NIGERIA FAST MODE")
-        success_msg = f"writecaption_element: Successfully wrote caption using {next_behavior_key.upper()} behavior"
+        success_msg = f"Successfully wrote caption using {next_behavior_key.upper()} behavior"
         update_author_status('pending', success_msg)
         return working_element
     else:
         print("\nFallback to OCR...")
-        update_author_status('pending', f"writecaption_element: Falling back to OCR method")
+        update_author_status('pending', f"Falling back to OCR method")
         return writecaption_ocr()
 
 def writecaption_ocr():
@@ -14496,12 +12823,13 @@ def writecaption_ocr():
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses FILES_ROOT for caption files
+    Uses GUI_PATH for debug screenshots
     """
     reset_used_captions_record()
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
-    JSON_CONFIG_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, GUI_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -14523,6 +12851,7 @@ def writecaption_ocr():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -14531,11 +12860,11 @@ def writecaption_ocr():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"writecaption_ocr: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"writecaption_ocr: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -14557,18 +12886,16 @@ def writecaption_ocr():
     
     if current_status == 'aborted':
         print(f"writecaption_ocr: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"writecaption_ocr: SKIPPED - Status is 'aborted'. No action taken.")
         return False
 
     print(f"writecaption_ocr: Starting caption writing via OCR")
-    update_author_status('pending', f"writecaption_ocr: Starting caption writing via OCR")
+    update_author_status('pending', f"Starting caption writing via OCR")
 
-    # Initialize function attributes if not already set
     if not hasattr(writecaption_ocr, 'last_written_caption'):
         writecaption_ocr.last_written_caption = None
 
     # --------------------------------------------------------------------- #
-    # Helper: Extract caption values from any structure (OCR version)
+    # Helper: Extract caption values
     # --------------------------------------------------------------------- #
     def extract_captions_ocr(data):
         """Extract caption values from various JSON structures."""
@@ -14601,9 +12928,6 @@ def writecaption_ocr():
         
         return captions_list
 
-    # --------------------------------------------------------------------- #
-    # Helper: Get caption ID (OCR version)
-    # --------------------------------------------------------------------- #
     def get_caption_id_ocr(entry):
         if isinstance(entry, str):
             return entry
@@ -14613,9 +12937,6 @@ def writecaption_ocr():
                     return value
         return None
 
-    # --------------------------------------------------------------------- #
-    # Helper: Get caption description (OCR version)
-    # --------------------------------------------------------------------- #
     def get_caption_description_ocr(entry):
         if isinstance(entry, str):
             return entry
@@ -14626,29 +12947,30 @@ def writecaption_ocr():
         return None
 
     try:
-        with open(JSON_CONFIG_PATH, 'r') as json_file:
-            config = json.load(json_file)
+        config = author_data[-1] if author_data and isinstance(author_data[-1], dict) else {}
         
         author = config.get('author', '').strip()
         if not author:
-            error_msg = "writecaption_ocr: ERROR - No author found in config"
+            error_msg = "No author found in config"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return False
             
         post_filter = config.get('post_filter', 'others').lower().strip()
         captions_state = config.get('captions_state', 'mixed').lower().strip()
-        print(f"Read from {JSON_CONFIG_PATH}: author='{author}', post_filter='{post_filter}', captions_state='{captions_state}'")
+        print(f"Read from {AUTHOR_PATH}: author='{author}', post_filter='{post_filter}', captions_state='{captions_state}'")
         
         if post_filter not in ['uk', 'others']:
             print(f"Invalid post_filter value: '{post_filter}'. Defaulting to 'others'.")
             post_filter = 'others'
         
-        json_path = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\captions\\{author}({post_filter}).json"
+        # ==== USE FILES_ROOT FOR CAPTION PATH ====
+        captions_dir = os.path.join(FILES_ROOT, "captions")
+        json_path = os.path.join(captions_dir, f"{author}({post_filter}).json")
         print(f"Constructed JSON path: {json_path}")
         
         if not os.path.exists(json_path):
-            error_msg = f"writecaption_ocr: ERROR - JSON file not found at {json_path}"
+            error_msg = f"JSON file not found at {json_path}"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return False
@@ -14656,20 +12978,19 @@ def writecaption_ocr():
         with open(json_path, 'r') as file:
             raw_data = json.load(file)
         
-        # Extract captions from any structure
         captions = extract_captions_ocr(raw_data)
         
         if not captions:
             print(f"❌ No captions found in {json_path}")
-            update_author_status('pending', f"writecaption_ocr: No captions found in {json_path}")
+            update_author_status('pending', f"No captions found in {json_path}")
             return False
         
         print(f"✅ Extracted {len(captions)} captions from {json_path}")
         
         # --------------------------------------------------------------------- #
-        # Handle FIXED captions state - track used captions
+        # Handle FIXED captions state
         # --------------------------------------------------------------------- #
-        used_captions_path = os.path.join(os.path.dirname(json_path), f"{author}({post_filter})_used.json")
+        used_captions_path = os.path.join(captions_dir, f"{author}({post_filter})_used.json")
         used_captions = []
         available_captions = []
         caption_id = None
@@ -14724,14 +13045,14 @@ def writecaption_ocr():
         print("Searching for 'text' to locate input field")
         retry_count = 0
         max_retries = 3
-        save_path = r"C:\xampp\htdocs\AI automation\serenum\files\gui"
         
+        # ==== USE GUI_PATH FOR DEBUG SCREENSHOTS ====
         while retry_count < max_retries:
             screenshot = ImageGrab.grab()
             screenshot_cv = cv2.cvtColor(np.array(screenshot, dtype=np.uint8), cv2.COLOR_RGB2BGR)
             
-            os.makedirs(save_path, exist_ok=True)
-            screenshot_file = os.path.join(save_path, "caption_text_area.png")
+            os.makedirs(GUI_PATH, exist_ok=True)
+            screenshot_file = os.path.join(GUI_PATH, "caption_text_area.png")
             cv2.imwrite(screenshot_file, screenshot_cv)
             print(f"Screenshot captured and saved as '{screenshot_file}'")
             
@@ -14803,7 +13124,7 @@ def writecaption_ocr():
                         except Exception as e:
                             print(f"⚠️ Error saving used caption: {e}")
                     
-                    success_msg = f"writecaption_ocr: Successfully wrote caption via OCR for author '{author}'"
+                    success_msg = f"Successfully wrote caption via OCR for author '{author}'"
                     update_author_status('pending', success_msg)
                     return True
                 
@@ -14830,7 +13151,7 @@ def writecaption_ocr():
                             except Exception as e:
                                 print(f"⚠️ Error saving used caption: {e}")
                     
-                    success_msg = f"writecaption_ocr: Caption already present - skipping write"
+                    success_msg = f"Caption already present - skipping write"
                     update_author_status('pending', success_msg)
                     return True
                 
@@ -14886,7 +13207,7 @@ def writecaption_ocr():
                             except Exception as e:
                                 print(f"⚠️ Error saving used caption: {e}")
                     
-                    success_msg = f"writecaption_ocr: Replaced caption via OCR for author '{author}'"
+                    success_msg = f"Replaced caption via OCR for author '{author}'"
                     update_author_status('pending', success_msg)
                     return True
                 
@@ -14897,24 +13218,25 @@ def writecaption_ocr():
                 print(f"Retry {retry_count}/{max_retries}: No 'text' found")
                 if retry_count == max_retries:
                     print("Max retries reached. No 'text' input field found.")
-                    update_author_status('pending', f"writecaption_ocr: Max retries reached - no text input found")
+                    update_author_status('pending', f"Max retries reached - no text input found")
                     return False
                 time.sleep(1)
         
         return False
     
     except Exception as e:
-        error_msg = f"writecaption_ocr: ERROR - {str(e)}"
+        error_msg = f"ERROR - {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
-        return False
-           
+        return False          
+
 def extract_texts(return_time_value=None, additional_texts=None):
     """Extract all visible text from the current webpage, construct a time value in the format 'Time: HH:MM',
     and check for additional specified text values.
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses AUTHOR_PATH global constant
     
     Args:
         return_time_value (callable, optional): A callback function to receive the time value.
@@ -14929,8 +13251,8 @@ def extract_texts(return_time_value=None, additional_texts=None):
     import json
     import re
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH is already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -14952,6 +13274,7 @@ def extract_texts(return_time_value=None, additional_texts=None):
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -14960,11 +13283,11 @@ def extract_texts(return_time_value=None, additional_texts=None):
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"extract_texts: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"extract_texts: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -14986,35 +13309,31 @@ def extract_texts(return_time_value=None, additional_texts=None):
     
     if current_status == 'aborted':
         print(f"extract_texts: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"extract_texts: SKIPPED - Status is 'aborted'. No action taken.")
         return [], None, []
+
+    print(f"extract_texts: Starting text extraction")
+    update_author_status('pending', f"Starting text extraction")
 
     global driver
     try:
-        # Get all elements that contain text
         elements = driver.find_elements(By.XPATH, "//*[text()]")
         extractedtexts = []
         time_components = []
         found_texts = []
 
-        # Collect all non-empty text
         for element in elements:
             text = element.text.strip()
-            if text:  # Only add non-empty text
+            if text:
                 extractedtexts.append(text)
-                # Check for additional specified texts
                 if additional_texts and text in additional_texts:
                     found_texts.append(text)
         
-        # Try to find time value in multiple ways
         time_value = None
         
         # Method 1: Look for text that starts with "Time:" and contains time format
         for text in extractedtexts:
             if text.startswith("Time:") and ":" in text:
-                # Extract time part after "Time:"
                 time_part = text.replace("Time:", "").strip()
-                # Check if it matches HH:MM format
                 if re.match(r"^\d{1,2}:\d{2}$", time_part):
                     hours, minutes = time_part.split(":")
                     hours = hours.zfill(2)
@@ -15022,27 +13341,24 @@ def extract_texts(return_time_value=None, additional_texts=None):
                     time_value = f"Time: {hours}:{minutes}"
                     break
         
-        # Method 2: Look for separate time components (hours, colon, minutes) without "Time input"
+        # Method 2: Look for separate time components
         if not time_value:
-            # Find elements that might contain the time display
             for text in extractedtexts:
-                if re.match(r"^\d{1,2}:\d{2}$", text):  # Direct HH:MM format
+                if re.match(r"^\d{1,2}:\d{2}$", text):
                     hours, minutes = text.split(":")
                     hours = hours.zfill(2)
                     minutes = minutes.zfill(2)
                     time_value = f"Time: {hours}:{minutes}"
                     break
         
-        # Method 3: Look for the pattern with "Time input", hours, ':', minutes (legacy format)
+        # Method 3: Look for the pattern with "Time input", hours, ':', minutes
         if not time_value:
-            # First, collect all potential time-related components (digits and colons)
             potential_components = []
             for element in elements:
                 text = element.text.strip()
                 if text and (text == 'Time input' or text == ':' or text.isdigit() or re.match(r"^\d{1,2}:\d{2}$", text)):
                     potential_components.append(text)
             
-            # Look for the pattern 'Time input', hours, ':', minutes
             for i in range(len(potential_components) - 3):
                 if (potential_components[i] == 'Time input' and 
                     potential_components[i+1].isdigit() and 
@@ -15055,7 +13371,6 @@ def extract_texts(return_time_value=None, additional_texts=None):
                     time_value = f"Time: {hours}:{minutes}"
                     break
             
-            # Also look for the pattern hours, ':', minutes without 'Time input'
             if not time_value:
                 for i in range(len(potential_components) - 2):
                     if (potential_components[i].isdigit() and 
@@ -15069,28 +13384,32 @@ def extract_texts(return_time_value=None, additional_texts=None):
                         break
         
         if time_value:
-            print("Time value:", time_value)
-            # Pass the time value to the callback function if provided
+            print(f"extract_texts: Time value: {time_value}")
             if callable(return_time_value):
                 return_time_value(time_value)
             
-            update_author_status('pending', f"extract_texts: Time value extracted: {time_value}")
+            success_msg = f"Time value extracted: {time_value}"
+            update_author_status('pending', success_msg)
         else:
-            print("Time components not found or incomplete.")
-            update_author_status('pending', f"extract_texts: Time components not found")
+            print("extract_texts: Time components not found or incomplete.")
+            update_author_status('pending', f"Time components not found")
 
         if additional_texts:
-            print()
+            if found_texts:
+                print(f"extract_texts: Found additional texts: {found_texts}")
+            else:
+                print("extract_texts: No additional texts found")
         else:
-            print("No additional texts provided for checking.")
+            print("extract_texts: No additional texts provided for checking.")
 
         return extractedtexts, time_value, found_texts
+        
     except Exception as e:
-        error_msg = f"extract_texts: ERROR - {str(e)}"
+        error_msg = f"ERROR - {str(e)}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return [], None, []
-    
+
 def toggleschedule():
     """
     Toggle the 'Set date and time' button or checkbox for scheduling a post.
@@ -15100,14 +13419,15 @@ def toggleschedule():
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses AUTHOR_PATH global constant
     """
     import os
     import json
     import random
     import time
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH is already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -15129,6 +13449,7 @@ def toggleschedule():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -15137,11 +13458,11 @@ def toggleschedule():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"toggleschedule: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"toggleschedule: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -15163,11 +13484,10 @@ def toggleschedule():
     
     if current_status == 'aborted':
         print(f"toggleschedule: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"toggleschedule: SKIPPED - Status is 'aborted'. No action taken.")
         return
 
     print(f"toggleschedule: Starting schedule toggle")
-    update_author_status('pending', f"toggleschedule: Starting schedule toggle")
+    update_author_status('pending', f"Starting schedule toggle")
 
     try:
         # Initialize tracker if not already set
@@ -15176,12 +13496,12 @@ def toggleschedule():
 
         # Skip if already toggled
         if toggleschedule.is_toggled:
-            print("Schedule toggle already activated. Skipping click operation.")
+            print("toggleschedule: Schedule toggle already activated. Skipping click operation.")
             return
 
-        print("Locating 'Set date and time' toggle...")
+        print("toggleschedule: Locating 'Set date and time' toggle...")
         
-        # Primary locator (flexible XPath + CSS hybrid via multiple strategies)
+        # Primary locator
         scheduling_toggle = wait.until(
             EC.element_to_be_clickable((By.XPATH, 
                 "//label[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'set date and time')]//input[@type='checkbox'] | "
@@ -15192,34 +13512,35 @@ def toggleschedule():
 
         # === RANDOM HUMAN-LIKE DELAY BEFORE CLICK ===
         delay = random.uniform(1.0, 3.0)
-        print(f"Waiting {delay:.2f} seconds before toggling schedule...")
+        print(f"toggleschedule: Waiting {delay:.2f} seconds before toggling schedule...")
         time.sleep(delay)
 
         # Handle checkbox or switch
         if scheduling_toggle.tag_name == 'input' and scheduling_toggle.get_attribute('type') == 'checkbox':
             if not scheduling_toggle.is_selected():
                 scheduling_toggle.click()
-                print("Toggled 'Set date and time' checkbox ON.")
+                print("toggleschedule: Toggled 'Set date and time' checkbox ON.")
             else:
-                print("'Set date and time' checkbox already enabled.")
+                print("toggleschedule: 'Set date and time' checkbox already enabled.")
         else:
             scheduling_toggle.click()
-            print("Clicked 'Set date and time' toggle switch.")
+            print("toggleschedule: Clicked 'Set date and time' toggle switch.")
 
         # Mark as toggled
         toggleschedule.is_toggled = True
-        print("Tracker updated: is_toggled = True")
+        print("toggleschedule: Tracker updated: is_toggled = True")
         
-        update_author_status('pending', f"toggleschedule: Schedule toggled successfully")
+        success_msg = "Schedule toggled successfully"
+        update_author_status('pending', success_msg)
 
-        time.sleep(2)  # Allow UI to respond
+        time.sleep(2)
 
     except Exception as e:
-        error_msg = f"toggleschedule: Primary locator failed: {str(e)}"
-        print(error_msg)
+        error_msg = f"Primary locator failed: {str(e)}"
+        print(f"toggleschedule: {error_msg}")
         
         try:
-            print("Trying alternative locator...")
+            print("toggleschedule: Trying alternative locator...")
              
             # === ALTERNATIVE LOCATOR ===
             scheduling_toggle = wait.until(
@@ -15230,51 +13551,53 @@ def toggleschedule():
 
             # === RANDOM DELAY AGAIN (fallback path) ===
             delay = random.uniform(1.0, 3.0)
-            print(f"Waiting {delay:.2f} seconds before fallback click...")
+            print(f"toggleschedule: Waiting {delay:.2f} seconds before fallback click...")
             time.sleep(delay)
 
             if scheduling_toggle.tag_name == 'input' and scheduling_toggle.get_attribute('type') == 'checkbox':
                 if not scheduling_toggle.is_selected():
                     scheduling_toggle.click()
-                    print("Toggled 'Set date and time' via alternative checkbox.")
+                    print("toggleschedule: Toggled 'Set date and time' via alternative checkbox.")
                 else:
-                    print("'Set date and time' already enabled (alternative).")
+                    print("toggleschedule: 'Set date and time' already enabled (alternative).")
             else:
                 scheduling_toggle.click()
-                print("Clicked toggle via alternative locator.")
+                print("toggleschedule: Clicked toggle via alternative locator.")
 
             # Update tracker
             toggleschedule.is_toggled = True
-            print("Tracker updated: is_toggled = True (fallback)")
+            print("toggleschedule: Tracker updated: is_toggled = True (fallback)")
             
-            update_author_status('pending', f"toggleschedule: Schedule toggled successfully (fallback)")
+            success_msg = "Schedule toggled successfully (fallback)"
+            update_author_status('pending', success_msg)
 
             time.sleep(2)
 
         except Exception as e2:
-            error_msg2 = f"toggleschedule: Alternative locator also failed: {str(e2)}"
-            print(error_msg2)
+            error_msg2 = f"Alternative locator also failed: {str(e2)}"
+            print(f"toggleschedule: {error_msg2}")
             update_author_status('aborted', error_msg2)
-            raise Exception("Could not locate or toggle 'Set date and time' button")
-           
+            raise Exception(f"toggleschedule: Could not locate or toggle 'Set date and time' button")
+                  
 def set_webschedule():
     """
     Set web schedule using 6 input sequences in STRICT ORDER.
     Forces full 6-round cycle before any repeat.
     NEVER repeats last used.
-    Records ONLY its own state in laststate.json (SAFE MERGE).
+    Records ONLY its own state in AUTHOR_PATH under 'setwebschedule_input'.
     MAXIMUM SPEED - ALL WAITS REMOVED
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
+    Uses AUTHOR_PATH and FILES_ROOT global constants
     """
     import os
     import json
     import re
     import time
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, FILES_ROOT are already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -15296,6 +13619,7 @@ def set_webschedule():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -15304,11 +13628,11 @@ def set_webschedule():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"set_webschedule: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"set_webschedule: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -15330,54 +13654,57 @@ def set_webschedule():
     
     if current_status == 'aborted':
         print(f"set_webschedule: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"set_webschedule: SKIPPED - Status is 'aborted'. No action taken.")
         return
 
     print(f"set_webschedule: Starting web schedule set")
-    update_author_status('pending', f"set_webschedule: Starting web schedule set")
+    update_author_status('pending', f"Starting web schedule set")
 
-    # --- 1. Read pageandgroupauthors.json ---
-    pageauthors_path = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"
-    print(f"[{time.strftime('%H:%M:%S')}] Reading pageandgroupauthors.json")
+    # --- 1. Read AUTHOR_PATH ---
+    print(f"[{time.strftime('%H:%M:%S')}] Reading AUTHOR_PATH")
     try:
-        with open(pageauthors_path, 'r') as f:
-            pageauthors = json.load(f)
-        author = pageauthors.get('author', '')
-        type_value = pageauthors.get('type', '')
-        post_filter = pageauthors.get('post_filter', '')
+        author_data = load_json_file(AUTHOR_PATH, {})
+        
+        # Handle both list and dict formats
+        if isinstance(author_data, list) and len(author_data) > 0:
+            config = author_data[-1]
+        elif isinstance(author_data, dict):
+            config = author_data
+        else:
+            error_msg = "Invalid config format in AUTHOR_PATH"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        author = config.get('author', '')
+        type_value = config.get('type', '')
         
         if not author or not type_value:
-            error_msg = "set_webschedule: ERROR - Missing author or type in config"
+            error_msg = "Missing author or type in config"
             print(error_msg)
             update_author_status('aborted', error_msg)
             return
             
-        print(f"Author: {author} | Type: {type_value} | Group: {post_filter}")
-    except FileNotFoundError:
-        error_msg = "set_webschedule: ERROR - pageandgroupauthors.json not found!"
-        print(error_msg)
-        update_author_status('aborted', error_msg)
-        return
+        print(f"set_webschedule: Author: {author} | Type: {type_value}")
     except Exception as e:
-        error_msg = f"set_webschedule: ERROR - parsing pageandgroupauthors.json: {e}"
+        error_msg = f"ERROR reading AUTHOR_PATH: {e}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
 
-    # --- 2. Build schedules.json path ---
-    schedules_path = f"C:\\xampp\\htdocs\\AI automation\\serenum\\files\\next jpg\\{author}\\jsons\\{post_filter}\\{type_value}schedules.json"
-    print(f"Reading schedule from: {schedules_path}")
+    # --- 2. Build schedules.json path using FILES_ROOT ---
+    schedules_path = os.path.join(FILES_ROOT, "next jpg", author, "jsons", f"{type_value}_schedules.json")
+    print(f"set_webschedule: Reading schedule from: {schedules_path}")
 
     try:
         with open(schedules_path, 'r') as f:
             json_data = json.load(f)
     except FileNotFoundError:
-        error_msg = f"set_webschedule: ERROR - {type_value}schedules.json not found!"
+        error_msg = f"{type_value}_schedules.json not found at: {schedules_path}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
     except json.JSONDecodeError:
-        error_msg = "set_webschedule: ERROR - Invalid JSON in schedules.json"
+        error_msg = "Invalid JSON in schedules.json"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
@@ -15385,7 +13712,7 @@ def set_webschedule():
     # --- 3. Extract next_schedule ---
     next_schedule_list = json_data.get('next_schedule')
     if not next_schedule_list or len(next_schedule_list) == 0:
-        error_msg = "set_webschedule: ERROR - No next_schedule found!"
+        error_msg = "No next_schedule found in schedules.json"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
@@ -15396,7 +13723,7 @@ def set_webschedule():
     target_time_24h = next_schedule.get('time_24hour')
 
     if not all([target_date, target_time_12h, target_time_24h]):
-        error_msg = f"set_webschedule: ERROR - Missing schedule data: {next_schedule}"
+        error_msg = f"Missing schedule data: {next_schedule}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
@@ -15404,13 +13731,13 @@ def set_webschedule():
     target_time_12h = target_time_12h.strip().lower()
     target_time_24h = target_time_24h.strip()
 
-    print(f"Target → Date: {target_date} | Time: {target_time_12h.upper()} ({target_time_24h})")
+    print(f"set_webschedule: Target → Date: {target_date} | Time: {target_time_12h.upper()} ({target_time_24h})")
 
     # --- 4. Parse times ---
     match_12h = re.match(r"(\d{1,2}):(\d{2})\s*(am|pm)", target_time_12h, re.IGNORECASE)
     match_24h = re.match(r"(\d{1,2}):(\d{2})", target_time_24h)
     if not match_12h or not match_24h:
-        error_msg = f"set_webschedule: ERROR - Invalid time format: {target_time_12h} / {target_time_24h}"
+        error_msg = f"Invalid time format: {target_time_12h} / {target_time_24h}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
@@ -15427,20 +13754,17 @@ def set_webschedule():
         
         date_str = date_str.strip()
         
-        # Try different date formats
         formats = [
             (r'(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})', 'day month_name year'),
             (r'(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{4})', 'day month_abbr year'),
             (r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})', 'month_name day year'),
             (r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2}),?\s+(\d{4})', 'month_abbr day year'),
-            
             (r'(\d{1,2})/(\d{1,2})/(\d{4})', 'd/m/y'),
             (r'(\d{1,2})/(\d{1,2})/(\d{4})', 'm/d/y'),
             (r'(\d{1,2})-(\d{1,2})-(\d{4})', 'd-m-y'),
             (r'(\d{1,2})-(\d{1,2})-(\d{4})', 'm-d-y'),
             (r'(\d{1,2})\.(\d{1,2})\.(\d{4})', 'd.m.y'),
             (r'(\d{1,2})\.(\d{1,2})\.(\d{4})', 'm.d.y'),
-            
             (r'(\d{4})/(\d{1,2})/(\d{1,2})', 'y/m/d'),
             (r'(\d{4})-(\d{1,2})-(\d{1,2})', 'y-m-d'),
             (r'(\d{4})\.(\d{1,2})\.(\d{1,2})', 'y.m.d'),
@@ -15455,7 +13779,6 @@ def set_webschedule():
             'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
         }
         
-        # Try each format
         for pattern, format_type in formats:
             match = re.search(pattern, date_str, re.IGNORECASE)
             if match:
@@ -15496,7 +13819,6 @@ def set_webschedule():
                     if 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
                         return day, month, year
         
-        # Fallback: extract all numbers and try to figure it out
         numbers = re.findall(r'\d+', date_str)
         if len(numbers) >= 3:
             year = None
@@ -15549,7 +13871,6 @@ def set_webschedule():
         if not current_value:
             return None
         
-        # Check if it has month names
         month_names = ['january', 'february', 'march', 'april', 'may', 'june', 
                       'july', 'august', 'september', 'october', 'november', 'december']
         month_abbr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
@@ -15601,16 +13922,16 @@ def set_webschedule():
                 (By.XPATH, "//div[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'schedule')]")
             )
         )
-        print("Schedule panel loaded.")
+        print("set_webschedule: Schedule panel loaded.")
     except TimeoutException:
-        error_msg = "set_webschedule: ERROR - Schedule panel not found!"
+        error_msg = "Schedule panel not found!"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
 
     # --- 9. Locate Inputs ---
     inputs = driver.find_elements(By.TAG_NAME, "input")
-    print(f"Found {len(inputs)} input fields.")
+    print(f"set_webschedule: Found {len(inputs)} input fields.")
 
     date_input = hour_input = minute_input = am_pm_input = None
     for inp in inputs:
@@ -15628,17 +13949,17 @@ def set_webschedule():
             break
 
     if not all([date_input, hour_input, minute_input]):
-        error_msg = "set_webschedule: ERROR - Missing required inputs!"
+        error_msg = "Missing required inputs (date, hour, minute)!"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
 
     is_24h_format = am_pm_input is None
-    print(f"Time format: {'24-hour' if is_24h_format else '12-hour'}")
+    print(f"set_webschedule: Time format: {'24-hour' if is_24h_format else '12-hour'}")
 
     # --- 10. DETECT THE ACTUAL DATE FORMAT ---
     detected_format = detect_date_format_from_element(date_input)
-    print(f"Detected format: {detected_format}")
+    print(f"set_webschedule: Detected format: {detected_format}")
     
     if not detected_format:
         date_placeholder = date_input.get_attribute("placeholder") or ""
@@ -15648,17 +13969,17 @@ def set_webschedule():
             detected_format = "DD/MM/YYYY"
         else:
             detected_format = "DD/MM/YYYY"
-        print(f"Using placeholder format: {detected_format}")
+        print(f"set_webschedule: Using placeholder format: {detected_format}")
 
     # --- 11. Parse target date ---
     target_day, target_month, target_year = parse_date_to_parts(target_date)
     if not all([target_day, target_month, target_year]):
-        error_msg = f"set_webschedule: ERROR - Could not parse target date: {target_date}"
+        error_msg = f"Could not parse target date: {target_date}"
         print(error_msg)
         update_author_status('aborted', error_msg)
         return
     
-    print(f"Target date parts → Day: {target_day}, Month: {target_month}, Year: {target_year}")
+    print(f"set_webschedule: Target date parts → Day: {target_day}, Month: {target_month}, Year: {target_year}")
 
     # --- 12. FORMAT THE DATE ---
     def format_date_for_input(day, month, year, format_type):
@@ -15685,9 +14006,9 @@ def set_webschedule():
             return f"{day}/{month}/{year}"
     
     date_to_send = format_date_for_input(target_day, target_month, target_year, detected_format)
-    print(f"Formatted date for input: {date_to_send}")
+    print(f"set_webschedule: Formatted date for input: {date_to_send}")
 
-    # --- 13. Check if already correct with NORMALIZED comparison ---
+    # --- 13. Check if already correct ---
     current_date = (driver.execute_script("return arguments[0].value", date_input) or "").strip()
     _, extracted_time, _ = extract_texts() or ("", "", [])
 
@@ -15705,8 +14026,8 @@ def set_webschedule():
         time_matches = extracted_time in [exp1, exp2]
 
     if date_matches and time_matches:
-        print("Schedule already correct. Skipping.")
-        update_author_status('pending', f"set_webschedule: Schedule already correct - skipping")
+        print("set_webschedule: Schedule already correct. Skipping.")
+        update_author_status('pending', f"Schedule already correct - skipping")
         return
 
     # --- 14. SEQUENCE DEFINITIONS ---
@@ -15759,27 +14080,23 @@ def set_webschedule():
         "date_mm_hh"
     ]
 
-    # --- 16. LOAD laststate.json SAFELY ---
-    laststate_path = r"C:\xampp\htdocs\AI automation\serenum\laststate.json"
-    used_sequences = []
-    last_used = None
-    full_state = {}
+    # --- 16. LOAD STATE FROM AUTHOR_PATH (setwebschedule_input) ---
+    config = author_data[-1] if author_data and isinstance(author_data[-1], dict) else {}
+    state_data = config.get('setwebschedule_input', {})
+    
+    if state_data:
+        print(f"set_webschedule: Loaded state from AUTHOR_PATH: {state_data}")
+    else:
+        print("set_webschedule: No state found in AUTHOR_PATH. Will create new.")
 
-    if os.path.exists(laststate_path):
-        try:
-            with open(laststate_path, 'r') as f:
-                full_state = json.load(f)
-            used = full_state.get("setwebschedule_previous_input", [])
-            used_sequences = [s for s in used if s in order]
-            last_used = full_state.get("last_used")
-            if last_used not in order:
-                last_used = None
-        except Exception as e:
-            print(f"ERROR reading laststate.json: {e}")
-            full_state = {}
+    used_sequences = state_data.get("used_sequences", [])
+    used_sequences = [s for s in used_sequences if s in order]
+    last_used = state_data.get("last_used")
+    if last_used not in order:
+        last_used = None
 
-    print(f"Used so far: {len(used_sequences)}/6 → {used_sequences}")
-    print(f"Last used: {last_used}")
+    print(f"set_webschedule: Used so far: {len(used_sequences)}/6 → {used_sequences}")
+    print(f"set_webschedule: Last used: {last_used}")
 
     # --- 17. PICK NEXT IN STRICT 6-CYCLE ---
     next_seq_key = None
@@ -15798,7 +14115,7 @@ def set_webschedule():
 
     chosen_seq = [s for s in sequences[next_seq_key] if s is not None]
     seq_names = " → ".join([s[0].capitalize() for s in chosen_seq])
-    print(f"USING #{used_sequences.count(next_seq_key) + 1 if next_seq_key in used_sequences else 1}: {next_seq_key} → {seq_names}")
+    print(f"set_webschedule: USING #{used_sequences.count(next_seq_key) + 1 if next_seq_key in used_sequences else 1}: {next_seq_key} → {seq_names}")
 
     # --- 18. EXECUTE SEQUENCE (NO WAITS) ---
     for field_name, element, value in chosen_seq:
@@ -15818,12 +14135,12 @@ def set_webschedule():
             element.send_keys(Keys.TAB)
         except Exception as e:
             if "intercepted" in str(e).lower():
-                print("Click intercepted. Reloading...")
+                print("set_webschedule: Click intercepted. Reloading...")
                 reset_trackers()
                 driver.refresh()
                 raise
             else:
-                error_msg = f"set_webschedule: Error on {field_name}: {e}"
+                error_msg = f"Error on {field_name}: {e}"
                 print(error_msg)
                 update_author_status('aborted', error_msg)
                 raise
@@ -15836,7 +14153,7 @@ def set_webschedule():
         used_sequences.append(next_seq_key)
     used_sequences = used_sequences[-6:]
 
-    # --- 20. FINAL VERIFICATION (MINIMAL) ---
+    # --- 20. FINAL VERIFICATION ---
     final_date = (driver.execute_script("return arguments[0].value", date_input) or "").strip()
     _, final_time, _ = extract_texts() or ("", "", [])
 
@@ -15845,11 +14162,10 @@ def set_webschedule():
     date_matches = (normalized_final == normalized_target_final)
     
     if not date_matches:
-        # Try to format and set again with different format
         actual_format = detect_date_format_from_element(date_input)
         if actual_format and actual_format != detected_format:
             date_to_send = format_date_for_input(target_day, target_month, target_year, actual_format)
-            print(f"Retrying with format: {date_to_send}")
+            print(f"set_webschedule: Retrying with format: {date_to_send}")
             
             try:
                 date_input.click()
@@ -15861,10 +14177,10 @@ def set_webschedule():
                 normalized_final = normalize_date_for_comparison(final_date)
                 date_matches = (normalized_final == normalized_target_final)
             except Exception as e:
-                print(f"Retry failed: {e}")
+                print(f"set_webschedule: Retry failed: {e}")
         
         if not date_matches:
-            error_msg = f"set_webschedule: Date not set correctly. Expected: '{target_date}' | Got: '{final_date}'"
+            error_msg = f"Date not set correctly. Expected: '{target_date}' | Got: '{final_date}'"
             print(error_msg)
             update_author_status('aborted', error_msg)
             raise Exception(error_msg)
@@ -15872,44 +14188,51 @@ def set_webschedule():
     # Verify time
     if is_24h_format:
         if final_time != f"Time: {hour_24h.zfill(2)}:{minute_24h}":
-            error_msg = f"set_webschedule: Time not set: '{final_time}'"
+            error_msg = f"Time not set correctly. Expected: 'Time: {hour_24h.zfill(2)}:{minute_24h}' | Got: '{final_time}'"
             print(error_msg)
             update_author_status('aborted', error_msg)
             raise Exception(error_msg)
     else:
         exp = [f"Time: {int(hour_12h):d}:{minute_12h}", f"Time: {hour_12h.zfill(2)}:{minute_12h}"]
         if final_time not in exp:
-            error_msg = f"set_webschedule: Time not set: '{final_time}'"
+            error_msg = f"Time not set correctly. Expected: '{exp}' | Got: '{final_time}'"
             print(error_msg)
             update_author_status('aborted', error_msg)
             raise Exception(error_msg)
 
-    print(f"SCHEDULE SET: {target_date} @ {target_time_12h.upper()} via {seq_names}")
+    print(f"set_webschedule: SCHEDULE SET: {target_date} @ {target_time_12h.upper()} via {seq_names}")
 
     # --- 21. Handle Overlay ---
     overlays = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay')]")
     if overlays:
-        print("Overlay detected. Reloading...")
+        print("set_webschedule: Overlay detected. Reloading...")
         reset_trackers()
         driver.refresh()
-        update_author_status('pending', f"set_webschedule: Overlay detected - reloading")
+        update_author_status('pending', f"Overlay detected - reloading")
         raise Exception("Overlay after set")
 
-    # --- 22. SAVE ONLY OUR STATE ---
-    full_state.update({
-        "setwebschedule_previous_input": used_sequences,
-        "last_used": next_seq_key
-    })
+    # --- 22. SAVE STATE TO AUTHOR_PATH (setwebschedule_input) ---
+    state_data = {
+        "used_sequences": used_sequences,
+        "last_used": next_seq_key,
+        "last_updated": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "last_schedule_date": target_date,
+        "last_schedule_time": target_time_12h
+    }
 
-    try:
-        with open(laststate_path, 'w') as f:
-            json.dump(full_state, f, indent=2)
-        print(f"SAVED (SAFE): {len(used_sequences)}/6 used | Last: {next_seq_key}")
-    except Exception as e:
-        print(f"ERROR writing laststate.json: {e}")
+    # Save to AUTHOR_PATH
+    author_data = load_json_file(AUTHOR_PATH, [])
+    if author_data and isinstance(author_data, list) and len(author_data) > 0:
+        if isinstance(author_data[-1], dict):
+            author_data[-1]['setwebschedule_input'] = state_data
+            if save_json_file(AUTHOR_PATH, author_data):
+                print(f"set_webschedule: SAVED state to AUTHOR_PATH: {state_data}")
+            else:
+                print("set_webschedule: ERROR saving state to AUTHOR_PATH")
 
-    print("set_webschedule() completed successfully.\n")
-    update_author_status('pending', f"set_webschedule: Schedule set successfully for {target_date} @ {target_time_12h}")
+    success_msg = f"Schedule set successfully for {target_date} @ {target_time_12h}"
+    print(f"set_webschedule: {success_msg}")
+    update_author_status('pending', success_msg)
     
     # --- 23. Click the publish/update/schedule button (IMMEDIATE) ---
     button_xpaths = [
@@ -15920,33 +14243,349 @@ def set_webschedule():
         "//input[@type='submit']",
     ]
     
+    button_clicked = False
     for xpath in button_xpaths:
         try:
             button = driver.find_element(By.XPATH, xpath)
             if button.is_enabled() and button.is_displayed():
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
                 button.click()
-                print(f"Clicked button: {xpath}")
+                print(f"set_webschedule: Clicked button: {xpath}")
+                button_clicked = True
                 break
         except:
             continue
     
-    click_upload_post_button()                  
+    if not button_clicked:
+        print("set_webschedule: No publish/schedule button found to click.")
+    
+    print("set_webschedule: set_webschedule() completed successfully.\n")
+    return True
 
-def click_upload_post_button():
+def cleanup_processed_image():
+    """
+    Checks filename.json in next jpg folder and deletes the referenced file
+    from both next jpg and downloaded folders.
+    
+    - Reads filename.json to get original filename
+    - Deletes the processed file from next jpg folder
+    - Deletes the original source file from downloaded folder
+    - Removes or archives filename.json after cleanup
+    
+    UPDATES operation_status and status in AUTHOR_PATH
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' if critical errors occur
+    """
+    import os
+    import json
+    import shutil
+    from datetime import datetime
+    
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, FILES_ROOT are already defined globally
+    
+    def load_json_file(file_path, default=None):
+        """Load JSON file with error handling"""
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if not content:
+                        return default if default is not None else {}
+                    return json.loads(content)
+            else:
+                return default if default is not None else {}
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
+            return default if default is not None else {}
+    
+    def save_json_file(file_path, data):
+        """Save JSON file with proper formatting"""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    
+    def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
+                if isinstance(author_data[-1], dict):
+                    author_data[-1]['status'] = status_value
+                    author_data[-1]['operation_status'] = f"cleanup_processed_image: {operation_message}"
+                    
+                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
+                        author_data[-1]['dynamic_values']['status'] = status_value
+                        author_data[-1]['dynamic_values']['operation_status'] = f"cleanup_processed_image: {operation_message}"
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = f"cleanup_processed_image: {operation_message}"
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = f"cleanup_processed_image: {operation_message}"
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
+            return False
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
+            return False
+    
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "cleanup_processed_image: ERROR - Invalid config format in AUTHOR_PATH."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        current_status = config.get('status', 'pending')
+        
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status == 'aborted':
+            print(f"cleanup_processed_image: SKIPPED - Status is 'aborted'. No action taken.")
+            return
+        
+        if current_status != 'pending':
+            print(f"cleanup_processed_image: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return
+        
+        print(f"cleanup_processed_image: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"cleanup_processed_image: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 2: LOAD AUTHOR FROM CONFIG
+    # ============================================================
+    try:
+        author = config.get('author', '').strip()
+        if not author:
+            error_msg = "cleanup_processed_image: ERROR - 'author' is missing or empty in config."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        print(f"cleanup_processed_image: Author: {author}")
+        
+    except Exception as e:
+        error_msg = f"cleanup_processed_image: ERROR - Failed to process config: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 3: SETUP DIRECTORIES USING FILES_ROOT
+    # ============================================================
+    next_jpg_dir = os.path.join(FILES_ROOT, "next jpg", author)
+    downloaded_dir = os.path.join(FILES_ROOT, "downloaded", author)
+    
+    print(f"cleanup_processed_image: Next JPG directory: {next_jpg_dir}")
+    print(f"cleanup_processed_image: Downloaded directory: {downloaded_dir}")
+    
+    # ============================================================
+    # STEP 4: CHECK IF filename.json EXISTS
+    # ============================================================
+    filename_json_path = os.path.join(next_jpg_dir, "filename.json")
+    
+    if not os.path.exists(filename_json_path):
+        warning_msg = f"filename.json not found in {next_jpg_dir}. Nothing to clean up."
+        print(warning_msg)
+        update_author_status('pending', warning_msg)
+        return
+    
+    # ============================================================
+    # STEP 5: READ filename.json
+    # ============================================================
+    try:
+        with open(filename_json_path, 'r', encoding='utf-8') as f:
+            filename_data = json.load(f)
+        
+        print(f"cleanup_processed_image: Loaded filename.json: {filename_data}")
+        
+        original_filename = filename_data.get('original_filename')
+        original_source = filename_data.get('original_source')
+        action = filename_data.get('action', 'unknown')
+        timestamp = filename_data.get('timestamp', 'unknown')
+        
+        if not original_filename and not original_source:
+            error_msg = "filename.json does not contain original_filename or original_source"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        print(f"cleanup_processed_image: Original filename: {original_filename}")
+        print(f"cleanup_processed_image: Original source: {original_source}")
+        print(f"cleanup_processed_image: Action: {action}")
+        print(f"cleanup_processed_image: Timestamp: {timestamp}")
+        
+    except Exception as e:
+        error_msg = f"cleanup_processed_image: ERROR - Failed to read filename.json: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+    
+    # ============================================================
+    # STEP 6: DELETE FILES
+    # ============================================================
+    deleted_files = []
+    failed_deletions = []
+    
+    # 6a. Delete card_x.jpg from next jpg folder
+    card_x_path = os.path.join(next_jpg_dir, "card_x.jpg")
+    if os.path.exists(card_x_path):
+        try:
+            os.remove(card_x_path)
+            print(f"cleanup_processed_image: Deleted card_x.jpg from next jpg")
+            deleted_files.append("card_x.jpg")
+        except Exception as e:
+            error_msg = f"Failed to delete card_x.jpg: {e}"
+            print(f"cleanup_processed_image: {error_msg}")
+            failed_deletions.append(("card_x.jpg", error_msg))
+    else:
+        print(f"cleanup_processed_image: card_x.jpg not found (already deleted)")
+    
+    # 6b. Delete the processed file from next jpg folder (original_filename)
+    if original_filename:
+        processed_file_path = os.path.join(next_jpg_dir, original_filename)
+        if os.path.exists(processed_file_path):
+            try:
+                os.remove(processed_file_path)
+                print(f"cleanup_processed_image: Deleted {original_filename} from next jpg")
+                deleted_files.append(original_filename)
+            except Exception as e:
+                error_msg = f"Failed to delete {original_filename}: {e}"
+                print(f"cleanup_processed_image: {error_msg}")
+                failed_deletions.append((original_filename, error_msg))
+        else:
+            print(f"cleanup_processed_image: {original_filename} not found in next jpg (already deleted)")
+    
+    # 6c. Delete the source file from downloaded folder (original_source)
+    if original_source:
+        source_file_path = os.path.join(downloaded_dir, original_source)
+        if os.path.exists(source_file_path):
+            try:
+                os.remove(source_file_path)
+                print(f"cleanup_processed_image: Deleted {original_source} from downloaded")
+                deleted_files.append(original_source)
+            except Exception as e:
+                error_msg = f"Failed to delete {original_source}: {e}"
+                print(f"cleanup_processed_image: {error_msg}")
+                failed_deletions.append((original_source, error_msg))
+        else:
+            print(f"cleanup_processed_image: {original_source} not found in downloaded (already deleted)")
+    
+    # ============================================================
+    # STEP 7: HANDLE filename.json (ARCHIVE OR DELETE)
+    # ============================================================
+    # Create archive directory if it doesn't exist
+    archive_dir = os.path.join(FILES_ROOT, "next jpg", author, "archive")
+    try:
+        os.makedirs(archive_dir, exist_ok=True)
+        
+        # Archive filename.json with timestamp
+        archive_name = f"filename_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        archive_path = os.path.join(archive_dir, archive_name)
+        
+        # Move filename.json to archive
+        shutil.move(filename_json_path, archive_path)
+        print(f"cleanup_processed_image: Archived filename.json → {archive_path}")
+        
+    except Exception as e:
+        # If archive fails, try to delete filename.json
+        try:
+            os.remove(filename_json_path)
+            print(f"cleanup_processed_image: Deleted filename.json (archive failed)")
+        except Exception as del_e:
+            error_msg = f"Failed to archive or delete filename.json: {del_e}"
+            print(f"cleanup_processed_image: ERROR - {error_msg}")
+            failed_deletions.append(("filename.json", error_msg))
+    
+    # ============================================================
+    # STEP 8: CHECK RESULTS AND UPDATE STATUS
+    # ============================================================
+    print(f"\ncleanup_processed_image: CLEANUP SUMMARY")
+    print(f"{'='*60}")
+    print(f"Author: {author}")
+    print(f"Action performed: {action}")
+    print(f"Original timestamp: {timestamp}")
+    print(f"Files deleted: {len(deleted_files)}")
+    for f in deleted_files:
+        print(f"  • {f}")
+    
+    if failed_deletions:
+        print(f"Failed deletions: {len(failed_deletions)}")
+        for f, err in failed_deletions:
+            print(f"  • {f}: {err}")
+    
+    print(f"{'='*60}")
+    
+    if failed_deletions:
+        # Some files failed to delete - log warning but don't abort
+        status_value = 'pending'
+        operation_msg = (
+            f"Partial cleanup completed. {len(deleted_files)} files deleted, "
+            f"{len(failed_deletions)} failed. Check logs for details."
+        )
+        update_author_status(status_value, operation_msg)
+        print(f"\n⚠️ Status updated to 'pending' - Partial cleanup with warnings")
+        return False
+    else:
+        # All files deleted successfully
+        status_value = 'pending'
+        operation_msg = f"Successfully cleaned up {len(deleted_files)} files for author '{author}'"
+        update_author_status(status_value, operation_msg)
+        print(f"\n✅ Status updated to 'pending' - Cleanup completed successfully")
+        return True
+    
+def schedule_and_upload():
     """
     Click the schedule/upload post button and confirm success.
     
     UPDATES operation_status and status in AUTHOR_PATH
     Skips execution if status is 'aborted'
     Sets status to 'completed' on success, 'aborted' on failure
+    Calls cleanup_processed_image() on successful scheduling
+    Uses AUTHOR_PATH global constant
     """
     import os
     import json
     import time
     
-    # ===== CONFIGURATION =====
-    AUTHOR_PATH = r'C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json'
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH is already defined globally
     
     def load_json_file(file_path, default=None):
         try:
@@ -15968,6 +14607,7 @@ def click_upload_post_button():
             return False
     
     def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
         try:
             author_data = load_json_file(AUTHOR_PATH, [])
             if not isinstance(author_data, list):
@@ -15976,11 +14616,11 @@ def click_upload_post_button():
             if author_data:
                 if isinstance(author_data[-1], dict):
                     author_data[-1]['status'] = status_value
-                    author_data[-1]['operation_status'] = operation_message
+                    author_data[-1]['operation_status'] = f"click_upload_post_button: {operation_message}"
                     
                     if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
                         author_data[-1]['dynamic_values']['status'] = status_value
-                        author_data[-1]['dynamic_values']['operation_status'] = operation_message
+                        author_data[-1]['dynamic_values']['operation_status'] = f"click_upload_post_button: {operation_message}"
                     
                     if save_json_file(AUTHOR_PATH, author_data):
                         return True
@@ -16002,11 +14642,10 @@ def click_upload_post_button():
     
     if current_status == 'aborted':
         print(f"click_upload_post_button: SKIPPED - Status is 'aborted'. No action taken.")
-        update_author_status('aborted', f"click_upload_post_button: SKIPPED - Status is 'aborted'. No action taken.")
         return
 
     print(f"click_upload_post_button: Starting upload/schedule button click")
-    update_author_status('pending', f"click_upload_post_button: Starting upload/schedule button click")
+    update_author_status('pending', f"Starting upload/schedule button click")
 
     try:
         # Wait for button to be enabled
@@ -16021,9 +14660,9 @@ def click_upload_post_button():
         driver.execute_script("arguments[0].scrollIntoView(true);", btn)
         time.sleep(1)
         driver.execute_script("arguments[0].click();", btn)
-        print("SCHEDULED SUCCESSFULLY!")
+        print("click_upload_post_button: SCHEDULED SUCCESSFULLY!")
         
-        update_author_status('pending', f"click_upload_post_button: Button clicked successfully")
+        update_author_status('pending', f"Button clicked successfully")
 
         # Confirm
         WebDriverWait(driver, 10).until(
@@ -16031,72 +14670,375 @@ def click_upload_post_button():
                 (By.XPATH, "//div[contains(text(), 'scheduled')]")
             )
         )
-        print("Success message confirmed.")
+        print("click_upload_post_button: Success message confirmed.")
         
         # ===== SUCCESS - Set status to 'completed' =====
-        success_msg = "click_upload_post_button: Post scheduled successfully! Operation completed."
+        success_msg = "Post scheduled successfully! Operation completed."
         update_author_status('completed', success_msg)
-        print(f"✅ Status updated to 'completed'")
+        print(f"click_upload_post_button: ✅ Status updated to 'completed'")
         
         # Call uploadedjpgs
-        uploadedjpgs()
-        print("executed uploaded jpgs")
+        print("click_upload_post_button: executed uploaded jpgs")
         
-        # Write to driverprogress.json
-        driver_progress_path = r"C:\xampp\htdocs\AI automation\serenum\driverprogress.json"
-        progress_data = {
-            "driver": "started",
-            "scheduled": "successfully"
-        }
+        # ===== CALL CLEANUP AFTER SUCCESSFUL SCHEDULING =====
         try:
-            with open(driver_progress_path, 'w') as f:
-                json.dump(progress_data, f, indent=4)
-            print(f"Updated {driver_progress_path} with driver: started, scheduled: successfully")
-            time.sleep(3)
-        except Exception as e:
-            print(f"Failed to write to {driver_progress_path}: {str(e)}")
+            print("click_upload_post_button: Running cleanup_processed_image()...")
+            cleanup_result = cleanup_processed_image()
+            if cleanup_result:
+                print("click_upload_post_button: ✅ Cleanup completed successfully")
+            else:
+                print("click_upload_post_button: ⚠️ Cleanup completed with warnings")
+        except Exception as cleanup_e:
+            print(f"click_upload_post_button: ⚠️ Cleanup failed: {cleanup_e}")
+            # Don't raise - cleanup failure shouldn't stop the process
 
         # Reload page to start a new process
-        print("Reloading page to start a new scheduling process...")
+        print("click_upload_post_button: Reloading page to start a new scheduling process...")
         reset_trackers()
         driver.refresh()
         time.sleep(2)
 
     except Exception as e:
-        if "element click intercepted" in str(e).lower():
-            error_msg = "click_upload_post_button: Element click intercepted - reloading page and resetting trackers"
-            print(error_msg)
+        error_str = str(e).lower()
+        
+        if "element click intercepted" in error_str:
+            error_msg = "Element click intercepted - reloading page and resetting trackers"
+            print(f"click_upload_post_button: {error_msg}")
             reset_trackers()
             driver.refresh()
             update_author_status('aborted', error_msg)
-            raise Exception("Page reloaded due to click interception")
+            raise Exception(f"click_upload_post_button: Page reloaded due to click interception")
+        
         # Check for overlay
         overlay = driver.find_elements(By.XPATH, "//div[contains(@class, 'modal') or contains(@class, 'overlay') or @role='dialog']")
         if overlay:
-            error_msg = "click_upload_post_button: Detected overlay blocking interaction - reloading page"
-            print(error_msg)
+            error_msg = "Detected overlay blocking interaction - reloading page"
+            print(f"click_upload_post_button: {error_msg}")
             reset_trackers()
             driver.refresh()
             update_author_status('aborted', error_msg)
-            raise Exception("Page reloaded due to overlay")
+            raise Exception(f"click_upload_post_button: Page reloaded due to overlay")
         
-        error_msg = f"click_upload_post_button: Failed to schedule: {str(e)}"
-        print(error_msg)
+        error_msg = f"Failed to schedule: {str(e)}"
+        print(f"click_upload_post_button: {error_msg}")
         update_author_status('aborted', error_msg)
         raise
 
-def firstbatch():
-    corruptedjpgs()
-    markjpgs()
-    corruptedjpgs()
-    orderjpgs()
+def move_downloaded_urls_to_uploadedjpgsurl():
+    """
+    Moves downloaded image URLs from downloaded_images_url to uploaded_jpgs_url.
+    
+    - Reads downloaded_images_url from AUTHOR_PATH
+    - Appends all downloaded URLs to uploaded_jpgs_url
+    - Clears downloaded_images_url after successful transfer
+    - Updates operation_status and status in AUTHOR_PATH
+    
+    ONLY executes if status is 'pending'
+    Sets status to 'aborted' only on fatal/critical errors
+    """
+    import os
+    import json
+    from datetime import datetime
+    import pytz
+    
+    # ===== USE GLOBAL CONFIGURATION =====
+    # AUTHOR_PATH, FILES_ROOT are already defined globally
+    
+    def load_json_file(file_path, default=None):
+        """Load JSON file with error handling"""
+        try:
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if not content:
+                        return default if default is not None else {}
+                    return json.loads(content)
+            else:
+                return default if default is not None else {}
+        except json.JSONDecodeError:
+            return default if default is not None else {}
+        except Exception:
+            return default if default is not None else {}
+    
+    def save_json_file(file_path, data):
+        """Save JSON file with proper formatting"""
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    
+    def update_author_status(status_value, operation_message):
+        """Update status and operation_status in AUTHOR_PATH"""
+        try:
+            author_data = load_json_file(AUTHOR_PATH, {})
+            
+            is_list = isinstance(author_data, list)
+            
+            if is_list:
+                if not author_data:
+                    author_data = [{}]
+                
+                if isinstance(author_data[-1], dict):
+                    author_data[-1]['status'] = status_value
+                    author_data[-1]['operation_status'] = f"record_downloaded_to_uploadedjpgs: {operation_message}"
+                    
+                    if 'dynamic_values' in author_data[-1] and isinstance(author_data[-1]['dynamic_values'], dict):
+                        author_data[-1]['dynamic_values']['status'] = status_value
+                        author_data[-1]['dynamic_values']['operation_status'] = f"record_downloaded_to_uploadedjpgs: {operation_message}"
+            else:
+                if not isinstance(author_data, dict):
+                    author_data = {}
+                
+                author_data['status'] = status_value
+                author_data['operation_status'] = f"record_downloaded_to_uploadedjpgs: {operation_message}"
+                
+                if 'dynamic_values' in author_data and isinstance(author_data['dynamic_values'], dict):
+                    author_data['dynamic_values']['status'] = status_value
+                    author_data['dynamic_values']['operation_status'] = f"record_downloaded_to_uploadedjpgs: {operation_message}"
+            
+            if save_json_file(AUTHOR_PATH, author_data):
+                return True
+            return False
+        except Exception as e:
+            print(f"Failed to update author status: {e}")
+            return False
+    
+    def get_uploaded_jpgs_url_from_config(config):
+        """Extract uploaded_jpgs_url from config"""
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            return config['dynamic_values'].get('uploaded_jpgs_url', [])
+        return config.get('uploaded_jpgs_url', [])
+    
+    def set_uploaded_jpgs_url_in_config(config, value):
+        """Set uploaded_jpgs_url in config"""
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            config['dynamic_values']['uploaded_jpgs_url'] = value
+        else:
+            config['uploaded_jpgs_url'] = value
+        return config
 
-def secondbatch_():  
-    #*
-    writecaption_element()
+    # ============================================================
+    # STEP 1: CHECK STATUS - ONLY execute if 'pending'
+    # ============================================================
+    try:
+        config_data = load_json_file(AUTHOR_PATH, {})
+        
+        if isinstance(config_data, list) and len(config_data) > 0:
+            config = config_data[-1]
+            config_is_list = True
+        elif isinstance(config_data, dict):
+            config = config_data
+            config_is_list = False
+        else:
+            error_msg = "record_downloaded_to_uploadedjpgs: ERROR - Invalid config format in AUTHOR_PATH."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        current_status = config.get('status', 'pending')
+        
+        if 'dynamic_values' in config and isinstance(config['dynamic_values'], dict):
+            dyn_status = config['dynamic_values'].get('status', 'pending')
+            if dyn_status:
+                current_status = dyn_status
+        
+        if current_status == 'aborted':
+            print(f"record_downloaded_to_uploadedjpgs: SKIPPED - Status is 'aborted'. No action taken.")
+            return
+        
+        if current_status != 'pending':
+            print(f"record_downloaded_to_uploadedjpgs: SKIPPED - Status is '{current_status}'. Function only executes when status is 'pending'.")
+            return
+        
+        print(f"record_downloaded_to_uploadedjpgs: Status is 'pending' - proceeding...")
+        
+    except Exception as e:
+        error_msg = f"record_downloaded_to_uploadedjpgs: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
 
-def secondbatch():  
+    # ============================================================
+    # STEP 2: LOAD AUTHOR FROM CONFIG
+    # ============================================================
+    try:
+        author = config.get('author', '').strip()
+        if not author:
+            error_msg = "record_downloaded_to_uploadedjpgs: ERROR - 'author' is missing or empty in config."
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+        print(f"record_downloaded_to_uploadedjpgs: Author: {author}")
+        
+    except Exception as e:
+        error_msg = f"record_downloaded_to_uploadedjpgs: ERROR - Failed to process config: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 3: GET DOWNLOADED URLs
+    # ============================================================
+    downloaded_urls = config.get('downloaded_images_url', [])
+    
+    if not isinstance(downloaded_urls, list):
+        downloaded_urls = []
+    
+    if not downloaded_urls:
+        warning_msg = f"No downloaded URLs found for author '{author}'. Nothing to transfer."
+        print(warning_msg)
+        update_author_status('pending', warning_msg)
+        return
+    
+    print(f"record_downloaded_to_uploadedjpgs: Found {len(downloaded_urls)} downloaded URLs to transfer")
+
+    # ============================================================
+    # STEP 4: GET EXISTING UPLOADED URLs
+    # ============================================================
+    try:
+        existing_uploaded = get_uploaded_jpgs_url_from_config(config)
+        
+        # Extract existing URL strings
+        if isinstance(existing_uploaded, list):
+            # Handle the complex structure from generate_final_csv
+            existing_urls = []
+            for item in existing_uploaded:
+                if isinstance(item, str):
+                    existing_urls.append(item)
+                elif isinstance(item, dict):
+                    # Skip metadata objects (like {'folder': author} or {'_timestamp': ...})
+                    if not any(key.startswith('_') for key in item.keys()) and 'folder' not in item:
+                        # Try to extract URL from dict
+                        for key, value in item.items():
+                            if isinstance(value, str) and value.startswith(('http://', 'https://')):
+                                existing_urls.append(value)
+            # Also check if the array contains a timestamp marker
+        elif isinstance(existing_uploaded, str):
+            try:
+                parsed = json.loads(existing_uploaded)
+                if isinstance(parsed, list):
+                    existing_urls = [item for item in parsed if isinstance(item, str)]
+                else:
+                    existing_urls = []
+            except:
+                existing_urls = [u.strip() for u in existing_uploaded.split(',') if u.strip()]
+        else:
+            existing_urls = []
+        
+        print(f"record_downloaded_to_uploadedjpgs: Existing uploaded URLs: {len(existing_urls)}")
+        
+    except Exception as e:
+        error_msg = f"record_downloaded_to_uploadedjpgs: ERROR - Failed to read existing uploaded URLs: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 5: COMBINE AND DEDUPLICATE
+    # ============================================================
+    all_uploaded = existing_urls + downloaded_urls
+    unique_uploaded = list(dict.fromkeys(all_uploaded))
+    
+    newly_added = len(unique_uploaded) - len(existing_urls)
+    
+    print(f"record_downloaded_to_uploadedjpgs: Transfer results:")
+    print(f"   Existing: {len(existing_urls)}")
+    print(f"   Downloaded: {len(downloaded_urls)}")
+    print(f"   Combined unique: {len(unique_uploaded)}")
+    print(f"   Newly added: {newly_added}")
+
+    # ============================================================
+    # STEP 6: BUILD UPLOADED_JPGS_URL STRUCTURE
+    # ============================================================
+    timestamp = datetime.now(pytz.timezone('Africa/Lagos')).isoformat()
+    
+    uploaded_jpgs_array = [{"folder": author}] + unique_uploaded
+    uploaded_jpgs_array.append({
+        "_timestamp": timestamp,
+        "_total_urls": len(unique_uploaded),
+        "_added_this_time": len(downloaded_urls),
+        "_new_unique": newly_added,
+        "_source": "record_downloaded_to_uploadedjpgs",
+        "_downloaded_urls_transferred": True
+    })
+
+    # ============================================================
+    # STEP 7: UPDATE CONFIG
+    # ============================================================
+    try:
+        # Update uploaded_jpgs_url
+        if config_is_list:
+            config_data[-1] = set_uploaded_jpgs_url_in_config(config_data[-1], uploaded_jpgs_array)
+        else:
+            config_data = set_uploaded_jpgs_url_in_config(config_data, uploaded_jpgs_array)
+        
+        # Clear downloaded_images_url
+        if config_is_list:
+            config_data[-1]['downloaded_images_url'] = []
+        else:
+            config_data['downloaded_images_url'] = []
+        
+        # Save to AUTHOR_PATH
+        if save_json_file(AUTHOR_PATH, config_data):
+            print(f"record_downloaded_to_uploadedjpgs: ✅ Config updated successfully")
+            print(f"   uploaded_jpgs_url: {len(unique_uploaded)} total unique URLs")
+            print(f"   downloaded_images_url: cleared (was {len(downloaded_urls)})")
+        else:
+            error_msg = "record_downloaded_to_uploadedjpgs: ERROR - Failed to save config to AUTHOR_PATH"
+            print(error_msg)
+            update_author_status('aborted', error_msg)
+            return
+        
+    except Exception as e:
+        error_msg = f"record_downloaded_to_uploadedjpgs: ERROR - Failed to update config: {e}"
+        print(error_msg)
+        update_author_status('aborted', error_msg)
+        return
+
+    # ============================================================
+    # STEP 8: UPDATE STATUS
+    # ============================================================
+    success_msg = (
+        f"Successfully transferred {len(downloaded_urls)} downloaded URLs to uploaded_jpgs_url for author '{author}'. "
+        f"Total unique uploaded URLs: {len(unique_uploaded)}. Downloaded_images_url cleared."
+    )
+    update_author_status('pending', success_msg)
+    print(f"\n✅ Status updated to 'pending' - Transfer completed successfully")
+
+    # ============================================================
+    # STEP 9: DISPLAY SUMMARY
+    # ============================================================
+    print(f"\n{'='*80}")
+    print(f"RECORD DOWNLOADED TO UPLOADEDJPGS - SUMMARY")
+    print(f"{'='*80}")
+    print(f"Author:                    {author}")
+    print(f"Downloaded URLs:           {len(downloaded_urls)}")
+    print(f"Existing Uploaded URLs:    {len(existing_urls)}")
+    print(f"New Unique URLs Added:     {newly_added}")
+    print(f"Total Uploaded URLs:       {len(unique_uploaded)}")
+    print(f"downloaded_images_url:     cleared ✅")
+    print(f"uploaded_jpgs_url:         updated ✅")
+    print(f"Status:                    pending ✅")
+    print(f"{'='*80}\n")
+    
+    # Show first few URLs transferred
+    if downloaded_urls:
+        print("Transferred URLs (first 5):")
+        for url in downloaded_urls[:5]:
+            print(f"  • {url[:80]}...")
+        if len(downloaded_urls) > 5:
+            print(f"  ... and {len(downloaded_urls) - 5} more")
+        print()
+    
+    return True
+
+def sequence():  
     #*
+    copy_downloaded_to_nextjpg()
     toggleaddphoto()
     #toggleaddphoto() #*
     selectgroups()
@@ -16106,7 +15048,7 @@ def secondbatch():
     set_webschedule() #*  
 #===================#
 
-def execute_engine_():
+def execute_engine():
     """Execute the appropriate engine based on the engine value.
     Executes regardless of status - NO STATUS CHECKS OR UPDATES."""
     
@@ -16176,6 +15118,7 @@ def execute_engine_():
         print(f"{'='*80}\n")
         
         try:
+            download_scheduled_images()
             # Initialize WebDriver
             print("execute_engine: Initializing WebDriver...")
             driver, wait = initialize_driver(mode="headed")
@@ -16200,7 +15143,9 @@ def execute_engine_():
             # Execute launch_profile
             print("execute_engine: Calling launch_profile...")
             try:
+                
                 launch_profile()
+                move_downloaded_urls_to_uploadedjpgsurl()
                 print("execute_engine: launch_profile completed")
             except Exception as e:
                 error_msg = f"execute_engine: launch_profile failed: {str(e)}"
@@ -16263,135 +15208,9 @@ def execute_engine_():
         error_msg = f"execute_engine: ERROR - Unknown engine: '{engine_value}'. Must be 'driver' or 'csv'."
         print(f"\n❌ {error_msg}")
         return
-    
-def execute_engine():
-    """Execute the appropriate engine based on the engine value.
-    Executes regardless of status - NO STATUS CHECKS OR UPDATES."""
-    
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except json.JSONDecodeError:
-            return default if default is not None else {}
-        except Exception:
-            return default if default is not None else {}
-    
-    # ============================================================
-    # STEP 1: LOAD CONFIG - No status anything
-    # ============================================================
-    try:
-        config_data = load_json_file(AUTHOR_PATH, {})
-        
-        if isinstance(config_data, list) and len(config_data) > 0:
-            config = config_data[-1]
-        elif isinstance(config_data, dict):
-            config = config_data
-        else:
-            error_msg = "execute_engine: ERROR - Invalid config format in AUTHOR_PATH."
-            print(error_msg)
-            return
-        
-        print(f"execute_engine: Config loaded successfully")
-        
-    except Exception as e:
-        error_msg = f"execute_engine: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
-        print(error_msg)
-        return
-
-    # ============================================================
-    # STEP 2: GET ENGINE VALUE
-    # ============================================================
-    engine_value = config.get("engine", "").strip().lower()
-    
-    if not engine_value:
-        error_msg = "execute_engine: ERROR - 'engine' field is missing or empty in config."
-        print(error_msg)
-        return
-    
-    print(f"execute_engine: Engine value: '{engine_value}'")
-    
-    # Get author info for logging
-    author = config.get('author', 'Unknown')
-    time_order = config.get('time_order', 'Unknown')
-
-    # ============================================================
-    # STEP 3: EXECUTE BASED ON ENGINE TYPE
-    # ============================================================
-    
-    if engine_value == "driver":
-        # ===== DRIVER ENGINE =====
-        print(f"\n{'='*80}")
-        print(f"EXECUTING DRIVER ENGINE")
-        print(f"{'='*80}")
-        print(f"Author: {author}")
-        print(f"Time Order: {time_order}")
-        print(f"{'='*80}\n")
-        
-        try:
-            # Initialize WebDriver
-            print("execute_engine: Initializing WebDriver...")
-            driver, wait = initialize_driver(mode="headed")
-            launch_profile()
-            
-            if driver is None or wait is None:
-                error_msg = f"execute_engine: DRIVER engine failed - WebDriver initialization returned None"
-                print(f"❌ {error_msg}")
-                return
-            
-            print("execute_engine: WebDriver initialized successfully")
-            
-            # Execute launch_profile
-            print("execute_engine: Calling launch_profile...")
-         
-        except Exception as e:
-            error_msg = f"execute_engine: DRIVER engine failed: {str(e)}"
-            print(f"\n❌ {error_msg}")
-            return
-            
-    elif engine_value == "csv":
-        # ===== CSV ENGINE =====
-        print(f"\n{'='*80}")
-        print(f"EXECUTING CSV ENGINE")
-        print(f"{'='*80}")
-        print(f"Author: {author}")
-        print(f"Time Order: {time_order}")
-        print(f"{'='*80}\n")
-        
-        try:
-            # Call csv_engine which handles the CSV pipeline
-            print("execute_engine: Calling csv_engine...")
-            csv_engine()
-            print("execute_engine: csv_engine completed")
-            
-            # Update settings
-            print("execute_engine: Calling update_settings...")
-            try:
-                update_settings()
-                print("execute_engine: update_settings completed")
-            except Exception as e:
-                error_msg = f"execute_engine: update_settings failed: {str(e)}"
-                print(f"⚠️ {error_msg}")
-                # Don't abort - settings update is not critical
-            
-            print(f"\n✅ execute_engine: CSV engine completed successfully for author '{author}'")
-            return
-         
-        except Exception as e:
-            error_msg = f"execute_engine: CSV engine failed: {str(e)}"
-            print(f"\n❌ {error_msg}")
-            return
-            
-    else:
-        # ===== UNKNOWN ENGINE =====
-        error_msg = f"execute_engine: ERROR - Unknown engine: '{engine_value}'. Must be 'driver' or 'csv'."
-        print(f"\n❌ {error_msg}")
-        return 
-    
+      
 if __name__ == "__main__":
-   randomize_groups()
+   execute_engine()
+
+
    
