@@ -121,6 +121,79 @@ import json
 import csv
 import random
 import string
+import pyautogui
+from PIL import Image
+import os
+import glob
+from datetime import datetime
+import subprocess
+import json
+import win32gui
+import win32con
+import win32process
+import win32api
+import win32process
+import psutil
+import time
+import re
+import difflib
+import pyperclip
+import keyboard 
+import tkinter as tk
+import threading
+import zipfile
+import csv
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from moviepy import ImageClip
+import os
+import re
+import json
+import shutil
+import os
+import json
+import warnings
+from datetime import datetime
+from moviepy import ImageClip, concatenate_videoclips, AudioFileClip, VideoClip, CompositeVideoClip
+from moviepy import ImageClip, concatenate_videoclips, AudioFileClip
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+import random
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+
+# Fix protobuf compatibility
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+
+# Import the library
+from chrome_lens_py import LensAPI
+
+
+
+
+# Configure Paths
+#pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+#os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\AI automation\scenIQ\pytesseract\tessdata"
+#tessdata_path = r"C:\xampp\htdocs\AI automation\scenIQ\pytesseract\tessdata\eng.traineddata"
+edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+SCREEN_IMAGE = r"C:\xampp\htdocs\AI automation\scenIQ\input_images\screen.png"
+TEXT_TARGET = r"C:\xampp\htdocs\AI automation\scenIQ\text_target.json"
+PANEL_PATH = r"C:\xampp\htdocs\AI automation\scenIQ\panel.json"
+SCREEN_TEXT_CONTENT = r"C:\xampp\htdocs\AI automation\scenIQ\screen_content.json"
+INPUT_IMAGES = r"C:\xampp\htdocs\AI automation\scenIQ\input_images"
+IMAGES_PATH = r"C:\xampp\htdocs\AI automation\scenIQ\project"
+PHPSQLURL = "https://fhdrikxsirudr.fwh.is/phpmyadmintemplate.php"
+GEMINI_URL = "https://gemini.google.com/app"
+GOOGLE_FLOW_URL = "https://flow.google.com/#overview"
+GUI_IMAGES = r"C:\xampp\htdocs\AI automation\gui_images"
+PANEL_PATH = r"C:\xampp\htdocs\AI automation\scenIQ\panel.json"
+READY_SCRIPT = r"C:\xampp\htdocs\AI automation\scenIQ\ready_script.json"
+GUI_REGION_SAVER = r"C:\xampp\htdocs\AI automation\scenIQ\gui.json"
+SUBSCRIBE_STICKERS = r"C:\xampp\htdocs\AI automation\scenIQ\subscribe"
 
 
 # Global JSON configuration path
@@ -142,6 +215,7 @@ CAPTIONS_PATH = r"C:\xampp\htdocs\AI automation\serenum\files\captions"
 TIME_ORDER_PATH = r"C:\xampp\htdocs\AI automation\serenum\timeorders.json"  
 AUTHOR_PATH = r"C:\xampp\htdocs\AI automation\serenum\pageandgroupauthors.json"  
 FILES_ROOT = r"C:\xampp\htdocs\AI automation\serenum\files"
+JPGSFOLDER = r"C:\xampp\htdocs\AI automation\serenum\files\jpgfolders"
 
 # Global driver and wait objects
 driver = None
@@ -15048,6 +15122,4899 @@ def sequence():
     set_webschedule() #*  
 #===================#
 
+
+#Photos Generation
+def generate_google_flow_images():
+    """
+    Generates images using Google Flow via GUI automation with pyautogui image recognition.
+    Also supports AUTHOR_PATH dynamic_values.engine="image_generation": processes every
+    supported image in JPGSFOLDER/<dynamic_values.author>, downloads replicas to generated/,
+    and moves successful originals to processed/. The image_generation branch applies
+    persistent Nano Banana ratios in 20-image blocks: 9:16, 3:4, then 1:1, repeating.
+    Features:
+    - Uses GOOGLE_FLOW_URL and GUI_IMAGES path variable
+    - Checks panel.json for image_generation_engine == "Google Flow" (case-insensitive)
+    - If engine is not Google Flow, function exits immediately
+    - Always runs when the selected image engine is Google Flow; no currently_running gate
+    - On start sets currently_running to "generate_google_flow_images()"
+    - Recognizes only entry_N scene images and the canonical Thumbnail.png;
+      deletes unrelated image files from the project image folder
+    - Resumes by generating only missing entry_N images, without resetting
+      valid later entries when a numbering gap is found
+    - Generates Thumbnail.png only after every scene entry image is verified
+    - On completion, verifies every scene image plus Thumbnail.png, appends the
+      completed project snapshot to READY_SCRIPT, then removes project_name from PANEL_PATH
+    - On any error/abort keeps currently_running as "generate_google_flow_images()"
+    - Ctrl+Shift+F12 restarts the workflow from its entry point without resuming a scene phase
+    - Restart page detection checks whatdoyouwantocreate FIRST, then new_project,
+      and navigates to GOOGLE_FLOW_URL only when neither is visible
+    - A restart never resumes directly at generation completion or image download
+    - Alt+/ is the explicit manual stop shortcut
+    - Every image/page/generation/download polling wait is bounded to 40 seconds
+    - A single OS/pyautogui call cannot be safely force-killed while it is blocked
+    - Failed stages trigger a full automatic restart with fresh panel.json state
+    - Before opening Google Flow, detects the current visible page state in Edge
+    - Resumes directly from the prompt workspace or New Project chooser when visible
+    - Navigates to GOOGLE_FLOW_URL only when neither known page state is visible
+    - Re-detects the page state on every automatic or manual restart
+    - On every restart checks whatdoyouwantocreate FIRST, then new_project,
+      and opens GOOGLE_FLOW_URL only when neither is visible
+    - Restart does not reuse saved scene-phase checkpoints
+    - Checks for exit_editinggfimage.png regularly throughout every workflow stage
+    - Requires imagerenderingprogress.png and positions the cursor 50px left and 50px below it before preparing a download
+    - Restores the image-hover cursor position before each download retry\n    - While locked, continuously checks the verified web-download confirmation modal\n    - Rechecks rendering while waiting for moregf and returns to render-wait if it reappears\n    - Blocks Windows mouse-wheel scrolling while the image-position lock is active
+    - image_generation mode persists Nano Banana ratio state in JPGSFOLDER/nanobanana_ratio_state.json
+    - Applies the current Nano Banana ratio before prompt input; changes only after each verified 20-image block
+    """
+    import os
+    import json
+    import time
+    import re
+    import subprocess
+    import traceback
+    import threading
+    import ctypes
+    import struct
+    from ctypes import wintypes
+
+    try:
+        import pyautogui
+        import pyperclip
+        import win32api
+        import win32con
+        import win32clipboard
+        import win32gui
+        import win32process
+        import psutil
+        import keyboard
+    except ImportError as e:
+        print(f"❌ [GF] Missing dependency: {e}")
+        return
+
+    pyautogui.PAUSE = 0.0
+    STAGE_TIMEOUT_SECONDS = 40.0
+    restart_event = threading.Event()
+    restart_from_url_event = threading.Event()
+    stop_event = threading.Event()
+    terminate_automation = False
+
+    # The shared polling path checks the exit editing control at most once per
+    # second. The re-entry guard is essential because clicking that control
+    # itself uses _sleep(), which also calls check_for_termination().
+    exit_editing_CHECK_INTERVAL = 1.0
+    last_exit_editing_check_at = 0.0
+    exit_editing_check_active = False
+    exit_editing_click_in_progress = False
+    download_ui_sequence_active = False
+
+    # While this lock is active, the cursor is pinned below the one
+    # imagerenderingprogress match. Only that progress indicator (during
+    # rendering) and moregf.png (after rendering) may be searched.
+    image_render_lock_active = False
+    image_render_lock_position = None
+
+    # A Windows low-level mouse hook blocks physical wheel scrolling while the
+    # image-position lock is active. It is installed only for the locked phase.
+    scroll_hook_thread = None
+    scroll_hook_thread_id = None
+    scroll_hook_stop_event = threading.Event()
+    scroll_hook_ready_event = threading.Event()
+    scroll_hook_callback_ref = None
+    scroll_hook_handle = None
+    scroll_key_hook_handles = []
+
+    class _WorkflowRestart(BaseException):
+        """Unwind the current workflow; optionally force URL-first navigation."""
+        def __init__(self, message, force_url=False):
+            super().__init__(message)
+            self.force_url = bool(force_url)
+
+    class _ManualStop(BaseException):
+        """Raised only when the user presses Alt+/ ."""
+        pass
+
+    def set_image_scroll_lock(enabled):
+        """
+        Block mouse-wheel and horizontal-wheel input at the Windows OS level
+        while the image cursor anchor is locked. This prevents accidental
+        scrolling rather than trying to chase a moving page position.
+        """
+        nonlocal scroll_hook_thread, scroll_hook_thread_id
+        nonlocal scroll_hook_callback_ref, scroll_hook_handle
+
+        if enabled:
+            if scroll_hook_thread and scroll_hook_thread.is_alive():
+                return True
+
+            scroll_hook_stop_event.clear()
+            scroll_hook_ready_event.clear()
+
+            def _hook_worker():
+                nonlocal scroll_hook_thread_id, scroll_hook_callback_ref, scroll_hook_handle
+                WH_MOUSE_LL = 14
+                WM_MOUSEWHEEL = 0x020A
+                WM_MOUSEHWHEEL = 0x020E
+                WM_QUIT = 0x0012
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                scroll_hook_thread_id = kernel32.GetCurrentThreadId()
+
+                LRESULT = ctypes.c_ssize_t
+                HOOKPROC = ctypes.WINFUNCTYPE(
+                    LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+                )
+
+                def _low_level_mouse_proc(n_code, w_param, l_param):
+                    if n_code >= 0 and image_render_lock_active:
+                        if int(w_param) in (WM_MOUSEWHEEL, WM_MOUSEHWHEEL):
+                            # Swallow wheel input while the lock is active.
+                            return 1
+                    return user32.CallNextHookEx(
+                        scroll_hook_handle, n_code, w_param, l_param
+                    )
+
+                scroll_hook_callback_ref = HOOKPROC(_low_level_mouse_proc)
+                module_handle = kernel32.GetModuleHandleW(None)
+                scroll_hook_handle = user32.SetWindowsHookExW(
+                    WH_MOUSE_LL, scroll_hook_callback_ref, module_handle, 0
+                )
+                if not scroll_hook_handle:
+                    print("⚠️ [SCROLL-LOCK] Windows mouse-wheel hook could not be installed.")
+                    scroll_hook_ready_event.set()
+                    return
+
+                scroll_hook_ready_event.set()
+                message = wintypes.MSG()
+                try:
+                    while not scroll_hook_stop_event.is_set():
+                        result = user32.GetMessageW(ctypes.byref(message), None, 0, 0)
+                        if result <= 0:
+                            break
+                        user32.TranslateMessage(ctypes.byref(message))
+                        user32.DispatchMessageW(ctypes.byref(message))
+                finally:
+                    try:
+                        user32.UnhookWindowsHookEx(scroll_hook_handle)
+                    except Exception:
+                        pass
+                    scroll_hook_handle = None
+
+            scroll_hook_thread = threading.Thread(
+                target=_hook_worker,
+                name="GoogleFlowScrollLock",
+                daemon=True
+            )
+            scroll_hook_thread.start()
+            scroll_hook_ready_event.wait(timeout=2.0)
+            # Also block common browser scrolling keys while the cursor is
+            # pinned. These hooks are removed as soon as More is clicked.
+            try:
+                for key_name in ("page up", "page down", "home", "end", "up", "down", "space"):
+                    try:
+                        scroll_key_hook_handles.append(keyboard.block_key(key_name))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            if scroll_hook_handle:
+                print(
+                    "🔒 [SCROLL-LOCK] OS-level mouse-wheel scrolling and common "
+                    "page-scrolling keys are blocked."
+                )
+                return True
+            print(
+                "⚠️ [SCROLL-LOCK] Wheel blocking is unavailable; common scrolling "
+                "keys and cursor-position checks remain active."
+            )
+            return False
+
+        for hook_handle in list(scroll_key_hook_handles):
+            try:
+                keyboard.unhook(hook_handle)
+            except Exception:
+                pass
+        scroll_key_hook_handles.clear()
+
+        if scroll_hook_thread and scroll_hook_thread.is_alive():
+            scroll_hook_stop_event.set()
+            try:
+                if scroll_hook_thread_id:
+                    ctypes.windll.user32.PostThreadMessageW(
+                        scroll_hook_thread_id, 0x0012, 0, 0
+                    )
+            except Exception:
+                pass
+            scroll_hook_thread.join(timeout=1.0)
+        scroll_hook_thread = None
+        scroll_hook_thread_id = None
+        scroll_hook_callback_ref = None
+        scroll_hook_handle = None
+        return True
+
+    def restore_locked_cursor():
+        """Force the pointer back to its saved anchor and keep wheel lock enabled."""
+        if not image_render_lock_active or image_render_lock_position is None:
+            return
+        target_x, target_y = image_render_lock_position
+        try:
+            current_x, current_y = pyautogui.position()
+            if abs(current_x - target_x) > 3 or abs(current_y - target_y) > 3:
+                print(
+                    f"🛡️ [GF-LOCK] Cursor drifted to ({current_x}, {current_y}); "
+                    f"forcing it back to ({target_x}, {target_y})."
+                )
+                pyautogui.moveTo(target_x, target_y, duration=0.1)
+        except Exception as cursor_error:
+            print(f"⚠️ [GF-LOCK] Cursor check failed; restoring anchor: {cursor_error}")
+            pyautogui.moveTo(target_x, target_y, duration=0.1)
+
+    def _bounded_timeout(value):
+        try:
+            return max(0.1, min(float(value), STAGE_TIMEOUT_SECONDS))
+        except (TypeError, ValueError):
+            return STAGE_TIMEOUT_SECONDS
+
+    def _sleep(seconds):
+        """Sleep in short slices so Ctrl+Shift+F12 and Alt+/ are handled promptly."""
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while True:
+            # Poll continuously so Ctrl+Shift+F12, Alt+/, and the exit editing control
+            # are handled during all waits, including generation/download stages.
+            check_for_termination()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.2, remaining))
+
+    def _supervisor_wait(seconds):
+        """Interruptible delay used only between complete workflow attempts."""
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while time.monotonic() < deadline:
+            if stop_event.is_set() or restart_event.is_set() or restart_from_url_event.is_set():
+                return
+            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+
+    # ------------------------------------------------------------------
+    # Structure-independent JSON discovery helpers
+    # ------------------------------------------------------------------
+    def _normalise_key(key):
+        return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+    def _walk_json(node, path=()):
+        """Yield every JSON node with its path, regardless of wrapper/key names."""
+        yield path, node
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield from _walk_json(value, path + (key,))
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                yield from _walk_json(value, path + (index,))
+
+    def _find_field(node, aliases, require_value=True):
+        wanted = {_normalise_key(alias) for alias in aliases}
+        for path, current in _walk_json(node):
+            if not isinstance(current, dict):
+                continue
+            for key, value in current.items():
+                if _normalise_key(key) in wanted:
+                    if not require_value or value not in (None, "", [], {}):
+                        return value
+        return None
+
+    def _find_project_title(node):
+        value = _find_field(node, ("project_title", "projectTitle", "project_name", "projectName"))
+        if isinstance(value, dict):
+            value = _find_field(value, ("project_title", "title", "name"))
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            return str(value).strip()
+        return "workproject1"
+
+    def _find_engine(node):
+        value = _find_field(node, (
+            "image_generation_engine", "imageGenerationEngine",
+            "engine_type", "engineType", "engine"
+        ))
+        if isinstance(value, dict):
+            value = _find_field(value, ("image_generation_engine", "engine_type", "engine", "type"))
+        return str(value).strip() if value is not None else ""
+
+    def _find_script_data(node):
+        """Find the best script list anywhere, ignoring character-prompt lists."""
+        candidates = []
+        for path, current in _walk_json(node):
+            if not path or not isinstance(path[-1], str):
+                continue
+            if _normalise_key(path[-1]) != "script":
+                continue
+            if isinstance(current, list):
+                score = 0
+                for item in current:
+                    if isinstance(item, dict):
+                        keys = {_normalise_key(k) for k in item}
+                        if keys.intersection({
+                            "sceneimagegeneration", "sceneimageprompt",
+                            "imagegenerationprompt", "imageprompt",
+                            "charactersreference", "scenepovprompt",
+                            "shotnumber", "dialogue"
+                        }):
+                            score += 10
+                        if "entries" in keys:
+                            score += 2
+                candidates.append((score, len(current), current))
+            elif isinstance(current, dict):
+                nested = _find_field(current, ("script",))
+                if isinstance(nested, list):
+                    candidates.append((1, len(nested), nested))
+        if candidates:
+            candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return candidates[0][2]
+        value = _find_field(node, ("script",))
+        return value if isinstance(value, (dict, list)) else {}
+
+    def _remove_project_payload(node):
+        """Remove project title/script data but preserve sibling engine/status settings."""
+        if isinstance(node, list):
+            for item in node:
+                _remove_project_payload(item)
+            return
+        if not isinstance(node, dict):
+            return
+        key_map = {_normalise_key(key): key for key in list(node.keys())}
+        has_title = any(k in key_map for k in ("projecttitle", "projectname"))
+        has_script = any(k in key_map for k in ("script", "scriptjson"))
+        if has_title and has_script:
+            for normalized in ("projecttitle", "projectname", "script", "scriptjson"):
+                original_key = key_map.get(normalized)
+                if original_key is not None:
+                    node.pop(original_key, None)
+        for key in list(node.keys()):
+            value = node[key]
+            if _normalise_key(key) == "projectname":
+                node.pop(key, None)
+            elif isinstance(value, (dict, list)):
+                _remove_project_payload(value)
+
+
+    # ------------------------------------------------------------------
+    # Status helpers (self-contained)
+    # ------------------------------------------------------------------
+    def _load_panel():
+        if not os.path.exists(PANEL_PATH):
+            return {}
+        try:
+            with open(PANEL_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_panel(data):
+        try:
+            os.makedirs(os.path.dirname(PANEL_PATH) or '.', exist_ok=True)
+            with open(PANEL_PATH, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"❌ [STATUS] Failed to save panel: {e}")
+            return False
+
+    def _find_status_container(node):
+        """Find the best dictionary for status fields anywhere in the JSON tree.
+
+        Prefer the actual project/configuration dictionary (project title plus
+        script). After a completed project payload is removed, fall back to the
+        deepest dictionary already carrying status fields. If neither exists,
+        use the root dictionary or create a metadata dictionary in a root list.
+        The original root structure and wrapper keys are preserved.
+        """
+        candidates = []
+
+        def visit(current, path=()):
+            if isinstance(current, dict):
+                normalized = {_normalise_key(k): v for k, v in current.items()}
+                has_title = any(k in normalized for k in ("projecttitle", "projectname"))
+                has_script = any(k in normalized for k in ("script", "scriptjson"))
+                has_status = any(k in normalized for k in ("currentlyrunning", "status", "operationstatus"))
+                # Configuration container is the strongest match. Status-only
+                # containers remain discoverable after the project is removed.
+                score = (100 if has_title and has_script else 0)
+                if has_status:
+                    score += 40
+                if any(k in normalized for k in ("engine", "imagegenerationengine", "enginetype")):
+                    score += 5
+                candidates.append((score, len(path), path, current))
+                for key, child in current.items():
+                    if isinstance(child, (dict, list)):
+                        visit(child, path + (key,))
+            elif isinstance(current, list):
+                for index, child in enumerate(current):
+                    if isinstance(child, (dict, list)):
+                        visit(child, path + (index,))
+
+        visit(node)
+        if not candidates:
+            return None
+
+        # Prefer the best semantic match; on ties, prefer the deeper container.
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        best = candidates[0]
+        if best[0] == 0 and isinstance(node, dict):
+            return node
+        return best[3]
+
+    def _get_status_value(data, key, default=None):
+        container = _find_status_container(data)
+        if isinstance(container, dict):
+            # Match status keys case-insensitively and regardless of punctuation.
+            wanted = _normalise_key(key)
+            for existing_key, value in container.items():
+                if _normalise_key(existing_key) == wanted:
+                    return value
+        return default
+
+    def _get_currently_running():
+        data = _load_panel()
+        val = _get_status_value(data, "currently_running")
+        if val is None:
+            return None
+        val = str(val).strip()
+        if val.lower() in ("", "none", "null"):
+            return None
+        return val
+
+    def _set_currently_running(value, status=None, operation_status=None):
+        data = _load_panel()
+        container = _find_status_container(data)
+
+        if container is None:
+            if isinstance(data, list):
+                # Keep the root as a list; add a dedicated metadata object only
+                # when no existing dictionary can safely hold status fields.
+                container = {"_automation_status": True}
+                data.append(container)
+            elif isinstance(data, dict):
+                container = data
+            else:
+                print("❌ [STATUS] Cannot update status: panel JSON root is not an object/list.")
+                return False
+
+        container["currently_running"] = value
+        if status is not None:
+            safe_status = str(status).strip().lower()
+            if safe_status == "aborted":
+                safe_status = "pending"
+            container["status"] = safe_status
+        if operation_status is not None:
+            container["operation_status"] = operation_status
+        return _save_panel(data)
+
+    def _transfer_completed_project_to_ready_script(images_folder, expected_entries):
+        """
+        Append a completed project snapshot to READY_SCRIPT without overwriting
+        existing projects. Only remove project_name from PANEL_PATH after the
+        append has been successfully written and verified.
+        """
+        import copy
+
+        # Verify the exact scene-image naming convention and the required
+        # video-level thumbnail before the project can be marked complete.
+        image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}
+        found_entries = set()
+        if os.path.isdir(images_folder):
+            for filename in os.listdir(images_folder):
+                match = re.fullmatch(
+                    r"entry_(\d+)\.(png|jpg|jpeg|gif|webp|bmp|tiff)",
+                    filename,
+                    re.IGNORECASE
+                )
+                if not match:
+                    continue
+                number = int(match.group(1))
+                full_path = os.path.join(images_folder, filename)
+                try:
+                    if (
+                        1 <= number <= expected_entries
+                        and os.path.isfile(full_path)
+                        and os.path.getsize(full_path) > 0
+                        and os.path.splitext(filename)[1].lower() in image_extensions
+                    ):
+                        found_entries.add(number)
+                except OSError:
+                    pass
+
+        missing = [
+            f"entry_{number}"
+            for number in range(1, expected_entries + 1)
+            if number not in found_entries
+        ]
+
+        thumbnail_path = os.path.join(images_folder, "Thumbnail.png")
+        if not os.path.isfile(thumbnail_path) or os.path.getsize(thumbnail_path) <= 0:
+            missing.append("Thumbnail.png")
+
+        if missing:
+            print("❌ [READY-SCRIPT] Transfer cancelled; missing required image(s): " + ", ".join(missing))
+            update_operation_status(
+                "Project was not transferred because one or more scene images or Thumbnail.png are missing",
+                is_error=True
+            )
+            return False
+
+        # Re-read the source so status updates made during the workflow are retained.
+        try:
+            with open(PANEL_PATH, "r", encoding="utf-8") as source_file:
+                source_data = json.load(source_file)
+            if not isinstance(source_data, (dict, list)):
+                print("❌ [READY-SCRIPT] Source panel is not a JSON object/list.")
+                return False
+
+            source_title = _find_project_title(source_data)
+            project_snapshot = copy.deepcopy(source_data)
+            snapshot_status_container = _find_status_container(project_snapshot)
+            if snapshot_status_container is None:
+                if isinstance(project_snapshot, dict):
+                    snapshot_status_container = project_snapshot
+                elif isinstance(project_snapshot, list):
+                    snapshot_status_container = {"_automation_status": True}
+                    project_snapshot.append(snapshot_status_container)
+            if isinstance(snapshot_status_container, dict):
+                snapshot_status_container["currently_running"] = "generate_google_flow_images_successful"
+                snapshot_status_container["status"] = "completed"
+                snapshot_status_container["operation_status"] = (
+                    f"Completed project '{source_title}' with {expected_entries} verified image(s)"
+                )
+
+            ready_dir = os.path.dirname(READY_SCRIPT)
+            if ready_dir:
+                os.makedirs(ready_dir, exist_ok=True)
+
+            if os.path.exists(READY_SCRIPT) and os.path.getsize(READY_SCRIPT) > 0:
+                with open(READY_SCRIPT, "r", encoding="utf-8") as ready_file:
+                    ready_data = json.load(ready_file)
+            else:
+                ready_data = {"projects": []}
+
+            # Supported append formats: a JSON list, {"projects": [...]}, or a
+            # legacy single-project object. Preserve existing metadata/projects.
+            if isinstance(ready_data, list):
+                ready_data.append(project_snapshot)
+            elif isinstance(ready_data, dict):
+                if isinstance(ready_data.get("projects"), list):
+                    ready_data["projects"].append(project_snapshot)
+                elif _find_field(ready_data, ("project_title", "projectTitle", "project_name", "projectName")) is not None:
+                    existing_project = ready_data
+                    ready_data = {"projects": [existing_project, project_snapshot]}
+                else:
+                    ready_data["projects"] = [project_snapshot]
+            else:
+                raise ValueError("ready_script.json must contain a JSON object or list")
+
+            with open(READY_SCRIPT, "w", encoding="utf-8") as ready_file:
+                json.dump(ready_data, ready_file, indent=4, ensure_ascii=False)
+                ready_file.flush()
+                os.fsync(ready_file.fileno())
+
+            # Verify the appended project can be read back before touching source.
+            with open(READY_SCRIPT, "r", encoding="utf-8") as verify_file:
+                verified_data = json.load(verify_file)
+            if isinstance(verified_data, list):
+                verified = any(
+                    isinstance(item, (dict, list))
+                    and _find_field(item, ("project_title", "projectTitle", "project_name", "projectName")) is not None
+                    and _find_project_title(item) == source_title
+                    for item in verified_data
+                )
+            else:
+                verified = any(
+                    isinstance(item, (dict, list))
+                    and _find_field(item, ("project_title", "projectTitle", "project_name", "projectName")) is not None
+                    and _find_project_title(item) == source_title
+                    for item in verified_data.get("projects", [])
+                )
+            if not verified:
+                raise IOError("Could not verify the project in ready_script.json")
+
+            # Remove only the completed project payload while preserving the
+            # original root type (dictionary OR list) and its wrapper structure.
+            if isinstance(source_data, (dict, list)):
+                _remove_project_payload(source_data)
+                source_status_container = _find_status_container(source_data)
+                if source_status_container is None:
+                    if isinstance(source_data, dict):
+                        source_status_container = source_data
+                    else:
+                        source_status_container = {"_automation_status": True}
+                        source_data.append(source_status_container)
+                source_status_container["currently_running"] = "generate_google_flow_images_successful"
+                source_status_container["status"] = "completed"
+                source_status_container["operation_status"] = f"Project transferred to ready script: {source_title}"
+            with open(PANEL_PATH, "w", encoding="utf-8") as source_file:
+                json.dump(source_data, source_file, indent=4, ensure_ascii=False)
+
+            print(
+                f"✅ [READY-SCRIPT] Appended completed project "
+                f"'{source_title}' "
+                f"to {READY_SCRIPT}; removed completed project payload from {PANEL_PATH}"
+            )
+            return True
+
+        except Exception as exc:
+            print(f"❌ [READY-SCRIPT] Failed to transfer completed project: {exc}")
+            traceback.print_exc()
+            update_operation_status(f"Failed to transfer completed project: {exc}", is_error=True)
+            return False
+
+    # ------------------------------------------------------------------
+    # Engine check
+    # Supports both the original panel.json Google Flow scene engine and the
+    # AUTHOR_PATH CSV-style image_generation engine.
+    # ------------------------------------------------------------------
+    image_generation_mode = False
+    author_state = {
+        "path": globals().get("AUTHOR_PATH"),
+        "record_index": None,
+        "is_list": False,
+    }
+    author_engine_value = ""
+    author_initial_data = None
+    author_initial_record = None
+
+    def _load_author_configuration():
+        path = author_state.get("path")
+        if not path or not os.path.isfile(path):
+            raise FileNotFoundError(f"AUTHOR_PATH is missing or unavailable: {path}")
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, list):
+            if not data or not isinstance(data[-1], dict):
+                raise ValueError("AUTHOR_PATH list must end with a configuration object")
+            index = len(data) - 1
+            record = data[index]
+            is_list = True
+        elif isinstance(data, dict):
+            index = None
+            record = data
+            is_list = False
+        else:
+            raise ValueError("AUTHOR_PATH must contain a JSON object or a list of objects")
+        dynamic = record.get("dynamic_values")
+        if not isinstance(dynamic, dict):
+            dynamic = {}
+        # Migrate a legacy persisted "aborted" state to pending so the work
+        # remains resumable and this function never leaves that status behind.
+        migrated_legacy_status = False
+        if str(record.get("status", "")).strip().lower() == "aborted":
+            record["status"] = "pending"
+            migrated_legacy_status = True
+        if str(dynamic.get("status", "")).strip().lower() == "aborted":
+            dynamic["status"] = "pending"
+            migrated_legacy_status = True
+        if migrated_legacy_status:
+            author_path = author_state.get("path")
+            temp_path = author_path + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=4, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, author_path)
+            print("♻️ [AUTHOR_PATH] Legacy aborted status changed to pending; work remains resumable.")
+        return data, record, dynamic, index, is_list
+
+    try:
+        if author_state.get("path") and os.path.isfile(author_state["path"]):
+            (
+                author_initial_data,
+                author_initial_record,
+                author_initial_dynamic,
+                author_state["record_index"],
+                author_state["is_list"],
+            ) = _load_author_configuration()
+            author_engine_value = str(
+                author_initial_dynamic.get("engine")
+                or author_initial_record.get("engine")
+                or ""
+            ).strip()
+
+            if author_engine_value.lower() == "image_generation":
+                image_generation_mode = True
+                author_status = author_initial_record.get("status", "pending")
+                dynamic_status = author_initial_dynamic.get("status")
+                if dynamic_status:
+                    author_status = dynamic_status
+                if str(author_status).strip().lower() != "pending":
+                    print(
+                        f"ℹ️ [IMAGE-GENERATION] Skipping because AUTHOR_PATH status is "
+                        f"'{author_status}'. This engine only runs when status is 'pending'."
+                    )
+                    return
+                panel_data = {}
+                print(
+                    "✅ [ENGINE] AUTHOR_PATH dynamic_values.engine is 'image_generation'; "
+                    "starting reference-image generation mode."
+                )
+            else:
+                if not os.path.exists(PANEL_PATH):
+                    print(f"❌ Error: panel.json missing at: {PANEL_PATH}")
+                    try:
+                        hud.print("Configuration file is missing.", "error")
+                    except Exception:
+                        pass
+                    return
+                with open(PANEL_PATH, "r", encoding="utf-8") as file:
+                    panel_data = json.load(file)
+                image_generation_engine = _find_engine(panel_data)
+                if image_generation_engine.lower() != "google flow":
+                    print(
+                        f"ℹ️ [ENGINE] Neither AUTHOR_PATH engine 'image_generation' nor "
+                        f"panel.json engine 'Google Flow' is selected (found "
+                        f"'{author_engine_value or image_generation_engine}'); skipping."
+                    )
+                    try:
+                        hud.print("Google Flow is not the selected engine — skipping.", "waiting")
+                    except Exception:
+                        pass
+                    return
+                print("✅ [ENGINE] Image generation engine is 'Google Flow' - proceeding with operation")
+        else:
+            if not os.path.exists(PANEL_PATH):
+                print(f"❌ Error: panel.json missing at: {PANEL_PATH}")
+                try:
+                    hud.print("Configuration file is missing.", "error")
+                except Exception:
+                    pass
+                return
+            with open(PANEL_PATH, "r", encoding="utf-8") as file:
+                panel_data = json.load(file)
+            image_generation_engine = _find_engine(panel_data)
+            if image_generation_engine.lower() != "google flow":
+                print(
+                    f"ℹ️ [ENGINE] Image generation engine is '{image_generation_engine}', "
+                    "not 'Google Flow' - skipping operation"
+                )
+                try:
+                    hud.print("Google Flow is not the selected engine — skipping.", "waiting")
+                except Exception:
+                    pass
+                return
+            print("✅ [ENGINE] Image generation engine is 'Google Flow' - proceeding with operation")
+
+    except json.JSONDecodeError as e:
+        print(f"❌ Error: configuration JSON is not valid: {e}")
+        try:
+            hud.print("Configuration file appears to be corrupted.", "error")
+        except Exception:
+            pass
+        return
+    except Exception as e:
+        print(f"❌ Error loading engine configuration: {e}")
+        try:
+            hud.print("Could not read the engine configuration.", "error")
+        except Exception:
+            pass
+        return
+
+    # Claim the legacy panel slot only for the original Google Flow scene engine.
+    # image_generation mode records status directly in AUTHOR_PATH instead.
+    if not image_generation_mode:
+        _set_currently_running(
+            "generate_google_flow_images()",
+            status="pending",
+            operation_status="Running generate_google_flow_images()"
+        )
+        print("🔒 [GF] Claimed currently_running = 'generate_google_flow_images()'")
+
+    # ------------------------------------------------------------------
+    # Rest of original logic
+    # ------------------------------------------------------------------
+    # Discover project title and script by key/value anywhere in the JSON tree.
+    # The wrapper may be project_name, automation, value, or any other key.
+    project_title = _find_project_title(panel_data)
+    script_data = _find_script_data(panel_data)
+
+    # Support the new scene-by-scene structure:
+    # {
+    #   "characters_prompt": [...],
+    #   "script": [
+    #       {
+    #           "shot_number": 1,
+    #           "characters_reference": {...},
+    #           "scene_Image_generation": "...",
+    #           ...
+    #       }
+    #   ]
+    # }
+    # Also retain compatibility with the previous nested batches/entries format.
+    all_entries = []
+
+    def _is_new_scene_entry(item):
+        if not isinstance(item, dict):
+            return False
+        keys = {_normalise_key(key) for key in item}
+        has_reference = bool(keys.intersection({"charactersreference", "characterreference"}))
+        has_image_prompt = any(
+            key in keys for key in (
+                "sceneimagegeneration", "sceneimageprompt",
+                "imagegenerationprompt", "imageprompt"
+            )
+        )
+        return has_reference and has_image_prompt
+
+    def _collect_scene_entries(node):
+        if isinstance(node, list):
+            for item in node:
+                if _is_new_scene_entry(item):
+                    all_entries.append(item)
+                elif isinstance(item, (dict, list)):
+                    _collect_scene_entries(item)
+        elif isinstance(node, dict):
+            # A direct scene object should be collected once.
+            if _is_new_scene_entry(node):
+                all_entries.append(node)
+                return
+            # Old format: batches containing an "entries" list.
+            entries = _find_field(node, ("entries",))
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict) and (
+                        _is_new_scene_entry(entry) or "scene_pov_prompt" in entry
+                    ):
+                        all_entries.append(entry)
+                # Continue through other branches too, in case the structure mixes formats.
+            for key, value in node.items():
+                if _normalise_key(key) not in (
+                    "charactersprompt", "charactersvisualprompt", "entries"
+                ):
+                    if isinstance(value, (dict, list)):
+                        _collect_scene_entries(value)
+
+    if image_generation_mode:
+        # This engine is folder-driven; it does not use panel.json scene entries.
+        total_entries = 0
+    else:
+        _collect_scene_entries(script_data)
+        total_entries = len(all_entries)
+        print(f"📊 [CONFIG] Found {total_entries} total entries")
+        if total_entries == 0:
+            print("⚠️ No entries are currently available; the supervisor will re-read panel.json and retry.")
+
+    operation_status_flag = True
+    operation_status_message = ""
+    operation_aborted = False
+
+    # Only these two fields are sent to Google Flow for each new-format scene.
+    # Timing, dialogue, shot_number, and all other metadata are intentionally excluded.
+    SCENE_PROMPT_FIELDS = ("characters_reference", "scene_Image_generation")
+    FIELDS_TO_STRIP = {"start", "stop", "duration", "audio_focus"}
+    SEND_LOCATION_TOLERANCE = 20
+
+    def update_operation_status(message, is_error=False, is_abort=False, is_success=False):
+        nonlocal operation_status_message, operation_status_flag, operation_aborted
+
+        if is_abort:
+            operation_status_message = f"⚠️ STOPPED: {message}"
+            operation_status_flag = False
+            operation_aborted = True
+        elif is_error:
+            operation_status_message = f"⚠️ ERROR: {message}"
+            operation_status_flag = False
+        elif is_success:
+            operation_status_message = f"✅ {message}"
+            operation_status_flag = True
+        else:
+            operation_status_message = f"ℹ️ {message}"
+
+        if image_generation_mode:
+            try:
+                current_data, current_record, current_dynamic, _, _ = _load_author_configuration()
+                current_record["operation_status"] = operation_status_message
+                if isinstance(current_record.get("dynamic_values"), dict):
+                    current_record["dynamic_values"]["operation_status"] = operation_status_message
+                if is_abort:
+                    current_record["status"] = "error"
+                    if isinstance(current_record.get("dynamic_values"), dict) and "status" in current_record["dynamic_values"]:
+                        current_record["dynamic_values"]["status"] = "error"
+                author_path = author_state["path"]
+                temp_path = author_path + ".tmp"
+                with open(temp_path, "w", encoding="utf-8") as handle:
+                    json.dump(current_data, handle, indent=4, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_path, author_path)
+                if is_abort:
+                    print(f"🛑 [STATUS] AUTHOR_PATH operation recorded as an error: {message}")
+            except Exception as e:
+                print(f"⚠️ [STATUS] Failed to update AUTHOR_PATH operation status: {e}")
+            return
+
+        try:
+            with open(PANEL_PATH, 'r', encoding='utf-8') as file:
+                current_panel = json.load(file)
+
+            status_container = _find_status_container(current_panel)
+            if status_container is None:
+                if isinstance(current_panel, dict):
+                    status_container = current_panel
+                elif isinstance(current_panel, list):
+                    status_container = {"_automation_status": True}
+                    current_panel.append(status_container)
+                else:
+                    raise TypeError("panel.json root must be a JSON object or list")
+
+            status_container['operation_status'] = operation_status_message
+            if is_error or is_abort:
+                status_container['currently_running'] = "generate_google_flow_images()"
+                status_container['status'] = "error"
+            elif is_success:
+                status_container['currently_running'] = "generate_google_flow_images()"
+                status_container['status'] = "pending"
+
+            if not _save_panel(current_panel):
+                raise IOError("Could not persist operation status to panel.json")
+
+            if is_abort:
+                print(f"🛑 [STATUS] Operation recorded as an error: {message}")
+        except Exception as e:
+            print(f"⚠️ [STATUS] Failed to update operation status: {e}")
+
+    def abort_operation(reason):
+        print(f"🔁 [RECOVERY] Restarting the complete Google Flow function: {reason}")
+        update_operation_status(f"Restart requested: {reason}", is_error=True)
+        raise _WorkflowRestart(str(reason))
+
+    def check_operation_status():
+        return bool(operation_status_flag and not operation_aborted)
+
+    def on_restart_shortcut():
+        restart_from_url_event.set()
+        print("🔁 [HOTKEY] Ctrl+Shift+F12 pressed — restarting from GOOGLE_FLOW_URL without checking the current page.")
+
+    def on_terminate_shortcut():
+        nonlocal terminate_automation
+        terminate_automation = True
+        stop_event.set()
+        print("🛑 [HOTKEY] Alt+/ pressed — manual stop requested.")
+
+    def check_for_termination():
+        nonlocal last_exit_editing_check_at, exit_editing_check_active
+        nonlocal download_ui_sequence_active
+
+        if stop_event.is_set() or terminate_automation:
+            raise _ManualStop("Manual stop requested with Alt+/")
+        if restart_from_url_event.is_set():
+            restart_from_url_event.clear()
+            raise _WorkflowRestart(
+                "Manual Ctrl+Shift+F12 requested: restart directly from GOOGLE_FLOW_URL",
+                force_url=True,
+            )
+        if restart_event.is_set():
+            restart_event.clear()
+            raise _WorkflowRestart("Manual restart requested")
+        if not check_operation_status():
+            raise _WorkflowRestart("Operation status is invalid; restarting the workflow")
+
+        # exit editing may appear unexpectedly if a generated photo opens in
+        # the editor. Check for it at every shared polling point, but throttle
+        # screen matching so it does not dominate the GUI automation.
+        now = time.monotonic()
+        if (
+            not download_ui_sequence_active
+            and not image_render_lock_active
+            and not exit_editing_check_active
+            and now - last_exit_editing_check_at >= exit_editing_CHECK_INTERVAL
+        ):
+            last_exit_editing_check_at = now
+            exit_editing_check_active = True
+            try:
+                check_and_click_exit_editing()
+            except (_WorkflowRestart, _ManualStop):
+                raise
+            except Exception as exit_editing_error:
+                print(f"⚠️ [DONE-EDITING] Periodic check failed safely: {exit_editing_error}")
+            finally:
+                exit_editing_check_active = False
+
+    def format_entry_for_paste(entry_data):
+        """Serialize only the two approved prompt fields for the new scene schema."""
+        try:
+            if not isinstance(entry_data, dict):
+                print("⚠️ [PREPARE] Scene entry is not a JSON object.")
+                return ""
+
+            # Locate the two scene prompt fields independent of capitalization,
+            # punctuation, or surrounding JSON structure.
+            key_lookup = {_normalise_key(key): key for key in entry_data}
+            reference_key = next(
+                (key_lookup[name] for name in ("charactersreference", "characterreference")
+                 if name in key_lookup), None
+            )
+            image_key = next(
+                (key_lookup[name] for name in (
+                    "sceneimagegeneration", "sceneimageprompt",
+                    "imagegenerationprompt", "imageprompt"
+                ) if name in key_lookup), None
+            )
+            if reference_key is not None or image_key is not None:
+                cleaned = {}
+                if reference_key is not None:
+                    cleaned["characters_reference"] = entry_data[reference_key]
+                if image_key is not None:
+                    cleaned["scene_Image_generation"] = entry_data[image_key]
+
+                missing = [
+                    key for key in SCENE_PROMPT_FIELDS
+                    if key not in cleaned
+                ]
+                if missing:
+                    print(
+                        "⚠️ [PREPARE] New-format scene is missing required field(s): "
+                        + ", ".join(missing)
+                    )
+                    return ""
+
+                return json.dumps(cleaned, indent=4, ensure_ascii=False)
+
+            # Legacy fallback: keep the former scene prompt behaviour for old entries,
+            # while still stripping timing/audio metadata.
+            cleaned = {
+                key: value
+                for key, value in entry_data.items()
+                if key not in FIELDS_TO_STRIP
+            }
+            return json.dumps(cleaned, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ [PREPARE] Error preparing scene data: {e}")
+            return ""
+
+    # --- DYNAMIC FALLBACK HELPERS ---
+    def get_image_variants(base_name):
+        variants = []
+        base_name_without_ext = os.path.splitext(base_name)[0]
+        ext = os.path.splitext(base_name)[1]
+        original_path = os.path.join(GUI_IMAGES, base_name)
+        if os.path.exists(original_path):
+            variants.append(original_path)
+        pattern = re.compile(rf'^{re.escape(base_name_without_ext)}(\d+)\.{re.escape(ext[1:])}$', re.IGNORECASE)
+        try:
+            files = os.listdir(GUI_IMAGES)
+            numbered_variants = []
+            for filename in files:
+                match = pattern.match(filename)
+                if match:
+                    number = int(match.group(1))
+                    full_path = os.path.join(GUI_IMAGES, filename)
+                    numbered_variants.append((number, full_path))
+            numbered_variants.sort(key=lambda x: x[0])
+            for _, full_path in numbered_variants:
+                variants.append(full_path)
+        except Exception as e:
+            print(f"⚠️ [FALLBACK] Error scanning for variants of {base_name}: {e}")
+        return variants
+
+    def find_image_with_fallback(image_name, confidence=0.8, region=None):
+        variants = get_image_variants(image_name)
+        if not variants:
+            print(f"❌ [FALLBACK] No variants found for {image_name}")
+            return None, None
+        for variant_path in variants:
+            variant_name = os.path.basename(variant_path)
+            try:
+                location = pyautogui.locateCenterOnScreen(variant_path, confidence=confidence, grayscale=False)
+                if location:
+                    print(f"✅ [FALLBACK] Found {variant_name} at ({location.x}, {location.y})")
+                    return location, variant_path
+            except Exception:
+                pass
+        return None, None
+
+    def wait_for_image_with_fallback(image_name, timeout_seconds=40, confidence=0.8, region=None):
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        variants = get_image_variants(image_name)
+        if not variants:
+            print(f"❌ [FALLBACK] No variants found for {image_name}")
+            return None, None
+        print(f"🔍 [FALLBACK] Waiting for {image_name} with {len(variants)} variant(s)...")
+        start_time = time.time()
+        last_status_time = 0
+        while time.time() - start_time < timeout_seconds:
+            check_for_termination()
+            for variant_path in variants:
+                variant_name = os.path.basename(variant_path)
+                try:
+                    location = pyautogui.locateCenterOnScreen(variant_path, confidence=confidence, grayscale=False)
+                    if location:
+                        print(f"✅ [FALLBACK] Found {variant_name} at ({location.x}, {location.y})")
+                        return location, variant_path
+                except Exception:
+                    pass
+            current_time = time.time()
+            if current_time - last_status_time > 5:
+                elapsed = int(current_time - start_time)
+                print(f"⏳ [FALLBACK] Still waiting for {image_name}... ({elapsed}s elapsed)")
+                last_status_time = current_time
+            _sleep(0.3)
+        print(f"❌ [FALLBACK] {image_name} not found in any variant within {timeout_seconds} seconds")
+        return None, None
+
+    def wait_for_image_indefinitely(image_name, confidence=0.8, region=None):
+        """Legacy name; this is deliberately bounded and triggers recovery."""
+        location, _ = wait_for_image_with_fallback(
+            image_name,
+            timeout_seconds=STAGE_TIMEOUT_SECONDS,
+            confidence=confidence,
+            region=region
+        )
+        if not location:
+            raise _WorkflowRestart(f"{image_name} was not found within 40 seconds")
+        return location
+
+    def find_image_at_location(image_name, target_x, target_y, tolerance=20, confidence=0.7):
+        variants = get_image_variants(image_name)
+        if not variants:
+            return None
+        for variant_path in variants:
+            try:
+                location = pyautogui.locateCenterOnScreen(variant_path, confidence=confidence, grayscale=False)
+                if location:
+                    dx = abs(location.x - target_x)
+                    dy = abs(location.y - target_y)
+                    if dx <= tolerance and dy <= tolerance:
+                        print(f"✅ [LOC-LOCK] {os.path.basename(variant_path)} matched at "
+                              f"({location.x}, {location.y}) — within tolerance of "
+                              f"({target_x}, {target_y}) [dx={dx}, dy={dy}]")
+                        return location
+                    else:
+                        print(f"⚠️ [LOC-LOCK] {os.path.basename(variant_path)} matched at "
+                              f"({location.x}, {location.y}) BUT outside tolerance of "
+                              f"({target_x}, {target_y}) [dx={dx}, dy={dy}] — rejecting this match")
+            except Exception:
+                pass
+        return None
+
+    # --- WINDOW MANAGEMENT HELPERS ---
+    def get_current_monitor():
+        try:
+            cursor_pos = win32api.GetCursorPos()
+            monitor_info = win32api.GetMonitorInfo(win32api.MonitorFromPoint(cursor_pos))
+            return monitor_info['Monitor']
+        except Exception:
+            return (0, 0, win32api.GetSystemMetrics(win32con.SM_CXSCREEN),
+                    win32api.GetSystemMetrics(win32con.SM_CYSCREEN))
+
+    def get_edge_window_on_monitor(monitor_bounds):
+        monitor_left, monitor_top, monitor_right, monitor_bottom = monitor_bounds
+        edge_windows = []
+        edge_process_names = ["msedge.exe"]
+
+        def enum_windows_callback(hwnd, windows):
+            if win32gui.IsWindowVisible(hwnd):
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    process = psutil.Process(pid)
+                    if process.name().lower() in edge_process_names:
+                        rect = win32gui.GetWindowRect(hwnd)
+                        left, top, right, bottom = rect
+                        width, height = right - left, bottom - top
+                        if width > 200 and height > 200:
+                            window_center_x = (left + right) / 2
+                            window_center_y = (top + bottom) / 2
+                            is_on_current_monitor = (
+                                monitor_left <= window_center_x <= monitor_right and
+                                monitor_top <= window_center_y <= monitor_bottom
+                            )
+                            if is_on_current_monitor:
+                                windows.append({'hwnd': hwnd, 'width': width, 'height': height})
+                except Exception:
+                    pass
+            return True
+
+        win32gui.EnumWindows(enum_windows_callback, edge_windows)
+        edge_windows.sort(key=lambda w: w['width'] * w['height'], reverse=True)
+        return edge_windows
+
+    def ensure_edge_window_ready():
+        check_for_termination()
+        current_monitor = get_current_monitor()
+        edge_windows = get_edge_window_on_monitor(current_monitor)
+
+        if edge_windows:
+            hwnd = edge_windows[0]['hwnd']
+            print(f"🪟 [WINDOW] Found existing Edge window handle: {hwnd}")
+            try:
+                if win32gui.IsIconic(hwnd):
+                    print("🔄 [WINDOW] Window was minimized, restoring...")
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    _sleep(0.3)
+                print("🔄 [WINDOW] Maximizing window...")
+                win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                _sleep(0.5)
+                win32gui.SetForegroundWindow(hwnd)
+                _sleep(0.2)
+                print("✅ [WINDOW] Window ready - maximized and focused")
+                update_operation_status("Browser window ready for Google Flow operation")
+                return hwnd
+            except Exception as e:
+                print(f"⚠️ [WINDOW] Error preparing existing window: {e}")
+
+        print("💻 [WINDOW] No Edge window found, launching new instance...")
+        update_operation_status("Launching browser for Google Flow operation...")
+        try:
+            hud.print("Opening the browser...", "navigating")
+        except Exception:
+            pass
+        subprocess.Popen([edge_path, "about:blank"])
+
+        for attempt in range(20):
+            check_for_termination()
+            _sleep(0.5)
+            edge_windows = get_edge_window_on_monitor(current_monitor)
+            if edge_windows:
+                hwnd = edge_windows[0]['hwnd']
+                print(f"🪟 [WINDOW] New Edge window launched, handle: {hwnd}")
+                try:
+                    if win32gui.IsIconic(hwnd):
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        _sleep(0.3)
+                    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                    _sleep(0.5)
+                    win32gui.SetForegroundWindow(hwnd)
+                    _sleep(0.2)
+                    print("✅ [WINDOW] New window ready - maximized and focused")
+                    update_operation_status("Browser launched for Google Flow operation")
+                    return hwnd
+                except Exception as e:
+                    print(f"⚠️ [WINDOW] Error preparing new window: {e}")
+                    continue
+
+        error_msg = "Failed to get or launch Edge window for Google Flow operation"
+        update_operation_status(error_msg, is_error=True)
+        try:
+            hud.print("Could not open the browser window.", "error")
+        except Exception:
+            pass
+        abort_operation(error_msg)
+        raise RuntimeError(error_msg)
+
+    def enforce_window_focus(hwnd):
+        check_for_termination()
+        try:
+            if not win32gui.IsWindow(hwnd):
+                print("⚠️ [FOCUS] Window handle invalid, reacquiring...")
+                return False
+            if win32gui.IsIconic(hwnd):
+                print("🔄 [FOCUS] Window was minimized, restoring...")
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                _sleep(0.3)
+            current_foreground = win32gui.GetForegroundWindow()
+            if current_foreground != hwnd:
+                print("🛡️ [FOCUS] Correcting window focus...")
+                win32gui.SetForegroundWindow(hwnd)
+                _sleep(0.15)
+            try:
+                placement = win32gui.GetWindowPlacement(hwnd)
+                if placement[1] != win32con.SW_SHOWMAXIMIZED:
+                    print("🔄 [FOCUS] Window not maximized, maximizing...")
+                    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                    _sleep(0.3)
+            except Exception:
+                try:
+                    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                    _sleep(0.3)
+                except Exception:
+                    pass
+            return True
+        except Exception as e:
+            print(f"⚠️ [FOCUS] Focus correction exception: {e}")
+            return False
+
+    def ensure_window_ready_and_focused():
+        check_for_termination()
+        hwnd = ensure_edge_window_ready()
+        enforce_window_focus(hwnd)
+        return hwnd
+
+    def fast_paste_url(hwnd, url):
+        check_for_termination()
+        try:
+            hud.print("Opening Google Flow...", "navigating")
+        except Exception:
+            pass
+        print(f"📋 Pasting URL: {url}")
+        pyperclip.copy(url)
+        enforce_window_focus(hwnd)
+        pyautogui.hotkey('ctrl', 'l')
+        _sleep(0.1)
+        enforce_window_focus(hwnd)
+        pyautogui.hotkey('ctrl', 'v')
+        pyautogui.press('enter')
+        update_operation_status("Navigating to Google Flow URL...")
+
+    def wait_for_image(image_name, timeout_seconds=40, confidence=0.8, region=None):
+        location, _ = wait_for_image_with_fallback(image_name, timeout_seconds, confidence, region)
+        return location
+
+    def find_image(image_name, confidence=0.8, region=None):
+        location, _ = find_image_with_fallback(image_name, confidence, region)
+        return location
+
+    def move_mouse_to_center_of_screen():
+        try:
+            screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+            screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+            center_x = screen_width // 2
+            center_y = screen_height // 2
+            pyautogui.moveTo(center_x, center_y, duration=0.15)
+            print(f"🖱️ [MOUSE] Moved cursor to screen center ({center_x}, {center_y})")
+        except Exception as e:
+            print(f"⚠️ [MOUSE] Could not move cursor to center: {e}")
+
+    def move_cursor_below_search(search_location, offset_px=50):
+        target_x = int(search_location.x - offset_px)
+        target_y = int(search_location.y + offset_px)
+        print(
+            f"🖱️ [CURSOR] Moving cursor {offset_px}px LEFT and "
+            f"{offset_px}px BELOW imagerenderingprogress.png "
+            f"to ({target_x}, {target_y})"
+        )
+        pyautogui.moveTo(target_x, target_y, duration=0.2)
+        _sleep(0.3)
+        return target_x, target_y
+
+    def click_right_edge_of_image(image_name, confidence=0.7):
+        variants = get_image_variants(image_name)
+        for variant_path in variants:
+            try:
+                location = pyautogui.locateOnScreen(variant_path, confidence=confidence)
+                if location:
+                    click_x = location.left + int(location.width * 0.95)
+                    click_y = location.top + int(location.height / 2)
+                    print(f"🎯 [RIGHT-EDGE] Clicking {os.path.basename(variant_path)} right edge at ({click_x}, {click_y})")
+                    pyautogui.moveTo(click_x, click_y, duration=0.1)
+                    pyautogui.click()
+                    _sleep(0.5)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def scroll_down_multiple(times=3):
+        for i in range(times):
+            pyautogui.scroll(500)
+            _sleep(0.3)
+            print(f"⬇️ [SCROLL] Scrolled down ({i+1}/{times}) at current cursor position")
+        _sleep(0.5)
+
+    # --- GOOGLE FLOW PAGE-STATE DETECTION / RECOVERY HELPERS ---
+    # Page-state priority is intentional:
+    #   1. whatdoyouwantocreate.png = already inside the prompt workspace (most advanced)
+    #   2. new_project.png          = Google Flow landing / project chooser
+    #   3. expandgfsidepanel.png    = likely an existing workspace with its prompt panel collapsed
+    #   4. unknown                  = neither recognized page is currently visible
+    # The prompt workspace is checked FIRST so a restart never clicks New Project
+    # or reloads the URL when it can already continue processing entries.
+    def detect_google_flow_stage(hwnd=None):
+        check_for_termination()
+        if hwnd is not None:
+            enforce_window_focus(hwnd)
+
+        prompt_location, prompt_variant = find_image_with_fallback(
+            "whatdoyouwantocreate.png", confidence=0.8
+        )
+        if prompt_location:
+            variant_name = os.path.basename(prompt_variant) if prompt_variant else "whatdoyouwantocreate.png"
+            print(
+                f"✅ [PAGE-STATE] Prompt workspace detected ({variant_name}) at "
+                f"({prompt_location.x}, {prompt_location.y})"
+            )
+            return "prompt", prompt_location
+
+        new_project_location, new_project_variant = find_image_with_fallback(
+            "new_project.png", confidence=0.8
+        )
+        if new_project_location:
+            variant_name = os.path.basename(new_project_variant) if new_project_variant else "new_project.png"
+            print(
+                f"✅ [PAGE-STATE] New Project page detected ({variant_name}) at "
+                f"({new_project_location.x}, {new_project_location.y})"
+            )
+            return "new_project", new_project_location
+
+        expand_location, expand_variant = find_image_with_fallback(
+            "expandgfsidepanel.png", confidence=0.8
+        )
+        if expand_location:
+            variant_name = os.path.basename(expand_variant) if expand_variant else "expandgfsidepanel.png"
+            print(
+                f"✅ [PAGE-STATE] Existing Flow workspace likely detected; prompt panel is "
+                f"collapsed ({variant_name}) at ({expand_location.x}, {expand_location.y})"
+            )
+            return "collapsed_workspace", expand_location
+
+        print(
+            "ℹ️ [PAGE-STATE] Neither whatdoyouwantocreate.png nor new_project.png "
+            "is visible; no recognized Google Flow page state is currently detected."
+        )
+        return "unknown", None
+
+    def detect_restart_page_stage(hwnd=None):
+        """Restart priority: prompt workspace -> New Project -> URL navigation.
+
+        Do not inspect or act on New Project until the prompt field has first
+        been searched for. If neither image is present, return unknown so the
+        caller relaunches GOOGLE_FLOW_URL. The collapsed-panel fallback remains
+        available after URL navigation through detect_google_flow_stage().
+        """
+        check_for_termination()
+        if hwnd is not None:
+            enforce_window_focus(hwnd)
+
+        # Restart page detection must follow the user's exact priority with no
+        # intervening image checks: prompt workspace, then New Project, then URL.
+        print("🔎 [RESTART-STATE] First checking whatdoyouwantocreate.png...")
+        prompt_location, prompt_variant = find_image_with_fallback(
+            "whatdoyouwantocreate.png", confidence=0.8
+        )
+        if prompt_location:
+            variant_name = os.path.basename(prompt_variant) if prompt_variant else "whatdoyouwantocreate.png"
+            print(
+                f"✅ [RESTART-STATE] Prompt workspace found FIRST ({variant_name}) at "
+                f"({prompt_location.x}, {prompt_location.y}); New Project will not be checked."
+            )
+            return "prompt", prompt_location
+
+        print("🔎 [RESTART-STATE] Prompt field not found; now checking new_project.png...")
+        new_project_location, new_project_variant = find_image_with_fallback(
+            "new_project.png", confidence=0.8
+        )
+        if new_project_location:
+            variant_name = os.path.basename(new_project_variant) if new_project_variant else "new_project.png"
+            print(
+                f"✅ [RESTART-STATE] New Project found after the prompt-field check "
+                f"({variant_name}) at ({new_project_location.x}, {new_project_location.y})."
+            )
+            return "new_project", new_project_location
+
+        print(
+            "ℹ️ [RESTART-STATE] Neither whatdoyouwantocreate.png nor new_project.png "
+            "is visible. The restart path will open GOOGLE_FLOW_URL."
+        )
+        return "unknown", None
+
+    def _click_google_flow_control(hwnd, location, description):
+        if location is None:
+            return False
+        check_for_termination()
+        enforce_window_focus(hwnd)
+        try:
+            pyautogui.moveTo(location.x, location.y, duration=0.1)
+            pyautogui.click()
+            _sleep(0.8)
+            print(f"🖱️ [PAGE-STATE] Clicked {description} at ({location.x}, {location.y})")
+            return True
+        except Exception as click_error:
+            print(f"⚠️ [PAGE-STATE] Could not click {description}: {click_error}")
+            return False
+
+    def wait_for_google_flow_stage(hwnd, timeout_seconds=40, check_interval=0.5):
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        """Wait for either the prompt workspace or the New Project chooser.
+
+        A collapsed side panel is expanded once, then the prompt field is checked
+        again. gfmedia.png is logged as a loading clue only; it is NOT accepted
+        as proof that the prompt workspace is ready.
+        """
+        print(
+            f"🔍 [PAGE-STATE] Waiting up to {timeout_seconds}s for either "
+            "whatdoyouwantocreate.png or new_project.png..."
+        )
+        try:
+            hud.print("Identifying the current Google Flow page...", "waiting")
+        except Exception:
+            pass
+        update_operation_status("Detecting current Google Flow page state...")
+
+        start_time = time.time()
+        last_status_time = start_time
+        expanded_panel = False
+        gfmedia_reported = False
+
+        while time.time() - start_time < timeout_seconds:
+            check_for_termination()
+            enforce_window_focus(hwnd)
+            stage, location = detect_google_flow_stage(hwnd)
+
+            if stage in ("prompt", "new_project"):
+                return stage, location
+
+            if stage == "collapsed_workspace" and not expanded_panel:
+                print("🔄 [PAGE-STATE] Expanding the existing workspace side panel...")
+                if _click_google_flow_control(hwnd, location, "expandgfsidepanel.png"):
+                    expanded_panel = True
+                    _sleep(0.5)
+                    continue
+                expanded_panel = True
+
+            if not gfmedia_reported:
+                gfmedia_location = find_image("gfmedia.png", confidence=0.8)
+                if gfmedia_location:
+                    gfmedia_reported = True
+                    print(
+                        "ℹ️ [PAGE-STATE] gfmedia.png is visible. The Flow page shell has "
+                        "loaded, but the required prompt/project control is still being checked."
+                    )
+
+            now = time.time()
+            if now - last_status_time >= 10:
+                elapsed = int(now - start_time)
+                print(
+                    f"⏳ [PAGE-STATE] Still identifying the Google Flow page "
+                    f"({elapsed}s/{timeout_seconds}s)..."
+                )
+                try:
+                    hud.print(f"Identifying the page... ({elapsed}s)", "waiting")
+                except Exception:
+                    pass
+                last_status_time = now
+
+            _sleep(check_interval)
+
+        print(
+            f"⏰ [PAGE-STATE] Timed out after {timeout_seconds}s: neither "
+            "whatdoyouwantocreate.png nor new_project.png became visible."
+        )
+        return "timeout", None
+
+    def wait_for_prompt_workspace(hwnd, timeout_seconds=40, check_interval=0.5):
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        """Wait specifically for the prompt workspace after opening New Project.
+
+        The New Project button is deliberately ignored during this phase because
+        it may remain visible briefly while Flow transitions to the workspace.
+        """
+        print(
+            f"🔍 [PAGE-STATE] Waiting up to {timeout_seconds}s for "
+            "whatdoyouwantocreate.png after opening the project..."
+        )
+        update_operation_status("Waiting for the prompt workspace to become ready...")
+        start_time = time.time()
+        last_status_time = start_time
+        expanded_panel = False
+        gfmedia_reported = False
+
+        while time.time() - start_time < timeout_seconds:
+            check_for_termination()
+            enforce_window_focus(hwnd)
+
+            prompt_location, prompt_variant = find_image_with_fallback(
+                "whatdoyouwantocreate.png", confidence=0.8
+            )
+            if prompt_location:
+                variant_name = os.path.basename(prompt_variant) if prompt_variant else "whatdoyouwantocreate.png"
+                print(
+                    f"✅ [PAGE-STATE] Prompt workspace is ready ({variant_name}) at "
+                    f"({prompt_location.x}, {prompt_location.y})"
+                )
+                try:
+                    hud.print("Workspace is ready.", "success")
+                except Exception:
+                    pass
+                update_operation_status("Prompt workspace detected and ready for scene processing")
+                return True
+
+            if not expanded_panel:
+                expand_location = find_image("expandgfsidepanel.png", confidence=0.8)
+                if expand_location:
+                    print("🔄 [PAGE-STATE] Prompt field is not visible; expanding the side panel once...")
+                    if _click_google_flow_control(hwnd, expand_location, "expandgfsidepanel.png"):
+                        expanded_panel = True
+                        _sleep(0.5)
+                        continue
+                    expanded_panel = True
+
+            if not gfmedia_reported:
+                gfmedia_location = find_image("gfmedia.png", confidence=0.8)
+                if gfmedia_location:
+                    gfmedia_reported = True
+                    print(
+                        "ℹ️ [PAGE-STATE] gfmedia.png detected; workspace shell is present. "
+                        "Still waiting for the actual prompt input control."
+                    )
+
+            now = time.time()
+            if now - last_status_time >= 10:
+                elapsed = int(now - start_time)
+                print(
+                    f"⏳ [PAGE-STATE] Waiting for prompt workspace "
+                    f"({elapsed}s/{timeout_seconds}s)..."
+                )
+                try:
+                    hud.print(f"Waiting for the prompt area... ({elapsed}s)", "waiting")
+                except Exception:
+                    pass
+                last_status_time = now
+
+            _sleep(check_interval)
+
+        print(
+            f"⏰ [PAGE-STATE] Prompt workspace did not appear within {timeout_seconds}s. "
+            "The automatic supervisor will restart and inspect the current page again."
+        )
+        return False
+
+    def wait_for_new_project_and_click(hwnd, timeout_seconds=40, initial_location=None):
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        """Click New Project using a bounded wait; never wait forever for the image."""
+        print("🔍 [GF] Looking for new_project.png before clicking...")
+        try:
+            hud.print("Starting a fresh workspace...", "waiting")
+        except Exception:
+            pass
+        update_operation_status("Looking for the New Project button...")
+
+        location = initial_location
+        if location is None:
+            location, _ = wait_for_image_with_fallback(
+                "new_project.png", timeout_seconds=timeout_seconds, confidence=0.8
+            )
+
+        if not location:
+            print(f"❌ [GF] new_project.png was not found within {timeout_seconds}s")
+            return False
+
+        if not _click_google_flow_control(hwnd, location, "new_project.png"):
+            return False
+
+        try:
+            hud.print("Starting a fresh workspace...", "success")
+        except Exception:
+            pass
+        update_operation_status("Clicked New Project; waiting for the prompt workspace")
+        return True
+
+    def wait_for_gfmedia_and_confirm(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS):
+        """Legacy compatibility helper; bounded and page-state aware."""
+        stage, _ = wait_for_google_flow_stage(hwnd, timeout_seconds=timeout_seconds)
+        if stage == "prompt":
+            return True
+        if stage == "new_project":
+            return wait_for_new_project_and_click(hwnd, initial_location=None) and wait_for_prompt_workspace(hwnd)
+        print("⚠️ [GF] Could not confirm a usable Google Flow page state.")
+        return False
+
+    def find_whatdoyouwantocreate_with_fallbacks(hwnd, timeout_seconds=40):
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        print(f"🔍 [GF] Searching for whatdoyouwantocreate.png...")
+        print(f"🔍 [GF] Step 1: Looking for expandgfsidepanel.png first...")
+        try:
+            hud.print("Getting the prompt area ready...", "waiting")
+        except Exception:
+            pass
+        update_operation_status("Looking for expand side panel button...")
+
+        expand_variants = get_image_variants("expandgfsidepanel.png")
+        if expand_variants:
+            expand_panel_location = find_image("expandgfsidepanel.png", confidence=0.8)
+            if expand_panel_location:
+                print(f"✅ [GF] Found expandgfsidepanel.png - clicking it...")
+                try:
+                    hud.print("Opening the side panel...", "warning")
+                except Exception:
+                    pass
+                update_operation_status("Clicking expand side panel button")
+                pyautogui.moveTo(expand_panel_location.x, expand_panel_location.y, duration=0.1)
+                pyautogui.click()
+                _sleep(1)
+                print(f"🔍 [GF] Now looking for whatdoyouwantocreate.png after expanding panel...")
+                location = wait_for_image("whatdoyouwantocreate.png", timeout_seconds=timeout_seconds, confidence=0.8)
+                if location:
+                    print(f"✅ [GF] Found whatdoyouwantocreate.png after expandgfsidepanel!")
+                    return location
+                else:
+                    print(f"⚠️ [GF] whatdoyouwantocreate.png still not found after expanding panel")
+            else:
+                print(f"⚠️ [GF] expandgfsidepanel.png not currently visible on screen — will try direct whatdoyouwantocreate lookup")
+        else:
+            print(f"⚠️ [GF] No expandgfsidepanel.png variants exist in gui_images — falling back to direct lookup")
+
+        print(f"🔍 [GF] Step 2: Direct lookup for whatdoyouwantocreate.png...")
+        try:
+            hud.print("Looking for the prompt area...", "waiting")
+        except Exception:
+            pass
+        update_operation_status("Looking for whatdoyouwantocreate input field...")
+        location = wait_for_image("whatdoyouwantocreate.png", timeout_seconds=timeout_seconds, confidence=0.8)
+        if location:
+            print(f"✅ [GF] Found whatdoyouwantocreate.png on direct lookup!")
+            return location
+        print(f"❌ [GF] Could not find whatdoyouwantocreate.png after all attempts")
+        return None
+
+    def check_for_tryagain_and_abort():
+        tryagain_location = find_image("tryagain.png", confidence=0.7)
+        if tryagain_location:
+            print(f"❌ [NETWORK] Found tryagain.png — poor network detected!")
+            try:
+                hud.print("Your internet connection seems unstable — stopping now.", "error")
+            except Exception:
+                pass
+            update_operation_status(
+                "Poor network detected (tryagain.png found) — stopping this attempt",
+                is_abort=True
+            )
+            abort_operation("Poor network detected (tryagain.png found)")
+            return True
+        return False
+
+    def check_and_click_exit_editing():
+        """Exit an accidentally opened image editor whenever its Done control appears."""
+        nonlocal exit_editing_click_in_progress
+
+        # Prevent a periodic polling pass from double-clicking while an explicit
+        # exit editing click is still completing its short UI transition.
+        if exit_editing_click_in_progress:
+            return False
+
+        exit_editing_click_in_progress = True
+        try:
+            clicked = click_right_edge_of_image("exit_editinggfimage.png", confidence=0.7)
+            if clicked:
+                print(
+                    "✅ [DONE-EDITING] Clicked the right edge of exit_editinggfimage.png; "
+                    "the image editor should now be closed."
+                )
+                return True
+            return False
+        finally:
+            exit_editing_click_in_progress = False
+
+    def ensure_image_hover_position(timeout_seconds=STAGE_TIMEOUT_SECONDS, offset_px=50):
+        """
+        Return to the exact cursor anchor recorded when progress was first
+        detected. Never re-search imagerenderingprogress after that point.
+        """
+        nonlocal image_render_lock_active, image_render_lock_position
+
+        if image_render_lock_position is not None:
+            target_x, target_y = image_render_lock_position
+            image_render_lock_active = True
+            set_image_scroll_lock(True)
+            current_x, current_y = pyautogui.position()
+            if abs(current_x - target_x) > 3 or abs(current_y - target_y) > 3:
+                print(
+                    f"🛡️ [HOVER-LOCK] Restoring cursor from ({current_x}, {current_y}) "
+                    f"to locked position ({target_x}, {target_y})."
+                )
+                pyautogui.moveTo(target_x, target_y, duration=0.1)
+            # Return the original progress-indicator center, not the shifted cursor anchor.
+            return type(
+                "LockedImagePosition",
+                (),
+                {"x": target_x + offset_px, "y": target_y - offset_px}
+            )()
+
+        # Compatibility fallback for a workflow where the progress indicator
+        # never appeared and the legacy generation path completed instead.
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < timeout_seconds:
+            check_for_termination()
+            search_location = find_image("imagerenderingprogress.png", confidence=0.7)
+            if search_location:
+                image_render_lock_position = (
+                    int(search_location.x - offset_px),
+                    int(search_location.y + offset_px)
+                )
+                image_render_lock_active = True
+                set_image_scroll_lock(True)
+                pyautogui.moveTo(*image_render_lock_position, duration=0.2)
+                return search_location
+            _sleep(0.4)
+
+        abort_operation(
+            f"Could not establish the image hover position within {timeout_seconds} seconds"
+        )
+        return None
+
+    def handle_exit_gfsidebar_and_recheck():
+        print(f"🔍 [GF] no_active_gf_generation.png not found — looking for exit_gfsidebar.png fallback...")
+        exit_sidebar_location = find_image("exit_gfsidebar.png", confidence=0.7)
+        if exit_sidebar_location:
+            print(f"✅ [GF] Found exit_gfsidebar.png — clicking right edge...")
+            variants = get_image_variants("exit_gfsidebar.png")
+            clicked = False
+            for variant_path in variants:
+                try:
+                    location = pyautogui.locateOnScreen(variant_path, confidence=0.7)
+                    if location:
+                        click_x = location.left + int(location.width * 0.95)
+                        click_y = location.top + int(location.height / 2)
+                        print(f"🎯 [GF] Clicking {os.path.basename(variant_path)} right edge at ({click_x}, {click_y})")
+                        pyautogui.moveTo(click_x, click_y, duration=0.1)
+                        pyautogui.click()
+                        _sleep(0.8)
+                        clicked = True
+                        break
+                except Exception:
+                    pass
+            if not clicked:
+                pyautogui.moveTo(exit_sidebar_location.x, exit_sidebar_location.y, duration=0.1)
+                pyautogui.click()
+                _sleep(0.8)
+            print(f"🔄 [GF] Re-checking for no_active_gf_generation.png after exit_gfsidebar click...")
+            recheck_location = find_image("no_active_gf_generation.png", confidence=0.7)
+            if recheck_location:
+                print(f"✅ [GF] Found no_active_gf_generation.png after exit_gfsidebar fallback!")
+                return recheck_location
+            else:
+                print(f"⚠️ [GF] no_active_gf_generation.png still not found after exit_gfsidebar click")
+        else:
+            print(f"⚠️ [GF] exit_gfsidebar.png not found either")
+        return None
+
+    def paste_prompt_and_click_send(hwnd, entry_json, entry_name):
+        print(f"🔍 [SEND-STEP] Looking for whatdoyouwantocreate.png...")
+        location = find_whatdoyouwantocreate_with_fallbacks(hwnd, timeout_seconds=30)
+        if not location:
+            print(f"❌ [SEND-STEP] Could not find the prompt input area")
+            try:
+                hud.print("Could not find the prompt area.", "error")
+            except Exception:
+                pass
+            update_operation_status(f"Could not find input field for {entry_name}", is_error=True)
+            return None
+
+        pyautogui.moveTo(location.x, location.y, duration=0.1)
+        pyautogui.click()
+        _sleep(0.3)
+
+        print(f"📝 [SEND-STEP] Pasting scene details...")
+        try:
+            hud.print(f"Preparing {entry_name}...", "typing")
+        except Exception:
+            pass
+        pyautogui.click()
+        _sleep(0.1)
+        pyautogui.hotkey('ctrl', 'a')
+        _sleep(0.05)
+        pyautogui.press('backspace')
+        _sleep(0.05)
+        pyperclip.copy(entry_json)
+        pyautogui.hotkey('ctrl', 'v')
+        _sleep(0.3)
+
+        print(f"🔍 [SEND-STEP] Looking for sendgf.png (initial click)...")
+        send_location = wait_for_image("sendgf.png", timeout_seconds=10, confidence=0.8)
+        if not send_location:
+            print(f"⚠️ [SEND-STEP] Send button not found - pressing Enter instead...")
+            pyautogui.press('enter')
+            _sleep(0.5)
+            move_mouse_to_center_of_screen()
+            return (None, None)
+
+        send_x, send_y = int(send_location.x), int(send_location.y)
+        print(f"🎯 [SEND-STEP] RECORDED sendgf location: ({send_x}, {send_y})")
+
+        print(f"🖱️ [SEND-STEP] Moving arrow away from send region before clicking...")
+        move_mouse_to_center_of_screen()
+        _sleep(0.15)
+        pyautogui.click(send_x, send_y)
+        _sleep(0.4)
+        print(f"✅ [SEND-STEP] Initial click on sendgf.png sent at ({send_x}, {send_y})")
+        print(f"🖱️ [SEND-STEP] Moving arrow away from send region after clicking...")
+        move_mouse_to_center_of_screen()
+        return (send_x, send_y)
+
+    def confirm_sendgf_and_wait_for_generating(hwnd, entry_name, entry_json=None,
+                                               send_x=None, send_y=None,
+                                               max_confirm_seconds=40, check_interval=0.4):
+        max_confirm_seconds = _bounded_timeout(max_confirm_seconds)
+        """
+        CONFIRMATION RULE:
+        - First try gfpromptsent.png and its numbered variants.
+        - If gfpromptsent is not visible, use imagerenderingprogress.png and its
+          numbered variants as an alternative confirmation that the prompt was sent.
+        - Do not use sendgf.png or no_active_gf_generation.png as prompt-sent
+          confirmation signals.
+        - If neither confirmation image appears within the confirmation window,
+          return needs_restart so the existing outer send loop can retry.
+        """
+
+        print(
+            f"🔎 [SEND-CONFIRM] Confirming prompt for {entry_name}: "
+            f"checking gfpromptsent first, with imagerenderingprogress as fallback..."
+        )
+
+        if send_x is not None and send_y is not None:
+            print(
+                f"   ℹ️ Initial send location was ({send_x}, {send_y}); "
+                f"confirmation will use on-screen status images."
+            )
+
+        try:
+            hud.print("Confirming the prompt was sent...", "waiting")
+        except Exception:
+            pass
+
+        update_operation_status(
+            f"Confirming prompt submission for {entry_name} "
+            f"(gfpromptsent, with image-rendering fallback)..."
+        )
+
+        prompt_sent_variants = get_image_variants("gfpromptsent.png")
+        rendering_variants = get_image_variants("imagerenderingprogress.png")
+
+        if prompt_sent_variants:
+            print(
+                f"🔍 [SEND-CONFIRM] Found {len(prompt_sent_variants)} "
+                f"gfpromptsent variant(s)."
+            )
+            for variant_path in prompt_sent_variants:
+                print(f"   • {os.path.basename(variant_path)}")
+        else:
+            print(
+                "⚠️ [SEND-CONFIRM] No gfpromptsent variants found in gui_images; "
+                "will rely on imagerenderingprogress if it appears."
+            )
+
+        if rendering_variants:
+            print(
+                f"🔍 [SEND-CONFIRM] Found {len(rendering_variants)} "
+                f"imagerenderingprogress variant(s) available as fallback."
+            )
+            for variant_path in rendering_variants:
+                print(f"   • {os.path.basename(variant_path)}")
+        else:
+            print(
+                "⚠️ [SEND-CONFIRM] No imagerenderingprogress variants currently "
+                "exist in gui_images."
+            )
+
+        start_time = time.time()
+        last_status_time = start_time
+
+        while time.time() - start_time < max_confirm_seconds:
+            check_for_termination()
+            enforce_window_focus(hwnd)
+
+            if check_for_tryagain_and_abort():
+                return "poor_network"
+
+            check_and_click_exit_editing()
+
+            # Primary confirmation: prompt-sent image.
+            prompt_sent_location, matched_prompt_variant = find_image_with_fallback(
+                "gfpromptsent.png",
+                confidence=0.8
+            )
+
+            if prompt_sent_location:
+                matched_name = (
+                    os.path.basename(matched_prompt_variant)
+                    if matched_prompt_variant
+                    else "gfpromptsent variant"
+                )
+                print(
+                    f"✅ [SEND-CONFIRM] {matched_name} found at "
+                    f"({prompt_sent_location.x}, {prompt_sent_location.y})."
+                )
+                print(
+                    f"✅ [SEND-CONFIRM] Prompt CONFIRMED SENT using "
+                    f"gfpromptsent detection."
+                )
+
+                try:
+                    hud.print("Prompt sent.", "success")
+                except Exception:
+                    pass
+
+                update_operation_status(
+                    f"Prompt confirmed for {entry_name} (gfpromptsent detected)"
+                )
+                return "confirmed"
+
+            # Fallback confirmation: rendering progress means Flow has started
+            # processing the submitted prompt, even if gfpromptsent is absent.
+            rendering_location, matched_rendering_variant = find_image_with_fallback(
+                "imagerenderingprogress.png",
+                confidence=0.7
+            )
+
+            if rendering_location:
+                matched_name = (
+                    os.path.basename(matched_rendering_variant)
+                    if matched_rendering_variant
+                    else "imagerenderingprogress variant"
+                )
+                print(
+                    f"✅ [SEND-CONFIRM] gfpromptsent was not found, but "
+                    f"{matched_name} was detected at "
+                    f"({rendering_location.x}, {rendering_location.y})."
+                )
+                print(
+                    f"✅ [SEND-CONFIRM] Prompt CONFIRMED SENT using "
+                    f"image-rendering progress fallback."
+                )
+
+                try:
+                    hud.print("Prompt sent — image rendering has started.", "success")
+                except Exception:
+                    pass
+
+                update_operation_status(
+                    f"Prompt confirmed for {entry_name} "
+                    f"(imagerenderingprogress fallback detected)"
+                )
+                return "confirmed"
+
+            current_time = time.time()
+            if current_time - last_status_time > 5:
+                elapsed = int(current_time - start_time)
+                print(
+                    f"⏳ [SEND-CONFIRM] Waiting for gfpromptsent or "
+                    f"imagerenderingprogress confirmation... ({elapsed}s elapsed)"
+                )
+                last_status_time = current_time
+
+            _sleep(check_interval)
+
+        print(
+            f"⚠️ [SEND-CONFIRM] Neither gfpromptsent nor "
+            f"imagerenderingprogress was detected within "
+            f"{max_confirm_seconds}s for {entry_name}."
+        )
+        print(
+            "🔁 [SEND-CONFIRM] Returning needs_restart so the existing send loop "
+            "can re-search the prompt input, re-paste, and send again."
+        )
+
+        try:
+            hud.print(
+                "Prompt confirmation not detected — trying the prompt again.",
+                "warning"
+            )
+        except Exception:
+            pass
+
+        update_operation_status(
+            f"No gfpromptsent or imagerenderingprogress confirmation for "
+            f"{entry_name} — re-searching input, re-pasting, and resending"
+        )
+
+        return "needs_restart"
+
+
+    def wait_for_imagerenderingprogress_and_jump_to_search(
+        hwnd, entry_name, max_wait_seconds=40, check_interval=0.4, phase_label="Image generation"
+    ):
+        """
+        Find imagerenderingprogress once, then lock the cursor 50px left and
+        50px below that exact match until rendering finishes.
+
+        Once the progress image is first found, no other GUI image/template is
+        searched until it disappears. Rendering has NO timeout. After it
+        disappears, the cursor remains locked while the caller searches only
+        for moregf.png.
+        """
+        nonlocal image_render_lock_active, image_render_lock_position
+
+        max_wait_seconds = _bounded_timeout(max_wait_seconds)
+        print(f"🔍 [GF-LOCK] Waiting for imagerenderingprogress.png during {phase_label.lower()}...")
+        first_seen_at = time.monotonic()
+        rendering_location = None
+
+        # Before the progress indicator is found, retain the normal bounded
+        # discovery window. The strict lock begins immediately on first match.
+        while time.monotonic() - first_seen_at < max_wait_seconds:
+            check_for_termination()
+            enforce_window_focus(hwnd)
+            if check_for_tryagain_and_abort():
+                return False
+            rendering_location = find_image("imagerenderingprogress.png", confidence=0.7)
+            if rendering_location:
+                break
+            _sleep(check_interval)
+
+        if not rendering_location:
+            print(
+                f"ℹ️ [GF-LOCK] imagerenderingprogress.png did not appear within "
+                f"{max_wait_seconds}s; normal generation fallback may be used."
+            )
+            return False
+
+        # Record the original match and the exact cursor target. Do not search
+        # for the progress image a second time merely to position the cursor.
+        image_render_lock_position = (
+            int(rendering_location.x - 50),
+            int(rendering_location.y + 50)
+        )
+        image_render_lock_active = True
+        set_image_scroll_lock(True)
+        target_x, target_y = image_render_lock_position
+        print(
+            "🔒 [GF-LOCK] First match recorded at "
+            f"({rendering_location.x}, {rendering_location.y}); "
+            f"cursor target permanently locked at ({target_x}, {target_y})."
+        )
+        pyautogui.moveTo(target_x, target_y, duration=0.2)
+
+        try:
+            hud.print(f"{phase_label} in progress...", "processing")
+        except Exception:
+            pass
+        update_operation_status(f"{phase_label} in progress for {entry_name}; cursor positioned 50px left and 50px below the progress indicator")
+
+        render_started = time.monotonic()
+        last_status_time = render_started
+
+        # IMPORTANT: no 40-second deadline here. Keep waiting for as long as
+        # Google Flow needs. During this phase, only search the progress image.
+        while True:
+            check_for_termination()
+
+            # The download-confirmation modal is the only additional UI
+            # exception allowed during the rendering lock. Its existing
+            # two-image verification remains mandatory.
+            _service_modal_and_restore_locked_cursor()
+            restore_locked_cursor()
+
+            # Search the rendering indicator only after modal servicing.
+            rendering_location = find_image("imagerenderingprogress.png", confidence=0.7)
+            if not rendering_location:
+                elapsed = int(time.monotonic() - render_started)
+                print(
+                    f"✅ [GF-LOCK] imagerenderingprogress.png disappeared after "
+                    f"{elapsed}s. Cursor remains locked at ({target_x}, {target_y}); "
+                    "next permitted search is moregf.png only."
+                )
+                try:
+                    hud.print(f"{phase_label} complete.", "success")
+                except Exception:
+                    pass
+                update_operation_status(
+                    f"{phase_label} complete for {entry_name}; cursor remains locked until the next step"
+                )
+                return True
+
+            now = time.monotonic()
+            if now - last_status_time >= 10:
+                elapsed = int(now - render_started)
+                print(f"⏳ [GF-LOCK] Still rendering... ({elapsed}s elapsed; no timeout)")
+                try:
+                    hud.print(f"{phase_label} in progress... ({elapsed}s)", "processing")
+                except Exception:
+                    pass
+                update_operation_status(
+                    f"{phase_label} in progress for {entry_name} ({elapsed}s); waiting without timeout"
+                )
+                last_status_time = now
+
+            _sleep(check_interval)
+
+
+    def wait_for_generation_complete_gf(hwnd, entry_name, max_wait_seconds=40, check_interval=0.5):
+        max_wait_seconds = _bounded_timeout(max_wait_seconds)
+        print(f"⏳ [GF] Waiting for generation to complete...")
+        print(f"🚀 [GF] Attempting fast-path via imagerenderingprogress.png...")
+        fastpath_done = wait_for_imagerenderingprogress_and_jump_to_search(
+            hwnd, entry_name, max_wait_seconds=max_wait_seconds, check_interval=check_interval
+        )
+        if fastpath_done:
+            print(f"🎉 [GF] Fast-path completed — rendering finished, proceeding to download")
+            return True, "complete"
+        else:
+            print(f"ℹ️ [GF] Fast-path did not trigger — falling back to normal generation wait flow")
+
+        status_counter = 0
+        try:
+            hud.print("Google Flow image generation in progress... ", "processing")
+        except Exception:
+            pass
+        update_operation_status("Google Flow image generation in progress... ")
+
+        start_time = time.time()
+        found_generating = False
+        generating_first_seen = None
+
+        print(f"🔍 [GF] Phase 1: Waiting for generatinggf_image.png...")
+        while time.time() - start_time < max_wait_seconds:
+            check_for_termination()
+            enforce_window_focus(hwnd)
+            if check_for_tryagain_and_abort():
+                return False, "poor_network"
+            check_and_click_exit_editing()
+            generating_location = find_image("generatinggf_image.png", confidence=0.7)
+            if generating_location:
+                print(f"✅ [GF] Found generatinggf_image.png - generation in progress!")
+                found_generating = True
+                generating_first_seen = time.time()
+                status_counter += 1
+                try:
+                    hud.print("Google Flow image generation in progress... ", "processing")
+                except Exception:
+                    pass
+                update_operation_status("Google Flow image generation in progress... ")
+                break
+            elapsed = int(time.time() - start_time)
+            if elapsed % 10 == 0 and elapsed > 0:
+                status_counter += 1
+                print(f"⏳ [GF] Google Flow image generation in progress... ({elapsed}s elapsed, counter={status_counter})")
+                try:
+                    hud.print("Google Flow image generation in progress... ", "processing")
+                except Exception:
+                    pass
+                update_operation_status("Google Flow image generation in progress... ")
+            _sleep(check_interval)
+
+        if not found_generating:
+            print(f"⚠️ [GF] generatinggf_image.png not found within timeout — checking fallbacks...")
+            if check_for_tryagain_and_abort():
+                return False, "poor_network"
+            print(f"🔍 [GF] Checking for no_active_gf_generation.png directly...")
+            check_and_click_exit_editing()
+            no_active_location = find_image("no_active_gf_generation.png", confidence=0.7)
+            if no_active_location:
+                print(f"✅ [GF] Found no_active_gf_generation.png directly — image is ready!")
+                try:
+                    hud.print("Your image is ready.", "success")
+                except Exception:
+                    pass
+                update_operation_status(f"Image generation complete for {entry_name}")
+                return True, "complete"
+            recheck = handle_exit_gfsidebar_and_recheck()
+            if recheck:
+                print(f"✅ [GF] Found no_active_gf_generation.png after exit_gfsidebar fallback — image is ready!")
+                try:
+                    hud.print("Your image is ready.", "success")
+                except Exception:
+                    pass
+                update_operation_status(f"Image generation complete for {entry_name}")
+                return True, "complete"
+            print(f"❌ [GF] Could not confirm generation completion after all fallbacks")
+            return False, "timeout"
+
+        print(f"🔍 [GF] Phase 2: Waiting for generatinggf_image.png to disappear...")
+        status_counter += 1
+        try:
+            hud.print("Google Flow image generation in progress... ", "processing")
+        except Exception:
+            pass
+        update_operation_status("Google Flow image generation in progress... ")
+
+        phase2_start = time.time()
+        phase2_timeout = max_wait_seconds - (generating_first_seen - start_time) if generating_first_seen else max_wait_seconds - 30
+        if phase2_timeout < 30:
+            phase2_timeout = 30
+
+        while time.time() - phase2_start < phase2_timeout:
+            check_for_termination()
+            enforce_window_focus(hwnd)
+            if check_for_tryagain_and_abort():
+                return False, "poor_network"
+            check_and_click_exit_editing()
+            generating_location = find_image("generatinggf_image.png", confidence=0.7)
+            if not generating_location:
+                print(f"✅ [GF] generatinggf_image.png disappeared - checking for completion...")
+                _sleep(0.5)
+                check_and_click_exit_editing()
+                no_active_location = find_image("no_active_gf_generation.png", confidence=0.7)
+                if no_active_location:
+                    print(f"✅ [GF] Found no_active_gf_generation.png - image is ready!")
+                    try:
+                        hud.print("Your image is ready.", "success")
+                    except Exception:
+                        pass
+                    update_operation_status(f"Image generation complete for {entry_name}")
+                    return True, "complete"
+                else:
+                    print(f"⚠️ [GF] no_active_gf_generation.png not found yet - trying exit_gfsidebar fallback...")
+                    recheck = handle_exit_gfsidebar_and_recheck()
+                    if recheck:
+                        print(f"✅ [GF] Found no_active_gf_generation.png after exit_gfsidebar fallback - image is ready!")
+                        try:
+                            hud.print("Your image is ready.", "success")
+                        except Exception:
+                            pass
+                        update_operation_status(f"Image generation complete for {entry_name}")
+                        return True, "complete"
+                    else:
+                        print(f"⚠️ [GF] Still not found - continuing to wait...")
+                        for _ in range(10):
+                            check_for_termination()
+                            _sleep(0.5)
+                            if check_for_tryagain_and_abort():
+                                return False, "poor_network"
+                            check_and_click_exit_editing()
+                            no_active_location = find_image("no_active_gf_generation.png", confidence=0.7)
+                            if no_active_location:
+                                print(f"✅ [GF] Found no_active_gf_generation.png - image is ready!")
+                                try:
+                                    hud.print("Your image is ready.", "success")
+                                except Exception:
+                                    pass
+                                update_operation_status(f"Image generation complete for {entry_name}")
+                                return True, "complete"
+                        continue
+            else:
+                elapsed = int(time.time() - phase2_start)
+                if elapsed % 10 == 0 and elapsed > 0:
+                    status_counter += 1
+                    print(f"⏳ [GF] Google Flow image generation in progress... ({elapsed}s elapsed in phase 2, counter={status_counter})")
+                    try:
+                        hud.print("Google Flow image generation in progress... ", "processing")
+                    except Exception:
+                        pass
+                    update_operation_status("Google Flow image generation in progress... ")
+                _sleep(check_interval)
+
+        print(f"⏰ [GF] Generation timeout after {max_wait_seconds} seconds")
+        return False, "timeout"
+
+    # --- DOWNLOAD HELPERS (same as original) ---
+    def check_and_rename_download(
+        entry_name, images_folder, timeout_seconds=40, check_interval=0.3,
+        force_png=False
+    ):
+        timeout_seconds = _bounded_timeout(timeout_seconds)
+        print(f"📊 [DOWNLOAD] Monitoring for download for {entry_name}...")
+        try:
+            hud.print("Waiting for the download to finish...", "waiting")
+        except Exception:
+            pass
+        update_operation_status(f"Waiting for download: {entry_name}")
+
+        downloads_folder = os.path.expanduser("~/Downloads")
+        if not os.path.exists(downloads_folder):
+            print(f"❌ [DOWNLOAD] Downloads folder not found: {downloads_folder}")
+            return False, None
+
+        initial_files = {}
+        try:
+            with os.scandir(downloads_folder) as entries:
+                for entry in entries:
+                    if entry.is_file():
+                        try:
+                            stat = entry.stat()
+                            initial_files[entry.name] = {'path': entry.path, 'time': stat.st_mtime, 'size': stat.st_size}
+                        except Exception:
+                            pass
+            print(f"📁 [DOWNLOAD] Found {len(initial_files)} existing files before download")
+        except Exception as e:
+            print(f"⚠️ [DOWNLOAD] Error scanning existing files: {e}")
+            initial_files = {}
+
+        start_time = time.time()
+        download_detected = False
+        downloaded_file_path = None
+        image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff'}
+
+        while time.time() - start_time < timeout_seconds:
+            check_for_termination()
+            check_and_click_exit_editing()
+            elapsed = int(time.time() - start_time)
+            try:
+                if os.path.exists(downloads_folder):
+                    with os.scandir(downloads_folder) as entries:
+                        for entry in entries:
+                            if entry.is_file():
+                                file_name = entry.name
+                                file_ext = os.path.splitext(file_name)[1].lower()
+                                is_new_file = file_name not in initial_files
+                                is_recent = False
+                                try:
+                                    stat = entry.stat()
+                                    if stat.st_mtime > start_time - 10:
+                                        is_recent = True
+                                except Exception:
+                                    pass
+                                if (is_new_file or is_recent) and file_ext in image_extensions:
+                                    print(f"🆕 [DOWNLOAD] Found new/updated image file: {file_name}")
+                                    print(f"   📁 Path: {entry.path}")
+                                    print(f"   📏 Size: {stat.st_size} bytes")
+                                    stable_count = 0
+                                    stable_size = 0
+                                    max_stable_checks = 5
+                                    while stable_count < 3 and stable_count < max_stable_checks:
+                                        if time.time() - start_time >= timeout_seconds:
+                                            break
+                                        try:
+                                            current_size = os.path.getsize(entry.path)
+                                            if current_size == stable_size and current_size > 1024:
+                                                stable_count += 1
+                                                print(f"   ⏳ File stable ({stable_count}/3), size: {current_size} bytes")
+                                            else:
+                                                stable_count = 0
+                                                stable_size = current_size
+                                                print(f"   ⏳ File size changing: {current_size} bytes")
+                                        except Exception as e:
+                                            print(f"   ⚠️ Error checking size: {e}")
+                                        _sleep(min(0.3, max(0.0, timeout_seconds - (time.time() - start_time))))
+                                    if stable_count >= 3:
+                                        print(f"✅ [DOWNLOAD] File stable and ready!")
+                                        downloaded_file_path = entry.path
+                                        download_detected = True
+                                        break
+                                    else:
+                                        print(f"⚠️ [DOWNLOAD] File not stable, continuing to monitor...")
+                                elif file_name.endswith('.crdownload') or file_name.endswith('.tmp'):
+                                    print(f"⏳ [DOWNLOAD] Found temp download: {file_name}")
+                            if download_detected:
+                                break
+                if download_detected and downloaded_file_path:
+                    break
+                if elapsed % 10 == 0 and elapsed > 0:
+                    print(f"⏳ [DOWNLOAD] Still waiting for download... ({elapsed}s elapsed)")
+                    try:
+                        hud.print(f"Still downloading... ({elapsed}s)", "waiting")
+                    except Exception:
+                        pass
+                    update_operation_status(f"Waiting for download {entry_name}... ({elapsed}s)")
+                _sleep(check_interval)
+            except Exception as e:
+                print(f"⚠️ [DOWNLOAD] Error in monitoring loop: {e}")
+                _sleep(check_interval)
+                continue
+
+        if not download_detected or not downloaded_file_path:
+            print(f"⏰ [DOWNLOAD] Timeout or no download detected after {timeout_seconds} seconds")
+            try:
+                print(f"🔍 [DOWNLOAD] Performing final scan for new image files...")
+                with os.scandir(downloads_folder) as entries:
+                    for entry in entries:
+                        if entry.is_file():
+                            file_name = entry.name
+                            file_ext = os.path.splitext(file_name)[1].lower()
+                            if file_ext in image_extensions:
+                                try:
+                                    stat = entry.stat()
+                                    if stat.st_mtime > start_time - 10:
+                                        print(f"🆕 [DOWNLOAD] Found new file in final scan: {file_name}")
+                                        downloaded_file_path = entry.path
+                                        download_detected = True
+                                        break
+                                except Exception:
+                                    pass
+            except Exception as e:
+                print(f"⚠️ [DOWNLOAD] Final scan error: {e}")
+
+        if not download_detected or not downloaded_file_path:
+            print(f"❌ [DOWNLOAD] No download detected")
+            return False, None
+
+        try:
+            file_name = os.path.basename(downloaded_file_path)
+            file_ext = os.path.splitext(file_name)[1].lower()
+            new_filename = f"{entry_name}.png" if force_png else f"{entry_name}{file_ext}"
+            target_path = os.path.join(images_folder, new_filename)
+            if not os.path.exists(images_folder):
+                os.makedirs(images_folder, exist_ok=True)
+            if not os.path.exists(downloaded_file_path):
+                print(f"❌ [DOWNLOAD] File no longer exists: {downloaded_file_path}")
+                return False, None
+
+            try:
+                _sleep(0.5)
+                if force_png:
+                    # Do not just rename a JPG/WebP file to .png. Convert the
+                    # downloaded image so Thumbnail.png is a genuine PNG file.
+                    from PIL import Image
+                    with Image.open(downloaded_file_path) as source_image:
+                        converted = source_image.convert(
+                            "RGBA" if "A" in source_image.getbands() else "RGB"
+                        )
+                        converted.save(target_path, format="PNG", optimize=True)
+                    try:
+                        os.remove(downloaded_file_path)
+                    except OSError:
+                        pass
+                    print(f"✅ [DOWNLOAD] Thumbnail converted and saved as: {new_filename}")
+                else:
+                    # Replace only the same expected entry filename if a retry
+                    # is correcting a previously invalid/partial download.
+                    if os.path.exists(target_path):
+                        os.remove(target_path)
+                    try:
+                        os.replace(downloaded_file_path, target_path)
+                    except OSError:
+                        import shutil
+                        shutil.copy2(downloaded_file_path, target_path)
+                        try:
+                            os.remove(downloaded_file_path)
+                        except OSError:
+                            pass
+                    print(f"✅ [DOWNLOAD] File saved as: {new_filename}")
+
+                print(f"📁 [DOWNLOAD] Moved to: {target_path}")
+                try:
+                    hud.print("Saved successfully.", "success")
+                except Exception:
+                    pass
+                update_operation_status(f"Downloaded and saved: {new_filename}")
+                return True, target_path
+            except Exception as e:
+                print(f"❌ [DOWNLOAD] Failed to save/convert downloaded image: {e}")
+                traceback.print_exc()
+                return False, None
+        except Exception as e:
+            print(f"❌ [DOWNLOAD] Error processing downloaded file: {e}")
+            return False, None
+
+    def download_google_flow_image(hwnd, entry_name, images_folder, force_png=False):
+        # These variables belong to generate_google_flow_images(), not this
+        # nested function. Declaring them nonlocal also keeps the finally
+        # block safe when Alt+/ interrupts the first polling wait.
+        nonlocal download_ui_sequence_active
+        nonlocal image_render_lock_active, image_render_lock_position
+
+        print(f"📥 [GF-DOWNLOAD] Starting Google Flow download procedure for {entry_name}...")
+
+        # Rendering completion leaves the cursor locked at the original
+        # progress-indicator anchor. Do not search for any other UI element
+        # except moregf.png until that control is found.
+        search_location = ensure_image_hover_position(
+            timeout_seconds=STAGE_TIMEOUT_SECONDS,
+            offset_px=50
+        )
+
+        # Protect the complete download UI sequence from periodic exit editing
+        # detection. Hotkeys/timeouts continue to be checked normally.
+        download_ui_sequence_active = True
+        try:
+
+            print(
+                "✅ [GF-DOWNLOAD] Image hover position is confirmed; now preparing "
+                "the download controls."
+            )
+            try:
+                hud.print("Preparing the download...", "downloading")
+            except Exception:
+                pass
+            update_operation_status(f"Starting download for {entry_name}...")
+
+            print(
+                "🔍 [GF-DOWNLOAD] Step 1 complete: imagerenderingprogress.png was found and "
+                "the cursor was moved 50px left and 50px below it before download preparation."
+            )
+
+            print(
+                "🔒 [GF-DOWNLOAD] Cursor remains locked at the original image position. "
+                "Searching ONLY for moregf.png; no scrolling or other UI searches."
+            )
+            moregf_found = False
+            moregf_wait_started = time.monotonic()
+            last_more_log = moregf_wait_started
+
+            while not moregf_found:
+                check_for_termination()
+
+                # The confirmation modal may appear at any time. Handle it
+                # using its existing two-image verification, then restore anchor.
+                _service_modal_and_restore_locked_cursor()
+                restore_locked_cursor()
+
+                # If rendering has resumed while waiting for More, re-anchor
+                # 50px left and 50px below the new progress match, then wait again.
+                rendering_again = find_image("imagerenderingprogress.png", confidence=0.7)
+                if rendering_again:
+                    image_render_lock_position = (
+                        int(rendering_again.x - 50),
+                        int(rendering_again.y + 50)
+                    )
+                    target_x, target_y = image_render_lock_position
+                    image_render_lock_active = True
+                    set_image_scroll_lock(True)
+                    pyautogui.moveTo(target_x, target_y, duration=0.1)
+                    print(
+                        "🔁 [GF-DOWNLOAD-LOCK] Rendering indicator reappeared; "
+                        f"re-anchored at ({target_x}, {target_y}) and waiting again."
+                    )
+                    render_again_started = time.monotonic()
+                    last_render_again_log = render_again_started
+
+                    while True:
+                        check_for_termination()
+                        _service_modal_and_restore_locked_cursor()
+                        restore_locked_cursor()
+                        still_rendering = find_image(
+                            "imagerenderingprogress.png", confidence=0.7
+                        )
+                        if not still_rendering:
+                            elapsed_again = int(time.monotonic() - render_again_started)
+                            print(
+                                "✅ [GF-DOWNLOAD-LOCK] Rendering indicator disappeared "
+                                f"again after {elapsed_again}s; resuming More search."
+                            )
+                            break
+                        now_again = time.monotonic()
+                        if now_again - last_render_again_log >= 10:
+                            elapsed_again = int(now_again - render_again_started)
+                            print(
+                                f"⏳ [GF-DOWNLOAD-LOCK] Rendering resumed "
+                                f"({elapsed_again}s); waiting without timeout."
+                            )
+                            last_render_again_log = now_again
+                        _sleep(0.4)
+                    restore_locked_cursor()
+                    continue
+
+                # Search More only after confirming rendering is not active.
+                moregf_location = find_image("moregf.png", confidence=0.7)
+                if moregf_location:
+                    print(
+                        f"✅ [GF-DOWNLOAD] moregf.png found at "
+                        f"({moregf_location.x}, {moregf_location.y}); clicking its right edge."
+                    )
+                    clicked = click_right_edge_of_image("moregf.png", confidence=0.7)
+                    if clicked:
+                        moregf_found = True
+                        image_render_lock_active = False
+                        set_image_scroll_lock(False)
+                        print(
+                            "🔓 [GF-DOWNLOAD] More control found and clicked; "
+                            "cursor-position lock released."
+                        )
+                        break
+                    # If the match could not be clicked, restore the anchor and
+                    # continue looking ONLY for moregf.png.
+                    pyautogui.moveTo(target_x, target_y, duration=0.1)
+
+                now = time.monotonic()
+                if now - last_more_log >= 10:
+                    elapsed = int(now - moregf_wait_started)
+                    print(
+                        f"⏳ [GF-DOWNLOAD-LOCK] moregf.png not found after {elapsed}s; "
+                        f"cursor remains forced to ({target_x}, {target_y})."
+                    )
+                    update_operation_status(
+                        f"Waiting for moregf.png for {entry_name}; cursor position remains locked"
+                    )
+                    last_more_log = now
+                _sleep(0.4)
+
+            print(f"🔍 [GF-DOWNLOAD] Step 4: Looking for downloadgfimage.png...")
+            download_location = wait_for_image("downloadgfimage.png", timeout_seconds=20, confidence=0.7)
+            if download_location:
+                pyautogui.moveTo(download_location.x, download_location.y, duration=0.1)
+                pyautogui.click()
+                _sleep(0.5)
+                print(f"✅ [GF-DOWNLOAD] Clicked downloadgfimage.png")
+            else:
+                print(f"❌ [GF-DOWNLOAD] downloadgfimage.png not found — download cannot proceed")
+                return False
+
+            print(f"🔍 [GF-DOWNLOAD] Step 5: Looking for gfdownloadquality.png...")
+            quality_location = wait_for_image("gfdownloadquality.png", timeout_seconds=15, confidence=0.7)
+            if quality_location:
+                pyautogui.moveTo(quality_location.x, quality_location.y, duration=0.1)
+                pyautogui.click()
+                _sleep(0.5)
+                print(f"✅ [GF-DOWNLOAD] Clicked gfdownloadquality.png")
+            else:
+                print(f"⚠️ [GF-DOWNLOAD] gfdownloadquality.png not found — download may still proceed...")
+
+            print(f"📊 [GF-DOWNLOAD] Step 6: Monitoring background for new download...")
+            try:
+                hud.print("Downloading your image...", "downloading")
+            except Exception:
+                pass
+            update_operation_status(f"Downloading {entry_name}...")
+
+            download_success = False
+            file_path = None
+            download_attempts = 0
+            max_download_attempts = 3
+
+            while download_attempts < max_download_attempts and not download_success:
+                download_attempts += 1
+                print(f"🔄 [GF-DOWNLOAD] Download attempt {download_attempts}/{max_download_attempts}")
+                timeout_seconds = 30 if download_attempts == 1 else 20
+                download_success, file_path = check_and_rename_download(
+                    entry_name,
+                    images_folder,
+                    timeout_seconds=timeout_seconds,
+                    check_interval=0.3,
+                    force_png=force_png
+                )
+                if download_success:
+                    print(f"✅ [GF-DOWNLOAD] Download successful on attempt {download_attempts}")
+                    break
+                if download_attempts < max_download_attempts:
+                    print(f"⚠️ [GF-DOWNLOAD] Download not found after {timeout_seconds}s — retrying...")
+                    try:
+                        hud.print(f"Retrying the download... ({download_attempts}/{max_download_attempts})", "warning")
+                    except Exception:
+                        pass
+                    update_operation_status(f"Retrying download for {entry_name}... (attempt {download_attempts + 1})")
+
+                    # Restore the saved anchor directly. The progress indicator
+                    # has already disappeared; never search for it again.
+                    search_location = ensure_image_hover_position(
+                        timeout_seconds=STAGE_TIMEOUT_SECONDS,
+                        offset_px=50
+                    )
+                    print(
+                        "🖱️ [GF-DOWNLOAD-RETRY] Required hover position restored; "
+                        "retrying the download controls."
+                    )
+
+                    target_x, target_y = image_render_lock_position
+                    pyautogui.moveTo(target_x, target_y, duration=0.1)
+                    more_retry_location = find_image("moregf.png", confidence=0.7)
+                    if more_retry_location:
+                        click_right_edge_of_image("moregf.png", confidence=0.7)
+                    download_location = wait_for_image("downloadgfimage.png", timeout_seconds=10, confidence=0.7)
+                    if download_location:
+                        pyautogui.moveTo(download_location.x, download_location.y, duration=0.1)
+                        pyautogui.click()
+                        _sleep(0.5)
+                    quality_location = wait_for_image("gfdownloadquality.png", timeout_seconds=10, confidence=0.7)
+                    if quality_location:
+                        pyautogui.moveTo(quality_location.x, quality_location.y, duration=0.1)
+                        pyautogui.click()
+                        _sleep(0.5)
+                    _sleep(2)
+
+            if download_success:
+                print(f"🎉 [GF-DOWNLOAD] {entry_name} downloaded and saved successfully!")
+                try:
+                    hud.print("Image downloaded successfully.", "success")
+                except Exception:
+                    pass
+                update_operation_status(f"{entry_name} completed successfully", is_success=True)
+                return True
+            else:
+                print(f"❌ [GF-DOWNLOAD] Failed to download {entry_name} after {max_download_attempts} attempts")
+                try:
+                    hud.print("Could not download the image.", "error")
+                except Exception:
+                    pass
+                update_operation_status(f"Failed to download {entry_name} after multiple attempts", is_error=True)
+                return False
+
+        finally:
+            download_ui_sequence_active = False
+            if not image_render_lock_active:
+                set_image_scroll_lock(False)
+    def handle_webdownloadconfirmationmodal():
+        """
+        Handles webdownloadconfirmationmodal.png using a mandatory 2-step
+        verification.
+
+        The confirmation button may ONLY be clicked when BOTH of these
+        images are currently visible on screen:
+
+            1. webdownloadconfirmationmodal.png
+            2. webdownloadmodalappearance.png
+
+        If webdownloadconfirmationmodal.png is visible but
+        webdownloadmodalappearance.png is NOT visible, the confirmation
+        button is NOT clicked and the function skips it entirely.
+        """
+
+        print(f"🔍 [MODAL] Step 1: Checking for webdownloadconfirmationmodal.png...")
+        modal_location = find_image(
+            "webdownloadconfirmationmodal.png",
+            confidence=0.7
+        )
+
+        if not modal_location:
+            print(
+                f"ℹ️ [MODAL] webdownloadconfirmationmodal.png not found "
+                f"— proceeding normally"
+            )
+            return False
+
+        print(
+            f"✅ [MODAL] webdownloadconfirmationmodal.png found at "
+            f"({modal_location.x}, {modal_location.y})"
+        )
+
+        # --------------------------------------------------------------
+        # REQUIRED SECOND VERIFICATION
+        # --------------------------------------------------------------
+        print(
+            f"🔍 [MODAL] Step 2: Checking for webdownloadmodalappearance.png..."
+        )
+
+        modal_appearance_location = find_image(
+            "webdownloadmodalappearance.png",
+            confidence=0.7
+        )
+
+        if not modal_appearance_location:
+            print(
+                f"⚠️ [MODAL] webdownloadconfirmationmodal.png was found, "
+                f"BUT webdownloadmodalappearance.png was NOT found."
+            )
+            print(
+                f"⏭️ [MODAL] 2-step verification FAILED — "
+                f"SKIPPING webdownloadconfirmationmodal click entirely."
+            )
+            return False
+
+        print(
+            f"✅ [MODAL] webdownloadmodalappearance.png found at "
+            f"({modal_appearance_location.x}, "
+            f"{modal_appearance_location.y})"
+        )
+
+        # BOTH required images are visible, so clicking is now permitted.
+        print(
+            f"🔐 [MODAL] 2-step verification PASSED — "
+            f"both required images are visible."
+        )
+        print(
+            f"🖱️ [MODAL] Clicking webdownloadconfirmationmodal.png..."
+        )
+
+        try:
+            hud.print("Confirming the download...", "warning")
+        except Exception:
+            pass
+
+        pyautogui.moveTo(
+            modal_location.x,
+            modal_location.y,
+            duration=0.1
+        )
+        pyautogui.click()
+        _sleep(0.5)
+        move_mouse_to_center_of_screen()
+        _sleep(0.3)
+
+        # --------------------------------------------------------------
+        # RE-CHECK AFTER THE FIRST CLICK
+        # --------------------------------------------------------------
+        print(
+            f"🔍 [MODAL] Re-checking both verification images "
+            f"after first click..."
+        )
+
+        recheck_appearance_location = find_image(
+            "webdownloadmodalappearance.png",
+            confidence=0.7
+        )
+
+        recheck_modal_location = find_image(
+            "webdownloadconfirmationmodal.png",
+            confidence=0.7
+        )
+
+        if recheck_modal_location and recheck_appearance_location:
+            print(
+                f"⚠️ [MODAL] Both verification images are still visible "
+                f"after the first click — clicking confirmation again..."
+            )
+
+            pyautogui.moveTo(
+                recheck_modal_location.x,
+                recheck_modal_location.y,
+                duration=0.1
+            )
+            pyautogui.click()
+            _sleep(0.5)
+            move_mouse_to_center_of_screen()
+            _sleep(0.3)
+
+            print(
+                f"✅ [MODAL] Second click completed with both "
+                f"verification conditions satisfied."
+            )
+
+        elif recheck_modal_location and not recheck_appearance_location:
+            print(
+                f"ℹ️ [MODAL] webdownloadconfirmationmodal.png is still "
+                f"visible, but webdownloadmodalappearance.png is no longer "
+                f"visible — NOT clicking again."
+            )
+            print(
+                f"⏭️ [MODAL] Skipping the confirmation button because "
+                f"the required 2-step verification is no longer satisfied."
+            )
+
+        elif not recheck_modal_location:
+            print(
+                f"✅ [MODAL] webdownloadconfirmationmodal.png is no longer "
+                f"visible — confirmation completed."
+            )
+
+        else:
+            print(
+                f"ℹ️ [MODAL] Verification state changed after the click — "
+                f"no additional click required."
+            )
+
+        print(
+            f"✅ [MODAL] Modal handling completed — proceeding with "
+            f"normal protocol"
+        )
+        return True
+
+    def _service_modal_and_restore_locked_cursor():
+        """
+        Poll the download-confirmation modal during the locked phase. If it is
+        visible, the existing handler verifies both modal images and clicks it.
+        Always restore the saved image anchor immediately afterward.
+        """
+        if not image_render_lock_active or image_render_lock_position is None:
+            return False
+        handled = False
+        try:
+            handled = handle_webdownloadconfirmationmodal()
+        except (_WorkflowRestart, _ManualStop):
+            set_image_scroll_lock(False)
+            raise
+        except Exception as modal_error:
+            print(f"⚠️ [MODAL-LOCK] Modal check failed safely: {modal_error}")
+        finally:
+            restore_locked_cursor()
+        return handled
+
+    IMAGE_FILE_EXTENSIONS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"
+    }
+    ENTRY_IMAGE_PATTERN = re.compile(
+        r"^entry_(\d+)\.(png|jpg|jpeg|gif|webp|bmp|tiff)$",
+        re.IGNORECASE
+    )
+    THUMBNAIL_FILENAME = "Thumbnail.png"
+
+    def _cleanup_project_image_folder(images_folder, expected_entries):
+        """
+        Keep only entry_N image files within the expected range and Thumbnail.png.
+        Delete every other image file, including numbered variants and unrelated
+        images. For duplicate formats of the same entry, keep the newest valid
+        file and delete the others.
+        """
+        os.makedirs(images_folder, exist_ok=True)
+        valid_entries = {}
+        thumbnail_candidates = []
+
+        try:
+            filenames = os.listdir(images_folder)
+        except OSError as scan_error:
+            print(f"❌ [IMAGE-CLEANUP] Could not scan {images_folder}: {scan_error}")
+            return False
+
+        for filename in filenames:
+            full_path = os.path.join(images_folder, filename)
+            if not os.path.isfile(full_path):
+                continue
+
+            extension = os.path.splitext(filename)[1].lower()
+            stem = os.path.splitext(filename)[0]
+
+            # The one permitted video-level thumbnail is a PNG named Thumbnail.
+            if stem.lower() == "thumbnail" and extension == ".png":
+                try:
+                    if os.path.getsize(full_path) > 0:
+                        thumbnail_candidates.append(full_path)
+                    else:
+                        os.remove(full_path)
+                        print(f"🗑️ [IMAGE-CLEANUP] Deleted empty thumbnail: {filename}")
+                except OSError as cleanup_error:
+                    print(f"⚠️ [IMAGE-CLEANUP] Could not inspect {filename}: {cleanup_error}")
+                continue
+
+            match = ENTRY_IMAGE_PATTERN.fullmatch(filename)
+            if match:
+                number = int(match.group(1))
+                try:
+                    valid_file = os.path.getsize(full_path) > 0
+                except OSError:
+                    valid_file = False
+
+                if 1 <= number <= expected_entries and valid_file:
+                    try:
+                        modified = os.path.getmtime(full_path)
+                    except OSError:
+                        modified = 0
+                    valid_entries.setdefault(number, []).append((modified, full_path))
+                    continue
+
+            # Delete unrelated images and entry files outside the current script's
+            # valid numbering range. Non-image support files are left untouched.
+            if extension in IMAGE_FILE_EXTENSIONS:
+                try:
+                    os.remove(full_path)
+                    print(f"🗑️ [IMAGE-CLEANUP] Deleted unrecognized image: {filename}")
+                except OSError as cleanup_error:
+                    print(f"⚠️ [IMAGE-CLEANUP] Could not delete {filename}: {cleanup_error}")
+
+        # Resolve duplicate entry formats, keeping the newest non-empty image.
+        for number, candidates in valid_entries.items():
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            for _, duplicate_path in candidates[1:]:
+                try:
+                    os.remove(duplicate_path)
+                    print(
+                        f"🗑️ [IMAGE-CLEANUP] Deleted duplicate for entry_{number}: "
+                        f"{os.path.basename(duplicate_path)}"
+                    )
+                except OSError as cleanup_error:
+                    print(f"⚠️ [IMAGE-CLEANUP] Could not delete duplicate {duplicate_path}: {cleanup_error}")
+
+        # Keep exactly one canonical Thumbnail.png. Prefer the newest valid PNG.
+        if thumbnail_candidates:
+            thumbnail_candidates.sort(
+                key=lambda path: os.path.getmtime(path) if os.path.exists(path) else 0,
+                reverse=True
+            )
+            keep_thumbnail = thumbnail_candidates[0]
+            canonical_thumbnail = os.path.join(images_folder, THUMBNAIL_FILENAME)
+            if os.path.abspath(keep_thumbnail) != os.path.abspath(canonical_thumbnail):
+                try:
+                    if os.path.exists(canonical_thumbnail):
+                        os.remove(canonical_thumbnail)
+                    os.replace(keep_thumbnail, canonical_thumbnail)
+                    keep_thumbnail = canonical_thumbnail
+                except OSError as rename_error:
+                    print(f"⚠️ [IMAGE-CLEANUP] Could not normalize thumbnail filename: {rename_error}")
+
+            for duplicate_path in thumbnail_candidates[1:]:
+                if os.path.abspath(duplicate_path) == os.path.abspath(keep_thumbnail):
+                    continue
+                try:
+                    if os.path.exists(duplicate_path):
+                        os.remove(duplicate_path)
+                        print(
+                            "🗑️ [IMAGE-CLEANUP] Deleted duplicate thumbnail: "
+                            f"{os.path.basename(duplicate_path)}"
+                        )
+                except OSError as cleanup_error:
+                    print(f"⚠️ [IMAGE-CLEANUP] Could not delete duplicate thumbnail: {cleanup_error}")
+
+        print(
+            f"🧹 [IMAGE-CLEANUP] Accepted scene images: "
+            f"{sorted(valid_entries.keys())}; thumbnail: "
+            f"{'present' if os.path.isfile(os.path.join(images_folder, THUMBNAIL_FILENAME)) else 'missing'}"
+        )
+        return True
+
+    def _find_entry_image(images_folder, entry_number):
+        """Return one non-empty file that exactly matches entry_N.ext."""
+        if not os.path.isdir(images_folder):
+            return None
+        try:
+            for filename in os.listdir(images_folder):
+                match = ENTRY_IMAGE_PATTERN.fullmatch(filename)
+                if match and int(match.group(1)) == int(entry_number):
+                    full_path = os.path.join(images_folder, filename)
+                    if os.path.isfile(full_path) and os.path.getsize(full_path) > 0:
+                        return full_path
+        except OSError as scan_error:
+            print(f"⚠️ [VALIDATE] Could not inspect entry_{entry_number}: {scan_error}")
+        return None
+
+    def _thumbnail_exists(images_folder):
+        thumbnail_path = os.path.join(images_folder, THUMBNAIL_FILENAME)
+        try:
+            if not os.path.isfile(thumbnail_path) or os.path.getsize(thumbnail_path) <= 0:
+                return False
+            from PIL import Image
+            with Image.open(thumbnail_path) as thumbnail_image:
+                if thumbnail_image.format != "PNG":
+                    raise ValueError("Thumbnail file is not a genuine PNG image")
+                thumbnail_image.verify()
+            return True
+        except Exception as thumbnail_error:
+            if os.path.exists(thumbnail_path):
+                try:
+                    os.remove(thumbnail_path)
+                    print(
+                        f"🗑️ [THUMBNAIL] Removed invalid Thumbnail.png: "
+                        f"{thumbnail_error}"
+                    )
+                except OSError as remove_error:
+                    print(
+                        f"⚠️ [THUMBNAIL] Invalid thumbnail could not be removed: "
+                        f"{remove_error}"
+                    )
+            return False
+
+    def validate_entry_order(images_folder, expected_entries):
+        """
+        Do not reset valid files when a gap exists. Return the exact missing
+        entry numbers so only those images are regenerated.
+        """
+        if not _cleanup_project_image_folder(images_folder, expected_entries):
+            return False, []
+        missing_numbers = [
+            number
+            for number in range(1, expected_entries + 1)
+            if _find_entry_image(images_folder, number) is None
+        ]
+        existing_numbers = [
+            number
+            for number in range(1, expected_entries + 1)
+            if number not in missing_numbers
+        ]
+        print(f"📊 [VALIDATE] Existing valid entries: {existing_numbers}")
+        print(f"📊 [VALIDATE] Missing entries to generate: {missing_numbers}")
+        return True, missing_numbers
+
+    def process_prompt_job_gf(
+        hwnd, job_name, prompt_text, images_folder,
+        success_message, force_png=False
+    ):
+        """Submit one prompt, verify it was sent, wait for render, and download."""
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
+            print(f"⚠️ [PROMPT-JOB] Empty prompt for {job_name}")
+            return False
+
+        print(f"\n{'='*50}")
+        print(f"📝 [PROMPT-JOB] Generating: {job_name}")
+        print(f"{'='*50}")
+        update_operation_status(f"Preparing image generation for {job_name}...")
+        try:
+            hud.print(f"Preparing {job_name}...", "processing")
+        except Exception:
+            pass
+
+        # A restart always begins again at prompt submission. No saved scene
+        # or thumbnail phase is trusted as proof of a completed image.
+        send_attempt = 0
+        send_confirmed = False
+
+        while not send_confirmed:
+            send_attempt += 1
+            print(f"\\n🔁 [SEND-LOOP] Send attempt #{send_attempt} for {job_name}")
+            update_operation_status(
+                f"Submitting {job_name} prompt (attempt {send_attempt})..."
+            )
+            check_and_click_exit_editing()
+            send_coords = paste_prompt_and_click_send(hwnd, prompt_text, job_name)
+            if send_coords is None:
+                print(f"❌ [SEND-LOOP] Could not paste & click send for {job_name}")
+                return False
+
+            send_x, send_y = send_coords
+            confirm_result = confirm_sendgf_and_wait_for_generating(
+                hwnd,
+                job_name,
+                prompt_text,
+                send_x,
+                send_y,
+                max_confirm_seconds=STAGE_TIMEOUT_SECONDS,
+                check_interval=0.4
+            )
+
+            if confirm_result == "confirmed":
+                print(f"✅ [SEND-LOOP] Prompt confirmed for {job_name}")
+                send_confirmed = True
+            elif confirm_result in ("needs_restart", "timeout"):
+                abort_operation(
+                    f"Prompt confirmation was not detected for {job_name} within 40 seconds"
+                )
+            elif confirm_result == "poor_network":
+                print(f"❌ [SEND-LOOP] Poor network detected while submitting {job_name}")
+                return False
+            elif confirm_result == "aborted":
+                print(f"🛑 [SEND-LOOP] Submission aborted for {job_name}")
+                return False
+            else:
+                abort_operation(
+                    f"Unexpected send-confirmation result for {job_name}: {confirm_result}"
+                )
+
+        print(f"⏳ [PROMPT-JOB] Waiting for Google Flow to render {job_name}...")
+        generation_complete, status = wait_for_generation_complete_gf(
+            hwnd, job_name, max_wait_seconds=STAGE_TIMEOUT_SECONDS
+        )
+        if not generation_complete:
+            print(f"❌ [PROMPT-JOB] Generation did not complete for {job_name}: {status}")
+            update_operation_status(
+                f"Generation failed for {job_name}: {status}",
+                is_error=True
+            )
+            if status == "poor_network":
+                return False
+            abort_operation(f"Generation failed for {job_name}: {status}")
+            return False
+
+        print(f"📥 [PROMPT-JOB] Downloading completed image for {job_name}...")
+        download_success = download_google_flow_image(
+            hwnd, job_name, images_folder, force_png=force_png
+        )
+        if not download_success:
+            print(f"❌ [PROMPT-JOB] Download failed for {job_name}; the job will not be skipped")
+            update_operation_status(
+                f"Download failed for {job_name}",
+                is_abort=True
+            )
+            abort_operation(f"Download failed for {job_name}")
+            return False
+
+        if force_png:
+            expected_path = os.path.join(images_folder, THUMBNAIL_FILENAME)
+            if not os.path.isfile(expected_path) or os.path.getsize(expected_path) <= 0:
+                abort_operation(
+                    f"{job_name} download did not produce a valid {THUMBNAIL_FILENAME}"
+                )
+
+        print(f"🎉 [PROMPT-JOB] {success_message}")
+        try:
+            hud.print(f"{success_message}", "success")
+        except Exception:
+            pass
+        update_operation_status(f"{job_name} complete", is_success=True)
+        return True
+
+    def process_single_entry_gf(hwnd, entry_index, entry_data, images_folder):
+        entry_name = f"entry_{entry_index + 1}"
+        entry_json = format_entry_for_paste(entry_data)
+        if not entry_json:
+            print(f"⚠️ [SCENE] No data found for {entry_name}")
+            return False
+
+        return process_prompt_job_gf(
+            hwnd=hwnd,
+            job_name=entry_name,
+            prompt_text=entry_json,
+            images_folder=images_folder,
+            success_message=f"Scene {entry_index + 1} image is ready and downloaded",
+            force_png=False
+        )
+
+    def process_thumbnail_gf(hwnd, thumbnail_prompt, images_folder):
+        """Generate the single project-level thumbnail after all scene images."""
+        print("\n🖼️ [THUMBNAIL] All scene images are verified. Preparing the YouTube thumbnail.")
+        update_operation_status("All scene images are complete; generating Thumbnail.png...")
+        try:
+            hud.print("Generating the YouTube thumbnail...", "processing")
+        except Exception:
+            pass
+
+        return process_prompt_job_gf(
+            hwnd=hwnd,
+            job_name="Thumbnail",
+            prompt_text=thumbnail_prompt.strip(),
+            images_folder=images_folder,
+            success_message="YouTube thumbnail generated and saved as Thumbnail.png",
+            force_png=True
+        )
+
+    def main_google_flow_workflow(force_url_restart=False):
+        try:
+            if not os.path.exists(GUI_IMAGES):
+                print(f"❌ Error: GUI_IMAGES path not found: {GUI_IMAGES}")
+                try:
+                    hud.print("A required folder is missing.", "error")
+                except Exception:
+                    pass
+                update_operation_status(f"GUI_IMAGES path not found: {GUI_IMAGES}", is_error=True)
+                return
+
+            images_folder = os.path.join(IMAGES_PATH, project_title)
+            print(f"🎬 [MAIN] Starting Google Flow image generation workflow...")
+            print(f"🖥️ [MAIN] GUI Images path: {GUI_IMAGES}")
+            print(f"📁 [MAIN] Project: '{project_title}'")
+            print(f"📁 [MAIN] Images folder: {images_folder}")
+            print(f"📊 [MAIN] Total entries: {total_entries}")
+
+            try:
+                hud.print(f"Preparing to generate {total_entries} images...", "initializing")
+            except Exception:
+                pass
+
+            valid, missing_entries = validate_entry_order(images_folder, total_entries)
+            if not valid:
+                print("❌ [MAIN] Project image-folder validation failed")
+                return
+
+            # The thumbnail prompt is a project-level field in the JSON, outside
+            # the timed script entries. It is only submitted after every entry_N
+            # image has been verified.
+            latest_panel = _load_panel()
+            thumbnail_value = _find_field(latest_panel, ("Thumbnail",))
+            thumbnail_prompt = (
+                thumbnail_value.strip()
+                if isinstance(thumbnail_value, str)
+                else ""
+            )
+            thumbnail_already_exists = _thumbnail_exists(images_folder)
+            print(f"📊 [MAIN] Missing scene entries: {missing_entries}")
+            print(
+                f"🖼️ [MAIN] Thumbnail status: "
+                f"{'already generated' if thumbnail_already_exists else 'not generated yet'}"
+            )
+
+            if not missing_entries and thumbnail_already_exists:
+                print(
+                    f"✅ [MAIN] All {total_entries} scene images and Thumbnail.png "
+                    "already exist. Verifying project transfer."
+                )
+                transferred = _transfer_completed_project_to_ready_script(
+                    images_folder, total_entries
+                )
+                if transferred:
+                    _set_currently_running(
+                        "generate_google_flow_images_successful",
+                        status="completed",
+                        operation_status=(
+                            f"✅ All {total_entries} scene images and Thumbnail.png "
+                            "verified and transferred to ready_script.json"
+                        )
+                    )
+                    print("🏁 [GF] Completed project appended to ready_script.json")
+                return
+
+            work_items = len(missing_entries) + (0 if thumbnail_already_exists else 1)
+            print(
+                f"📊 [MAIN] Work remaining: {len(missing_entries)} missing scene image(s), "
+                f"{0 if thumbnail_already_exists else 1} thumbnail."
+            )
+
+            hwnd = ensure_window_ready_and_focused()
+            print(f"🪟 [MAIN] Browser ready (HWND: {hwnd})")
+            update_operation_status("Browser initialized; inspecting the current Edge page before navigation")
+
+            # IMPORTANT: on every automatic/manual restart, search in this exact
+            # order before navigating: (1) whatdoyouwantocreate, (2) new_project,
+            # (3) GOOGLE_FLOW_URL if neither is visible. This prevents a restart
+            # from opening a second project when the prompt workspace is ready.
+            print("🔎 [MAIN] Inspecting the current Edge page before loading any URL...")
+            try:
+                hud.print("Checking the current Google Flow page...", "waiting")
+            except Exception:
+                pass
+
+            if force_url_restart:
+                print("🌐 [MAIN] Ctrl+Shift+F12 requested a hard restart; opening GOOGLE_FLOW_URL immediately without inspecting the current page.")
+                try:
+                    hud.print("Restarting from Google Flow URL...", "navigating")
+                except Exception:
+                    pass
+                if not GOOGLE_FLOW_URL:
+                    update_operation_status("GOOGLE_FLOW_URL is empty; cannot perform Ctrl+Shift+F12 restart", is_error=True)
+                    return
+                fast_paste_url(hwnd, GOOGLE_FLOW_URL)
+                _sleep(2)
+                hwnd = ensure_window_ready_and_focused()
+                current_stage, current_location = wait_for_google_flow_stage(
+                    hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS, check_interval=0.5
+                )
+                print(f"🧭 [MAIN] Page state after forced URL navigation: {current_stage}")
+            else:
+                current_stage, current_location = detect_restart_page_stage(hwnd)
+            print(
+                f"🧭 [MAIN] Initial restart page state (prompt checked before New Project): "
+                f"{current_stage}"
+            )
+
+            if current_stage == "prompt":
+                print(
+                    "✅ [MAIN] whatdoyouwantocreate.png is already visible. "
+                    "Skipping URL navigation and New Project; starting the scene workflow from its entry point." 
+                )
+                update_operation_status("Existing prompt workspace detected; starting the scene workflow from its entry point")
+                page_ready = True
+
+            elif current_stage == "new_project":
+                print(
+                    "✅ [MAIN] new_project.png is already visible. "
+                    "Skipping URL navigation and clicking the existing New Project control."
+                )
+                clicked = wait_for_new_project_and_click(
+                    hwnd, timeout_seconds=20, initial_location=current_location
+                )
+                if not clicked:
+                    update_operation_status("Could not click the detected New Project button", is_error=True)
+                    return
+                page_ready = wait_for_prompt_workspace(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS)
+
+            elif current_stage == "collapsed_workspace":
+                print(
+                    "✅ [MAIN] An existing Google Flow workspace is detected with its side panel collapsed. "
+                    "Skipping URL navigation and expanding the existing workspace."
+                )
+                if not _click_google_flow_control(hwnd, current_location, "expandgfsidepanel.png"):
+                    update_operation_status("Could not expand the existing Google Flow prompt panel", is_error=True)
+                    return
+                page_ready = wait_for_prompt_workspace(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS)
+
+            else:
+                if force_url_restart:
+                    page_ready = False
+                else:
+                    print(
+                        "🌐 [MAIN] Neither the prompt workspace nor New Project is visible. "
+                        "Only now will GOOGLE_FLOW_URL be opened."
+                    )
+                    try:
+                        hud.print("Opening Google Flow because no known page is visible...", "navigating")
+                    except Exception:
+                        pass
+                    update_operation_status("No known Google Flow page detected; opening Google Flow URL")
+                    fast_paste_url(hwnd, GOOGLE_FLOW_URL)
+                    _sleep(2)
+                    hwnd = ensure_window_ready_and_focused()
+
+                    detected_stage, detected_location = wait_for_google_flow_stage(
+                        hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS, check_interval=0.5
+                    )
+                    print(f"🧭 [MAIN] Page state after navigation: {detected_stage}")
+
+                    if detected_stage == "prompt":
+                        print("✅ [MAIN] Prompt workspace detected after navigation; no New Project click needed.")
+                        page_ready = True
+
+                    elif detected_stage == "new_project":
+                        print("✅ [MAIN] New Project chooser detected after navigation; clicking it now.")
+                        clicked = wait_for_new_project_and_click(
+                            hwnd, timeout_seconds=20, initial_location=detected_location
+                        )
+                        if not clicked:
+                            update_operation_status("Could not click New Project after navigation", is_error=True)
+                            return
+                        page_ready = wait_for_prompt_workspace(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS)
+
+                    else:
+                        page_ready = False
+
+            if not page_ready:
+                error_message = (
+                    "Google Flow did not reach the whatdoyouwantocreate prompt workspace. "
+                    "The supervisor will restart and inspect the current page before deciding whether to navigate."
+                )
+                print(f"❌ [MAIN] {error_message}")
+                try:
+                    hud.print("The prompt workspace was not detected. Retrying page detection...", "error")
+                except Exception:
+                    pass
+                update_operation_status(error_message, is_error=True)
+                return
+
+            print(
+                "✅ [MAIN] Google Flow prompt workspace is ready; "
+                "processing missing scene entries first and the thumbnail last."
+            )
+            try:
+                hud.print("Everything is ready. Starting now...", "success")
+            except Exception:
+                pass
+
+            processed_job_this_attempt = False
+
+            def _prepare_for_next_prompt_if_needed():
+                nonlocal processed_job_this_attempt
+                if not processed_job_this_attempt:
+                    return
+                download_confirmation_handled = handle_webdownloadconfirmationmodal()
+                if not download_confirmation_handled:
+                    return
+
+                check_for_termination()
+                enforce_window_focus(hwnd)
+                print(
+                    "🔍 [NEXT-PROMPT] Download confirmation handled. "
+                    "Checking for generatinggf_image.png before the next prompt..."
+                )
+                generating_image_location = find_image(
+                    "generatinggf_image.png",
+                    confidence=0.7
+                )
+                if generating_image_location:
+                    print(
+                        "✅ [NEXT-PROMPT] generatinggf_image.png detected at "
+                        f"({generating_image_location.x}, {generating_image_location.y}); "
+                        "clicking its right edge."
+                    )
+                    if click_right_edge_of_image("generatinggf_image.png", confidence=0.7):
+                        _sleep(0.5)
+                        move_mouse_to_center_of_screen()
+                        update_operation_status(
+                            "Handled generatinggf_image.png after the previous download"
+                        )
+                    else:
+                        print(
+                            "⚠️ [NEXT-PROMPT] Could not click the right edge; "
+                            "no centre click will be attempted."
+                        )
+                else:
+                    print("ℹ️ [NEXT-PROMPT] generatinggf_image.png not present.")
+
+            # Walk the complete expected range, not just a contiguous suffix.
+            # A valid entry_5 is preserved even when entry_3 is missing.
+            for i in range(total_entries):
+                check_for_termination()
+                entry_name = f"entry_{i + 1}"
+                existing_image = _find_entry_image(images_folder, i + 1)
+                if existing_image:
+                    print(
+                        f"⏭️ [MAIN] {entry_name} already exists and is valid; "
+                        "skipping generation for this entry only."
+                    )
+                    continue
+
+                _prepare_for_next_prompt_if_needed()
+                entry = all_entries[i]
+                success = process_single_entry_gf(hwnd, i, entry, images_folder)
+                if success:
+                    processed_job_this_attempt = True
+                    _sleep(2)
+                    if _find_entry_image(images_folder, i + 1) is None:
+                        abort_operation(
+                            f"{entry_name} generation returned success but the file is missing"
+                        )
+                else:
+                    print(
+                        f"❌ [MAIN] {entry_name} failed — aborting the entire operation "
+                        "(the entry will not be skipped)."
+                    )
+                    try:
+                        hud.print(f"Stopping — {entry_name} did not finish.", "error")
+                    except Exception:
+                        pass
+                    update_operation_status(
+                        f"{entry_name} failed — stopping this attempt (never skip)",
+                        is_abort=True
+                    )
+                    abort_operation(f"{entry_name} failed — aborting operation")
+
+            # Final scene-image audit before the thumbnail is allowed to start.
+            _cleanup_project_image_folder(images_folder, total_entries)
+            missing_after_generation = [
+                number
+                for number in range(1, total_entries + 1)
+                if _find_entry_image(images_folder, number) is None
+            ]
+            if missing_after_generation:
+                abort_operation(
+                    "Scene image audit found missing entries: "
+                    + ", ".join(f"entry_{number}" for number in missing_after_generation)
+                )
+
+            print(
+                f"✅ [MAIN] All {total_entries} scene images are present. "
+                "The thumbnail phase may now begin."
+            )
+
+            # The thumbnail is deliberately generated LAST, and only when the
+            # canonical Thumbnail.png is absent or invalid.
+            if not _thumbnail_exists(images_folder):
+                if not thumbnail_prompt:
+                    print(
+                        "❌ [THUMBNAIL] All scene images are complete, but panel.json "
+                        "has no non-empty 'Thumbnail' prompt. Add the prompt before "
+                        "the thumbnail can be generated."
+                    )
+                    update_operation_status(
+                        "Thumbnail prompt is missing or empty; add text to the JSON Thumbnail field",
+                        is_error=True
+                    )
+                    return
+
+                _prepare_for_next_prompt_if_needed()
+                thumbnail_success = process_thumbnail_gf(
+                    hwnd, thumbnail_prompt, images_folder
+                )
+                if not thumbnail_success:
+                    abort_operation("YouTube thumbnail generation failed")
+                processed_job_this_attempt = True
+                _sleep(2)
+            else:
+                print(
+                    "⏭️ [THUMBNAIL] Thumbnail.png already exists and is valid; "
+                    "skipping thumbnail generation."
+                )
+
+            # Strict final folder cleanup and verification before transfer.
+            if not _cleanup_project_image_folder(images_folder, total_entries):
+                abort_operation("Could not validate the final project image folder")
+
+            missing_after_all = [
+                f"entry_{number}"
+                for number in range(1, total_entries + 1)
+                if _find_entry_image(images_folder, number) is None
+            ]
+            if not _thumbnail_exists(images_folder):
+                missing_after_all.append(THUMBNAIL_FILENAME)
+
+            if missing_after_all:
+                abort_operation(
+                    "Final image audit failed; missing: " + ", ".join(missing_after_all)
+                )
+
+            print(f"\n{'='*60}")
+            print(
+                f"🎉 [MAIN] All {total_entries} entry images and "
+                f"{THUMBNAIL_FILENAME} are generated and verified!"
+            )
+            print(f"{'='*60}")
+            try:
+                hud.print("All scene images and the thumbnail are ready.", "success")
+            except Exception:
+                pass
+
+            transferred = _transfer_completed_project_to_ready_script(
+                images_folder, total_entries
+            )
+            if transferred:
+                _set_currently_running(
+                    "generate_google_flow_images_successful",
+                    status="completed",
+                    operation_status=(
+                        f"✅ All {total_entries} entry images plus {THUMBNAIL_FILENAME} "
+                        "verified and transferred to ready_script.json"
+                    )
+                )
+                print("🏁 [GF] Completed project appended to ready_script.json")
+            else:
+                print(
+                    "⚠️ [GF] Images are present, but project transfer did not complete."
+                )
+
+        except (_WorkflowRestart, _ManualStop):
+            set_image_scroll_lock(False)
+            raise
+        except KeyboardInterrupt as exc:
+            raise _ManualStop(str(exc))
+        except SystemExit as exc:
+            raise _WorkflowRestart(str(exc))
+        except Exception as exc:
+            print(f"❌ [MAIN] Error: {exc}")
+            traceback.print_exc()
+            error_message = f"Unexpected error in Google Flow operation: {exc}"
+            update_operation_status(error_message, is_error=True)
+            try:
+                hud.print("Something went wrong. Restarting the workflow...", "warning")
+            except Exception:
+                pass
+            raise _WorkflowRestart(error_message) from exc
+
+    # ------------------------------------------------------------------
+    # AUTHOR_PATH image_generation engine
+    # ------------------------------------------------------------------
+    def _save_author_configuration(data):
+        author_path = author_state.get("path")
+        if not author_path:
+            raise ValueError("AUTHOR_PATH is not configured")
+        directory = os.path.dirname(author_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        temp_path = author_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=4, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, author_path)
+
+    def _move_reference_image_to_processed(source_path, processed_folder):
+        """Move a successfully replicated original into the processed subfolder."""
+        import shutil
+
+        if not os.path.isfile(source_path):
+            raise FileNotFoundError(f"Original reference image disappeared before processing move: {source_path}")
+
+        os.makedirs(processed_folder, exist_ok=True)
+        source_filename = os.path.basename(source_path)
+        stem, extension = os.path.splitext(source_filename)
+        destination_path = os.path.join(processed_folder, source_filename)
+        suffix = 2
+        while os.path.exists(destination_path):
+            destination_path = os.path.join(processed_folder, f"{stem}_{suffix}{extension}")
+            suffix += 1
+
+        shutil.move(source_path, destination_path)
+        if not os.path.isfile(destination_path) or os.path.getsize(destination_path) <= 0:
+            raise IOError(f"Could not verify original image in processed folder: {destination_path}")
+
+        print(f"📦 [IMAGE-GENERATION] Original moved to processed: {destination_path}")
+        return os.path.basename(destination_path)
+
+    def _set_author_final_status(status_value, message):
+        data, record, dynamic, _, _ = _load_author_configuration()
+        normalized_status = str(status_value or "pending").strip().lower()
+        if normalized_status == "aborted":
+            normalized_status = "error"
+        record["status"] = normalized_status
+        record["operation_status"] = message
+        if isinstance(record.get("dynamic_values"), dict):
+            record["dynamic_values"]["operation_status"] = message
+            if "status" in record["dynamic_values"]:
+                record["dynamic_values"]["status"] = normalized_status
+        _save_author_configuration(data)
+        print(f"📌 [AUTHOR_PATH] status={status_value}: {message}")
+
+    # --------------------------------------------------------------
+    # Persistent Nano Banana aspect-ratio rotation for image_generation
+    # --------------------------------------------------------------
+    NANOBANANA_RATIO_CYCLE = (
+        {"ratio": "9:16", "asset": "nanobanana_9ratio16.png"},
+        {"ratio": "3:4", "asset": "nanobanana_3ratio4.png"},
+        {"ratio": "1:1", "asset": "nanobanana_1ratio1.png"},
+    )
+    NANOBANANA_BATCH_SIZE = 20
+    NANOBANANA_STATE_FILENAME = "nanobanana_ratio_state.json"
+    IMAGE_FILE_EXTENSIONS = {
+        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"
+    }
+
+    def _count_generated_image_files(generated_folder):
+        """Count non-empty image files in generated/, ignoring unrelated files."""
+        if not os.path.isdir(generated_folder):
+            return 0
+        count = 0
+        for filename in os.listdir(generated_folder):
+            full_path = os.path.join(generated_folder, filename)
+            if (
+                os.path.isfile(full_path)
+                and os.path.splitext(filename)[1].lower() in IMAGE_FILE_EXTENSIONS
+            ):
+                try:
+                    if os.path.getsize(full_path) > 0:
+                        count += 1
+                except OSError:
+                    continue
+        return count
+
+    def _save_nanobanana_ratio_state(state_path, state_data):
+        """Atomically persist ratio selection and per-author 20-image counters."""
+        state_dir = os.path.dirname(state_path)
+        if state_dir:
+            os.makedirs(state_dir, exist_ok=True)
+        temp_path = state_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(state_data, handle, indent=4, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, state_path)
+
+    def _load_nanobanana_ratio_state(jpgs_root, author_value, generated_folder):
+        """Load persistent ratio-cycle state; initialize from generated-file count once."""
+        state_path = os.path.join(str(jpgs_root), NANOBANANA_STATE_FILENAME)
+        os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
+
+        if os.path.isfile(state_path):
+            try:
+                with open(state_path, "r", encoding="utf-8") as handle:
+                    state_data = json.load(handle)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not read persistent Nano Banana ratio state {state_path}: {exc}"
+                ) from exc
+            if not isinstance(state_data, dict):
+                raise ValueError(
+                    f"Nano Banana ratio state must be a JSON object: {state_path}"
+                )
+        else:
+            state_data = {"version": 1, "authors": {}}
+
+        authors = state_data.setdefault("authors", {})
+        if not isinstance(authors, dict):
+            raise ValueError(
+                f"The 'authors' property in {state_path} must be a JSON object"
+            )
+
+        author_key = str(author_value).strip()
+        author_state = authors.get(author_key)
+        if author_state is None:
+            # Existing non-empty generated files count toward the cycle when the
+            # state file is first introduced for this author. Thereafter the JSON
+            # tracker is authoritative and survives moving originals to processed/.
+            existing_generated = _count_generated_image_files(generated_folder)
+            ratio_index = (existing_generated // NANOBANANA_BATCH_SIZE) % len(
+                NANOBANANA_RATIO_CYCLE
+            )
+            batch_count = existing_generated % NANOBANANA_BATCH_SIZE
+            last_ratio = None
+            if existing_generated:
+                last_ratio_index = (
+                    (existing_generated - 1) // NANOBANANA_BATCH_SIZE
+                ) % len(NANOBANANA_RATIO_CYCLE)
+                last_ratio = NANOBANANA_RATIO_CYCLE[last_ratio_index]["ratio"]
+            author_state = {
+                "ratio_index": ratio_index,
+                "current_ratio": NANOBANANA_RATIO_CYCLE[ratio_index]["ratio"],
+                "current_ratio_asset": NANOBANANA_RATIO_CYCLE[ratio_index]["asset"],
+                "images_in_current_ratio_batch": batch_count,
+                "total_generated": existing_generated,
+                "last_ratio_used": last_ratio,
+                "last_source_filename": None,
+                "last_generated_filename": None,
+                "last_configured_ratio": None,
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            authors[author_key] = author_state
+            _save_nanobanana_ratio_state(state_path, state_data)
+            print(
+                "🧮 [NANOBANANA] Initialized persistent ratio state from "
+                f"{existing_generated} existing generated image(s)."
+            )
+
+        if not isinstance(author_state, dict):
+            raise ValueError(
+                f"Nano Banana state for author '{author_key}' must be a JSON object"
+            )
+
+        try:
+            ratio_index = int(author_state.get("ratio_index", 0))
+            batch_count = int(author_state.get("images_in_current_ratio_batch", 0))
+            total_generated = int(author_state.get("total_generated", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid numeric ratio counters for author '{author_key}' in {state_path}"
+            ) from exc
+
+        if not 0 <= ratio_index < len(NANOBANANA_RATIO_CYCLE):
+            raise ValueError(
+                f"Invalid Nano Banana ratio_index={ratio_index} for author '{author_key}'"
+            )
+        if not 0 <= batch_count < NANOBANANA_BATCH_SIZE:
+            raise ValueError(
+                f"Invalid images_in_current_ratio_batch={batch_count}; expected 0-19"
+            )
+        if total_generated < 0:
+            raise ValueError("Nano Banana total_generated cannot be negative")
+
+        ratio_config = NANOBANANA_RATIO_CYCLE[ratio_index]
+        author_state["ratio_index"] = ratio_index
+        author_state["current_ratio"] = ratio_config["ratio"]
+        author_state["current_ratio_asset"] = ratio_config["asset"]
+        author_state["images_in_current_ratio_batch"] = batch_count
+        author_state["total_generated"] = total_generated
+        _save_nanobanana_ratio_state(state_path, state_data)
+        print(f"🗃️ [NANOBANANA] Persistent ratio state: {state_path}")
+        print(
+            f"📐 [NANOBANANA] Current ratio: {ratio_config['ratio']} "
+            f"({batch_count}/{NANOBANANA_BATCH_SIZE} images in this ratio block); "
+            f"total recorded: {total_generated}."
+        )
+        return state_path, state_data, author_state
+
+    def _configure_nanobanana_ratio(
+        hwnd, state_path, state_data, author_state, reason="initial setup"
+    ):
+        """Open Nano Banana settings and select the persisted aspect ratio."""
+        check_for_termination()
+        _release_image_render_anchor()
+        enforce_window_focus(hwnd)
+
+        ratio_index = int(author_state["ratio_index"])
+        ratio_config = NANOBANANA_RATIO_CYCLE[ratio_index]
+        ratio_asset = ratio_config["asset"]
+        ratio_label = ratio_config["ratio"]
+
+        print(
+            f"\n⚙️ [NANOBANANA] Configuring aspect ratio {ratio_label} "
+            f"before image generation ({reason})."
+        )
+        update_operation_status(
+            f"Configuring Nano Banana aspect ratio {ratio_label} before image generation"
+        )
+
+        config_location = wait_for_image(
+            "nanobananaconfig.png",
+            timeout_seconds=STAGE_TIMEOUT_SECONDS,
+            confidence=0.8,
+        )
+        if not config_location:
+            abort_operation(
+                "nanobananaconfig.png was not found; refusing to generate images "
+                "without confirming the required aspect ratio"
+            )
+        if not _click_google_flow_control(
+            hwnd, config_location, "nanobananaconfig.png"
+        ):
+            abort_operation("Could not open Nano Banana configuration")
+
+        ratio_location = wait_for_image(
+            ratio_asset,
+            timeout_seconds=STAGE_TIMEOUT_SECONDS,
+            confidence=0.8,
+        )
+        if not ratio_location:
+            abort_operation(
+                f"{ratio_asset} was not visible after opening Nano Banana configuration"
+            )
+        if not _click_google_flow_control(hwnd, ratio_location, ratio_asset):
+            abort_operation(f"Could not select Nano Banana ratio {ratio_label}")
+
+        # Verify the prompt input is reachable only AFTER the ratio is selected.
+        input_location = find_whatdoyouwantocreate_with_fallbacks(
+            hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS
+        )
+        if not input_location:
+            abort_operation(
+                f"Prompt input did not become available after selecting Nano Banana {ratio_label}"
+            )
+
+        author_state["last_configured_ratio"] = ratio_label
+        author_state["last_configured_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        author_state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        _save_nanobanana_ratio_state(state_path, state_data)
+        print(
+            f"✅ [NANOBANANA] Ratio {ratio_label} selected and prompt input confirmed."
+        )
+        return True
+
+    def _record_image_and_advance_nanobanana_ratio(
+        state_path, state_data, author_state, source_filename, output_path
+    ):
+        """Count a verified download; rotate ratio after each complete 20-image block."""
+        current_index = int(author_state["ratio_index"])
+        current_config = NANOBANANA_RATIO_CYCLE[current_index]
+        author_state["total_generated"] = int(author_state.get("total_generated", 0)) + 1
+        author_state["images_in_current_ratio_batch"] = (
+            int(author_state.get("images_in_current_ratio_batch", 0)) + 1
+        )
+        author_state["last_ratio_used"] = current_config["ratio"]
+        author_state["last_source_filename"] = source_filename
+        author_state["last_generated_filename"] = os.path.basename(output_path)
+        author_state["last_generated_path"] = output_path
+        author_state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        switched = False
+        if author_state["images_in_current_ratio_batch"] >= NANOBANANA_BATCH_SIZE:
+            next_index = (current_index + 1) % len(NANOBANANA_RATIO_CYCLE)
+            next_config = NANOBANANA_RATIO_CYCLE[next_index]
+            author_state["ratio_index"] = next_index
+            author_state["current_ratio"] = next_config["ratio"]
+            author_state["current_ratio_asset"] = next_config["asset"]
+            author_state["images_in_current_ratio_batch"] = 0
+            author_state["last_completed_ratio_block"] = current_config["ratio"]
+            author_state["last_completed_ratio_block_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            )
+            switched = True
+            print(
+                f"🏁 [NANOBANANA] Completed all {NANOBANANA_BATCH_SIZE} images "
+                f"at {current_config['ratio']}; next ratio is {next_config['ratio']}."
+            )
+
+        _save_nanobanana_ratio_state(state_path, state_data)
+        print(
+            f"🧮 [NANOBANANA] Recorded verified image #{author_state['total_generated']}; "
+            f"last ratio used: {author_state['last_ratio_used']}; "
+            f"current ratio: {author_state['current_ratio']}; "
+            f"block progress: {author_state['images_in_current_ratio_batch']}/20."
+        )
+        return switched
+
+    def _copy_file_to_windows_clipboard(file_path):
+        """Place a single file on the Windows clipboard as CF_HDROP for Ctrl+V upload."""
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"Reference JPG does not exist: {file_path}")
+        absolute_path = os.path.abspath(file_path)
+        drop_header = struct.pack("IiiII", 20, 0, 0, 0, 1)
+        file_list = (absolute_path + "\0\0").encode("utf-16le")
+        clipboard_payload = drop_header + file_list
+
+        last_error = None
+        for attempt in range(1, 4):
+            opened = False
+            try:
+                win32clipboard.OpenClipboard()
+                opened = True
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_HDROP, clipboard_payload)
+                print(f"📋 [CLIPBOARD] Copied reference file: {absolute_path}")
+                return True
+            except Exception as exc:
+                last_error = exc
+                print(f"⚠️ [CLIPBOARD] File clipboard attempt {attempt}/3 failed: {exc}")
+                _sleep(0.25)
+            finally:
+                if opened:
+                    try:
+                        win32clipboard.CloseClipboard()
+                    except Exception:
+                        pass
+
+        # Fallback to the Windows PowerShell file clipboard provider.
+        try:
+            escaped_path = absolute_path.replace("'", "''")
+            command = f"Set-Clipboard -Path '{escaped_path}'"
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            if completed.returncode == 0:
+                print(f"📋 [CLIPBOARD] Copied reference file using PowerShell: {absolute_path}")
+                return True
+            last_error = RuntimeError(completed.stderr.strip() or "PowerShell Set-Clipboard failed")
+        except Exception as exc:
+            last_error = exc
+        raise RuntimeError(f"Could not copy reference JPG to clipboard: {last_error}")
+
+    def _release_image_render_anchor():
+        nonlocal image_render_lock_active, image_render_lock_position
+        image_render_lock_active = False
+        image_render_lock_position = None
+        set_image_scroll_lock(False)
+
+    def _ensure_image_generation_workspace(hwnd):
+        """Use the same prompt-first page recovery strategy as the legacy engine."""
+        check_for_termination()
+        enforce_window_focus(hwnd)
+        stage, location = detect_restart_page_stage(hwnd)
+        print(f"🧭 [IMAGE-GENERATION] Current Google Flow page state: {stage}")
+
+        if stage == "prompt":
+            return True
+        if stage == "new_project":
+            if not wait_for_new_project_and_click(
+                hwnd, timeout_seconds=20, initial_location=location
+            ):
+                abort_operation("Could not open New Project for image_generation")
+            if not wait_for_prompt_workspace(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS):
+                abort_operation("Google Flow prompt workspace did not appear")
+            return True
+        if stage == "collapsed_workspace":
+            if not _click_google_flow_control(hwnd, location, "expandgfsidepanel.png"):
+                abort_operation("Could not expand the Google Flow prompt panel")
+            if not wait_for_prompt_workspace(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS):
+                abort_operation("Google Flow prompt workspace did not appear after expanding")
+            return True
+
+        if not GOOGLE_FLOW_URL:
+            abort_operation("GOOGLE_FLOW_URL is empty; cannot open Google Flow")
+        fast_paste_url(hwnd, GOOGLE_FLOW_URL)
+        _sleep(2)
+        hwnd = ensure_window_ready_and_focused()
+        detected_stage, detected_location = wait_for_google_flow_stage(
+            hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS, check_interval=0.5
+        )
+        if detected_stage == "prompt":
+            return True
+        if detected_stage == "new_project":
+            if not wait_for_new_project_and_click(
+                hwnd, timeout_seconds=20, initial_location=detected_location
+            ):
+                abort_operation("Could not click New Project after opening Google Flow")
+            if not wait_for_prompt_workspace(hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS):
+                abort_operation("Prompt workspace did not appear after New Project")
+            return True
+        abort_operation("Google Flow did not reach the prompt workspace")
+        return False
+
+    def _paste_reference_image_and_wait_for_upload(hwnd, reference_path, job_name):
+        """Paste one JPG, require the upload progress indicator, and wait for it to finish."""
+        check_for_termination()
+        enforce_window_focus(hwnd)
+        input_location = find_whatdoyouwantocreate_with_fallbacks(
+            hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS
+        )
+        if not input_location:
+            abort_operation(f"Could not find whatdoyouwantocreate input for {job_name}")
+
+        pyautogui.moveTo(input_location.x, input_location.y, duration=0.1)
+        pyautogui.click()
+        _sleep(0.25)
+        _copy_file_to_windows_clipboard(reference_path)
+        pyautogui.hotkey("ctrl", "v")
+        _sleep(0.4)
+
+        try:
+            hud.print(f"File uploading... {os.path.basename(reference_path)}", "uploading")
+        except Exception:
+            pass
+        update_operation_status(
+            f"File uploading: {os.path.basename(reference_path)}; waiting for imagerenderingprogress.png"
+        )
+
+        upload_complete = wait_for_imagerenderingprogress_and_jump_to_search(
+            hwnd,
+            job_name,
+            max_wait_seconds=STAGE_TIMEOUT_SECONDS,
+            check_interval=0.35,
+            phase_label="File uploading",
+        )
+        if not upload_complete:
+            abort_operation(
+                f"Upload was not confirmed: imagerenderingprogress.png did not appear for {job_name}"
+            )
+
+        # The upload progress stage is complete. Release its cursor anchor so
+        # the input can be located again for the text prompt.
+        _release_image_render_anchor()
+        return True
+
+    def _paste_image_prompt_and_send(hwnd, prompt_text, job_name):
+        """Paste the configured dynamic_values.prompt and explicitly click Send."""
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
+            abort_operation("dynamic_values.prompt is missing or empty")
+
+        input_location = find_whatdoyouwantocreate_with_fallbacks(
+            hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS
+        )
+        if not input_location:
+            abort_operation(f"Could not find whatdoyouwantocreate after uploading {job_name}")
+
+        pyautogui.moveTo(input_location.x, input_location.y, duration=0.1)
+        pyautogui.click()
+        _sleep(0.2)
+        pyperclip.copy(prompt_text)
+        pyautogui.hotkey("ctrl", "v")
+        _sleep(0.35)
+
+        send_location = wait_for_image(
+            "sendgf.png", timeout_seconds=STAGE_TIMEOUT_SECONDS, confidence=0.8
+        )
+        if not send_location:
+            abort_operation(f"sendgf.png was not detected after pasting the prompt for {job_name}")
+
+        enforce_window_focus(hwnd)
+        pyautogui.moveTo(send_location.x, send_location.y, duration=0.1)
+        pyautogui.click()
+        _sleep(0.4)
+        update_operation_status(f"Prompt sent for {job_name}; confirming image rendering")
+        return True
+
+    def _validate_and_commit_generated_image(staged_path, generated_folder):
+        """Quickly validate a downloaded image, then save its original bytes unchanged.
+
+        This stage deliberately preserves the downloaded pixel data and all embedded
+        provenance/metadata. It does not strip EXIF, XMP, IPTC, C2PA, SynthID, or other
+        origin signals. The check is limited to file integrity, dimensions, format,
+        and a SHA-256 comparison before/after the final move.
+        """
+        import hashlib
+
+        def _hud(message, state="processing"):
+            try:
+                hud.print(message, state)
+            except Exception:
+                pass
+
+        if not os.path.isfile(staged_path):
+            abort_operation(f"Downloaded image is missing from staging: {staged_path}")
+        file_size = os.path.getsize(staged_path)
+        if file_size <= 0:
+            abort_operation(f"Downloaded image is empty: {staged_path}")
+
+        extension = os.path.splitext(staged_path)[1].lower()
+        supported = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+        if extension not in supported:
+            abort_operation(f"Downloaded file has an unsupported image extension: {extension or '(none)'}")
+
+        _hud("Checking downloaded image integrity...", "processing")
+        update_operation_status(f"Validating downloaded image: {os.path.basename(staged_path)}")
+        image_format = extension.lstrip(".").upper()
+        width = None
+        height = None
+        metadata_summary = {
+            "exif_present": None,
+            "icc_profile_present": None,
+            "xmp_present": None,
+            "iptc_present": None,
+            "provenance_modified": False,
+        }
+
+        try:
+            from PIL import Image
+            with Image.open(staged_path) as probe:
+                image_format = str(probe.format or image_format).upper()
+                width, height = probe.size
+                info_keys = {str(key).lower() for key in probe.info.keys()}
+                try:
+                    exif_present = len(probe.getexif()) > 0
+                except Exception:
+                    exif_present = "exif" in info_keys
+                metadata_summary.update({
+                    "exif_present": bool(exif_present),
+                    "icc_profile_present": bool(probe.info.get("icc_profile")) or "icc_profile" in info_keys,
+                    "xmp_present": any("xmp" in key for key in info_keys),
+                    "iptc_present": any("iptc" in key for key in info_keys),
+                    "provenance_modified": False,
+                })
+                probe.verify()
+            # Re-open and decode once to ensure the actual pixel stream is readable.
+            with Image.open(staged_path) as decoded:
+                decoded.load()
+                if width is None or height is None:
+                    width, height = decoded.size
+                if width <= 0 or height <= 0:
+                    abort_operation(f"Downloaded image has invalid dimensions: {staged_path}")
+        except ImportError:
+            # Pillow is optional for this validation stage. Use fast file-signature
+            # checks as a fallback while preserving the original file unchanged.
+            with open(staged_path, "rb") as handle:
+                header = handle.read(16)
+            signature_ok = (
+                (extension in (".jpg", ".jpeg") and header.startswith(b"\xff\xd8\xff"))
+                or (extension == ".png" and header.startswith(b"\x89PNG\r\n\x1a\n"))
+                or (extension == ".webp" and header[:4] == b"RIFF" and header[8:12] == b"WEBP")
+                or (extension == ".gif" and header[:6] in (b"GIF87a", b"GIF89a"))
+                or (extension == ".bmp" and header[:2] == b"BM")
+                or (extension in (".tif", ".tiff") and header[:4] in (b"II*\x00", b"MM\x00*"))
+            )
+            if not signature_ok:
+                abort_operation(
+                    f"Image signature could not be verified (Pillow unavailable): {staged_path}"
+                )
+            _hud("Image signature verified; Pillow is unavailable, preserving original file.", "warning")
+        except (_WorkflowRestart, _ManualStop):
+            raise
+        except Exception as exc:
+            _hud("Image validation failed.", "error")
+            abort_operation(f"Downloaded image failed integrity validation: {exc}")
+
+        def _sha256(path):
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+
+        _hud("Image is valid; preserving original pixels and provenance data...", "processing")
+        before_hash = _sha256(staged_path)
+        before_size = os.path.getsize(staged_path)
+        os.makedirs(generated_folder, exist_ok=True)
+
+        original_name = os.path.basename(staged_path)
+        stem, ext = os.path.splitext(original_name)
+        final_name = original_name
+        final_path = os.path.join(generated_folder, final_name)
+        suffix = 2
+        while os.path.exists(final_path):
+            final_name = f"{stem}_{suffix}{ext}"
+            final_path = os.path.join(generated_folder, final_name)
+            suffix += 1
+
+        # Move the already-validated file, rather than re-encoding it. This keeps
+        # its bytes, embedded metadata, and any provenance signals unchanged.
+        try:
+            os.replace(staged_path, final_path)
+        except OSError:
+            import shutil
+            shutil.copy2(staged_path, final_path)
+            if os.path.getsize(final_path) != before_size or _sha256(final_path) != before_hash:
+                try:
+                    os.remove(final_path)
+                except OSError:
+                    pass
+                raise IOError("Final image copy did not match the validated download")
+            os.remove(staged_path)
+
+        after_size = os.path.getsize(final_path)
+        after_hash = _sha256(final_path)
+        if after_size != before_size or after_hash != before_hash:
+            try:
+                os.remove(final_path)
+            except OSError:
+                pass
+            abort_operation("Final saved image differs from the validated download; refusing to continue")
+
+        audit_record = {
+            "filename": final_name,
+            "format": image_format,
+            "width": width,
+            "height": height,
+            "size_bytes": after_size,
+            "sha256": after_hash,
+            "metadata_summary": metadata_summary,
+            "metadata_policy": "preserved_unchanged",
+            "validated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        audit_path = os.path.join(generated_folder, "image_validation_audit.json")
+        try:
+            if os.path.isfile(audit_path):
+                with open(audit_path, "r", encoding="utf-8") as handle:
+                    audit_data = json.load(handle)
+                if not isinstance(audit_data, dict):
+                    audit_data = {"images": []}
+            else:
+                audit_data = {"images": []}
+            images_log = audit_data.setdefault("images", [])
+            if not isinstance(images_log, list):
+                images_log = []
+                audit_data["images"] = images_log
+            images_log.append(audit_record)
+            audit_temp = audit_path + ".tmp"
+            with open(audit_temp, "w", encoding="utf-8") as handle:
+                json.dump(audit_data, handle, indent=2, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(audit_temp, audit_path)
+        except Exception as audit_error:
+            print(f"⚠️ [IMAGE-CLEANUP] Could not save validation audit (image remains valid): {audit_error}")
+
+        dimensions_label = f"{width}x{height}" if width and height else "dimensions not read"
+        _hud(
+            f"Image validated: {image_format} {dimensions_label}. Original metadata preserved.",
+            "success",
+        )
+        update_operation_status(
+            f"Image validated and saved unchanged: {final_name} ({image_format}, {dimensions_label})"
+        )
+        print(
+            f"✅ [IMAGE-CLEANUP] Validated and saved {final_name}; {dimensions_label}; "
+            f"{after_size} bytes; SHA-256 unchanged; embedded metadata/provenance preserved."
+        )
+        return final_path
+
+    def _process_one_reference_image(hwnd, source_path, prompt_text, generated_folder, processed_folder):
+        source_filename = os.path.basename(source_path)
+        source_stem, source_extension = os.path.splitext(source_filename)
+        safe_stem = re.sub(r'[<>:"/\\|?*]+', "_", source_stem).strip(" ._") or "reference"
+        safe_extension = re.sub(r"[^a-z0-9]+", "", source_extension.lower().lstrip(".")) or "image"
+        # Include the source extension so different source formats cannot collide.
+        job_name = f"{safe_stem}_{safe_extension}_generated"
+
+        print("\n" + "=" * 72)
+        print(f"🖼️ [IMAGE-GENERATION] Reference: {source_filename}")
+        print(f"📁 [IMAGE-GENERATION] Generated folder: {generated_folder}")
+        print(f"📁 [IMAGE-GENERATION] Processed originals folder: {processed_folder}")
+        print("=" * 72)
+
+        # Stage 1: paste the single reference image and wait for upload progress.
+        _release_image_render_anchor()
+        _paste_reference_image_and_wait_for_upload(hwnd, source_path, job_name)
+
+        # Stage 2: return to the prompt field, paste the configured text, and Send.
+        _paste_image_prompt_and_send(hwnd, prompt_text, job_name)
+
+        # Stage 3: require a second rendering indicator for the actual replica.
+        generated = wait_for_imagerenderingprogress_and_jump_to_search(
+            hwnd,
+            job_name,
+            max_wait_seconds=STAGE_TIMEOUT_SECONDS,
+            check_interval=0.35,
+            phase_label="Image replica generation",
+        )
+        if not generated:
+            abort_operation(
+                f"Replica generation was not confirmed: imagerenderingprogress.png did not appear for {job_name}"
+            )
+
+        # Stage 4: download into a staging directory. Nothing enters generated/
+        # until the file has passed a quick integrity check.
+        staging_folder = os.path.join(generated_folder, "_download_staging")
+        os.makedirs(staging_folder, exist_ok=True)
+        # Discard only stale temporary results for this exact job, left by an
+        # interrupted attempt before final validation/commit.
+        for stale_name in os.listdir(staging_folder):
+            if stale_name.casefold().startswith(job_name.casefold() + "."):
+                stale_path = os.path.join(staging_folder, stale_name)
+                try:
+                    if os.path.isfile(stale_path):
+                        os.remove(stale_path)
+                except OSError as cleanup_error:
+                    print(f"⚠️ [IMAGE-CLEANUP] Could not remove stale staging file {stale_name}: {cleanup_error}")
+
+        try:
+            hud.print("Downloading image to temporary staging...", "downloading")
+        except Exception:
+            pass
+        update_operation_status(f"Downloading {source_filename} to temporary staging")
+        downloaded = download_google_flow_image(
+            hwnd, job_name, staging_folder, force_png=False
+        )
+        if not downloaded:
+            abort_operation(f"Google Flow download failed for {source_filename}")
+
+        staged_candidates = [
+            os.path.join(staging_folder, name)
+            for name in os.listdir(staging_folder)
+            if name.casefold().startswith(job_name.casefold() + ".")
+        ]
+        staged_candidates = [
+            path for path in staged_candidates
+            if os.path.isfile(path) and os.path.getsize(path) > 0
+        ]
+        if not staged_candidates:
+            abort_operation(
+                f"Download returned success but no staged image was found for {source_filename}"
+            )
+        staged_path = max(staged_candidates, key=os.path.getmtime)
+
+        # Stage 5: validate the actual file, show progress in HUD, and commit it
+        # byte-for-byte. This is not metadata removal or AI-label evasion.
+        try:
+            hud.print("Validating image before saving...", "processing")
+        except Exception:
+            pass
+        output_path = _validate_and_commit_generated_image(staged_path, generated_folder)
+        output_filename = os.path.basename(output_path)
+
+        # Move the original only after the final generated file has been verified.
+        processed_filename = _move_reference_image_to_processed(source_path, processed_folder)
+        print(
+            f"✅ [IMAGE-GENERATION] Completed {source_filename}; generated {output_filename}; "
+            f"original moved to processed/{processed_filename}."
+        )
+        try:
+            hud.print(f"Saved and verified: {output_filename}", "success")
+        except Exception:
+            pass
+        _release_image_render_anchor()
+        return output_path
+
+    def _run_image_generation_batch(force_url_restart=False):
+        """Process every supported image file currently in the author's source-folder root."""
+        data, record, dynamic, _, _ = _load_author_configuration()
+        engine_value = str(dynamic.get("engine") or record.get("engine") or "").strip()
+        if engine_value.lower() != "image_generation":
+            print(f"ℹ️ [IMAGE-GENERATION] Engine changed to '{engine_value}'; stopping this worker.")
+            return "engine_changed"
+
+        current_status = record.get("status", "pending")
+        if dynamic.get("status"):
+            current_status = dynamic.get("status")
+        if str(current_status).strip().lower() != "pending":
+            print(f"ℹ️ [IMAGE-GENERATION] Status is '{current_status}', not pending; skipping.")
+            return "not_pending"
+
+        # The folder author is dynamic_values.author (e.g. silverrose).
+        # Top-level author is only a fallback for older configuration records.
+        author_value = str(dynamic.get("author") or record.get("author") or "").strip()
+        if not author_value:
+            _set_author_final_status("error", "dynamic_values.author is missing or empty")
+            return "failed"
+
+        reference_flag = str(dynamic.get("reference_image", "")).strip().lower()
+        if reference_flag not in ("yes", "true", "1"):
+            _set_author_final_status(
+                "error",
+                "dynamic_values.reference_image must be 'yes' for this workflow",
+            )
+            return "failed"
+
+        prompt_text = dynamic.get("prompt") or record.get("prompt") or ""
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
+            _set_author_final_status("error", "dynamic_values.prompt is missing or empty")
+            return "failed"
+
+        jpgs_root = globals().get("JPGSFOLDER")
+        if not jpgs_root:
+            _set_author_final_status("error", "Global JPGSFOLDER is not defined")
+            return "failed"
+
+        source_folder = os.path.join(str(jpgs_root), author_value)
+        generated_folder = os.path.join(source_folder, "generated")
+        processed_folder = os.path.join(source_folder, "processed")
+
+        if not os.path.isdir(source_folder):
+            _set_author_final_status("error", f"Reference image folder does not exist: {source_folder}")
+            return "failed"
+
+        os.makedirs(generated_folder, exist_ok=True)
+        os.makedirs(processed_folder, exist_ok=True)
+
+        # Only files directly inside the author folder are new work. Files in
+        # generated/ and processed/ are deliberately excluded because they are
+        # in subfolders, not the source-folder root.
+        supported_image_extensions = {
+            ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"
+        }
+        image_files = sorted(
+            [
+                name for name in os.listdir(source_folder)
+                if os.path.isfile(os.path.join(source_folder, name))
+                and os.path.splitext(name)[1].lower() in supported_image_extensions
+            ],
+            key=str.casefold,
+        )
+
+        print(f"📁 [IMAGE-GENERATION] Author value: {author_value}")
+        print(f"📁 [IMAGE-GENERATION] Source folder: {source_folder}")
+        print(f"📁 [IMAGE-GENERATION] Generated replicas: {generated_folder}")
+        print(f"📁 [IMAGE-GENERATION] Processed originals: {processed_folder}")
+        print(f"📊 [IMAGE-GENERATION] New image files found: {len(image_files)}")
+
+        if not image_files:
+            message = f"No new supported image files remain in {source_folder}; all source-root images have been processed"
+            _set_author_final_status("completed", message)
+            return "completed"
+
+        if not os.path.isdir(GUI_IMAGES):
+            abort_operation(f"GUI_IMAGES path not found: {GUI_IMAGES}")
+
+        _set_author_final_status(
+            "pending",
+            f"Starting image_generation: {len(image_files)} image file(s) found in the author folder",
+        )
+
+        # Load the per-author persistent ratio tracker before opening the prompt.
+        # The selected ratio is always re-applied on a fresh/restarted workflow,
+        # so the browser UI cannot silently drift away from the recorded state.
+        ratio_state_path, ratio_state_data, ratio_author_state = (
+            _load_nanobanana_ratio_state(jpgs_root, author_value, generated_folder)
+        )
+
+        hwnd = ensure_window_ready_and_focused()
+        if force_url_restart:
+            print("🌐 [IMAGE-GENERATION] Ctrl+Shift+F12 requested a hard restart; opening GOOGLE_FLOW_URL before checking the page.")
+            try:
+                hud.print("Restarting image generation from Google Flow URL...", "navigating")
+            except Exception:
+                pass
+            if not GOOGLE_FLOW_URL:
+                abort_operation("GOOGLE_FLOW_URL is empty; cannot perform Ctrl+Shift+F12 restart")
+            fast_paste_url(hwnd, GOOGLE_FLOW_URL)
+            _sleep(2)
+            hwnd = ensure_window_ready_and_focused()
+            _ensure_image_generation_workspace(hwnd)
+        else:
+            _ensure_image_generation_workspace(hwnd)
+
+        # Required initial step: configure Nano Banana before interacting with
+        # whatdoyouwantocreate or uploading the first reference image.
+        _configure_nanobanana_ratio(
+            hwnd,
+            ratio_state_path,
+            ratio_state_data,
+            ratio_author_state,
+            reason="batch start / resume",
+        )
+        try:
+            hud.print(f"Starting {len(image_files)} reference image(s)...", "success")
+        except Exception:
+            pass
+
+        processed_this_run = 0
+        for index, filename in enumerate(image_files, start=1):
+            check_for_termination()
+            source_path = os.path.join(source_folder, filename)
+            if not os.path.isfile(source_path):
+                print(f"⏭️ [IMAGE-GENERATION] Source file is no longer present; skipping: {filename}")
+                continue
+
+            update_operation_status(
+                f"Processing image {index}/{len(image_files)}: {filename}"
+            )
+            generated_output_path = _process_one_reference_image(
+                hwnd,
+                source_path,
+                prompt_text,
+                generated_folder,
+                processed_folder,
+            )
+            processed_this_run += 1
+
+            # Handle any browser download confirmation after the output has been
+            # verified and the source has been moved to processed/.
+            try:
+                handle_webdownloadconfirmationmodal()
+            except Exception as modal_error:
+                print(f"⚠️ [IMAGE-GENERATION] Modal check after download failed safely: {modal_error}")
+
+            # A file counts only after _process_one_reference_image has verified
+            # the downloaded output and moved the original into processed/.
+            ratio_changed = _record_image_and_advance_nanobanana_ratio(
+                ratio_state_path,
+                ratio_state_data,
+                ratio_author_state,
+                filename,
+                generated_output_path,
+            )
+
+            # The 20th image is completed with the old ratio. Only now select
+            # the next ratio, before allowing the next reference to be uploaded.
+            if ratio_changed:
+                _configure_nanobanana_ratio(
+                    hwnd,
+                    ratio_state_path,
+                    ratio_state_data,
+                    ratio_author_state,
+                    reason=f"completed 20-image block at {ratio_author_state['last_completed_ratio_block']}",
+                )
+
+        remaining_files = [
+            name for name in os.listdir(source_folder)
+            if os.path.isfile(os.path.join(source_folder, name))
+            and os.path.splitext(name)[1].lower() in supported_image_extensions
+        ]
+        if remaining_files:
+            # Do not report success if any source-root files remain unprocessed.
+            _set_author_final_status(
+                "error",
+                f"Processed {processed_this_run} image(s), but {len(remaining_files)} source image(s) remain in the folder",
+            )
+            return "failed"
+
+        _set_author_final_status(
+            "completed",
+            f"Image generation completed: {processed_this_run} image(s) generated and original files moved to {processed_folder}",
+        )
+        try:
+            hud.print("All reference images have been generated and moved to processed.", "success")
+        except Exception:
+            pass
+        return "completed"
+
+    def _run_image_generation_supervisor():
+        nonlocal operation_status_flag, operation_aborted
+        restart_number = 0
+        force_url_restart_pending = False
+        restart_hotkey = None
+        url_restart_hotkey = None
+        stop_hotkey = None
+        try:
+            url_restart_hotkey = keyboard.add_hotkey(
+                "ctrl+shift+f12", on_restart_shortcut, suppress=True
+            )
+            print("⌨️ [HOTKEY] Ctrl+Shift+F12 registered for image_generation URL-first restart.")
+        except Exception as hotkey_error:
+            print(f"⚠️ [HOTKEY] Could not register Ctrl+Shift+F12: {hotkey_error}")
+        try:
+            stop_hotkey = keyboard.add_hotkey(
+                "alt+/", on_terminate_shortcut, suppress=True
+            )
+            print("⌨️ [HOTKEY] Alt+/ registered for image_generation stop.")
+        except Exception as hotkey_error:
+            print(f"⚠️ [HOTKEY] Could not register Alt+/: {hotkey_error}")
+
+        try:
+            while not stop_event.is_set() and not terminate_automation:
+                if restart_from_url_event.is_set():
+                    restart_from_url_event.clear()
+                    force_url_restart_pending = True
+                    print("🌐 [IMAGE-GENERATION] Ctrl+Shift+F12 received; next batch starts from GOOGLE_FLOW_URL.")
+                if restart_event.is_set():
+                    restart_event.clear()
+                restart_number += 1
+                operation_status_flag = True
+                operation_aborted = False
+                print(f"\n🔁 [IMAGE-GENERATION] Starting batch attempt {restart_number}...")
+                try:
+                    force_this_attempt = force_url_restart_pending
+                    force_url_restart_pending = False
+                    result = _run_image_generation_batch(force_url_restart=force_this_attempt)
+                    if result in ("completed", "not_pending", "engine_changed", "failed"):
+                        break
+                except _ManualStop:
+                    raise
+                except _WorkflowRestart as restart_reason:
+                    print(f"🔁 [IMAGE-GENERATION] Restarting after: {restart_reason}")
+                    if getattr(restart_reason, "force_url", False):
+                        force_url_restart_pending = True
+                    operation_status_flag = True
+                    operation_aborted = False
+                    # Do not mark the current source image as processed unless
+                    # its generated download had already been verified.
+                    try:
+                        _set_author_final_status(
+                            "pending",
+                            f"Recovering image_generation after: {restart_reason}",
+                        )
+                    except Exception as status_error:
+                        print(f"⚠️ [IMAGE-GENERATION] Could not set recovery status: {status_error}")
+                    _release_image_render_anchor()
+                    _supervisor_wait(2)
+                except Exception as unexpected_error:
+                    print(f"❌ [IMAGE-GENERATION] Unexpected error: {unexpected_error}")
+                    traceback.print_exc()
+                    _set_author_final_status(
+                        "error",
+                        f"Unexpected image_generation error: {unexpected_error}",
+                    )
+                    break
+
+                if force_url_restart_pending:
+                    operation_status_flag = True
+                    operation_aborted = False
+                    _release_image_render_anchor()
+                    print("🌐 [IMAGE-GENERATION] Continuing with a fresh Google Flow URL-first attempt.")
+                    continue
+
+                if restart_event.is_set():
+                    restart_event.clear()
+                    operation_status_flag = True
+                    operation_aborted = False
+                    _release_image_render_anchor()
+                    print("🔁 [IMAGE-GENERATION] Restart request received.")
+                    continue
+                break
+        except _ManualStop as stop_reason:
+            print(f"🛑 [IMAGE-GENERATION] {stop_reason}")
+            try:
+                _set_author_final_status("pending", "Image generation manually stopped by Alt+/; remaining files are resumable")
+            except Exception as status_error:
+                print(f"⚠️ [IMAGE-GENERATION] Could not persist stop status: {status_error}")
+        finally:
+            _release_image_render_anchor()
+            for hotkey_handle in (restart_hotkey, url_restart_hotkey, stop_hotkey):
+                if hotkey_handle is not None:
+                    try:
+                        keyboard.remove_hotkey(hotkey_handle)
+                    except Exception:
+                        pass
+
+    if image_generation_mode:
+        print("🚀 [IMAGE-GENERATION] Running AUTHOR_PATH reference-image engine.")
+        _run_image_generation_supervisor()
+        return
+
+    # ------------------------------------------------------------------
+    # Full-workflow restart supervisor and global keyboard shortcuts
+    # ------------------------------------------------------------------
+    # Ctrl+Shift+F12: hard-restart this function by navigating to GOOGLE_FLOW_URL first.
+    # Alt+/: stop the function manually.
+    # Both shortcuts are registered once and remain active across restarts.
+    restart_number = 0
+    force_url_restart_pending = False
+    restart_hotkey = None
+    url_restart_hotkey = None
+    stop_hotkey = None
+
+    try:
+        url_restart_hotkey = keyboard.add_hotkey("ctrl+shift+f12", on_restart_shortcut, suppress=True)
+        print("⌨️ [HOTKEY] Ctrl+Shift+F12 registered: hard restart from GOOGLE_FLOW_URL.")
+    except Exception as hotkey_error:
+        print(f"⚠️ [HOTKEY] Could not register Ctrl+Shift+F12: {hotkey_error}")
+
+    try:
+        stop_hotkey = keyboard.add_hotkey("alt+/", on_terminate_shortcut, suppress=True)
+        print("⌨️ [HOTKEY] Alt+/ registered: stop the function manually.")
+    except Exception as hotkey_error:
+        print(f"⚠️ [HOTKEY] Could not register Alt+/: {hotkey_error}")
+
+    try:
+        while True:
+            if stop_event.is_set() or terminate_automation:
+                print("🛑 [SUPERVISOR] Manual stop requested; exiting the function.")
+                break
+
+            if restart_from_url_event.is_set():
+                restart_from_url_event.clear()
+                force_url_restart_pending = True
+                print("🌐 [SUPERVISOR] Ctrl+Shift+F12 received; next attempt will launch GOOGLE_FLOW_URL first.")
+            if restart_event.is_set():
+                restart_event.clear()
+                print("🔁 [SUPERVISOR] Restart request received; rebuilding all run state.")
+
+            restart_number += 1
+            operation_status_flag = True
+            operation_status_message = ""
+            operation_aborted = False
+
+            # Re-read panel.json on every attempt so a restart behaves like a fresh console run.
+            try:
+                panel_data = _load_panel()
+                if not panel_data:
+                    raise ValueError("panel.json is empty, missing, or could not be read")
+                image_generation_engine = _find_engine(panel_data)
+                if image_generation_engine.lower() != "google flow":
+                    print(f"ℹ️ [ENGINE] Image generation engine changed to '{image_generation_engine}'; Google Flow worker will stop.")
+                    _set_currently_running(
+                        None,
+                        status="skipped",
+                        operation_status=f"Google Flow worker skipped because the selected engine is '{image_generation_engine}'"
+                    )
+                    break
+                project_title = _find_project_title(panel_data)
+                script_data = _find_script_data(panel_data)
+                all_entries.clear()
+                _collect_scene_entries(script_data)
+                total_entries = len(all_entries)
+            except Exception as reload_error:
+                print(f"⚠️ [SUPERVISOR] Could not refresh project configuration: {reload_error}")
+                _set_currently_running(
+                    "generate_google_flow_images()",
+                    status="pending",
+                    operation_status=f"Waiting for a readable Google Flow project configuration: {reload_error}"
+                )
+                _supervisor_wait(3)
+                continue
+
+            if total_entries <= 0:
+                print("⚠️ [SUPERVISOR] No scene entries found; checking panel.json again in 3 seconds.")
+                _set_currently_running(
+                    "generate_google_flow_images()",
+                    status="pending",
+                    operation_status="No scene entries found yet; waiting and retrying automatically"
+                )
+                _supervisor_wait(3)
+                continue
+
+            print(
+                f"\n🔁 [RESTART] Starting Google Flow workflow attempt {restart_number} "
+                "from the beginning: reread panel.json, inspect prompt workspace, "
+                "then New Project, otherwise navigate to GOOGLE_FLOW_URL; "
+                f"project='{project_title}', scenes={total_entries}."
+            )
+            _set_currently_running(
+                "generate_google_flow_images()",
+                status="pending",
+                operation_status=f"Starting Google Flow workflow attempt {restart_number}"
+            )
+
+            try:
+                force_this_attempt = force_url_restart_pending
+                force_url_restart_pending = False
+                main_google_flow_workflow(force_url_restart=force_this_attempt)
+            except _WorkflowRestart as restart_reason:
+                print(f"🔁 [SUPERVISOR] Restarting from the beginning: {restart_reason}")
+                if getattr(restart_reason, "force_url", False):
+                    force_url_restart_pending = True
+                operation_status_flag = True
+                operation_aborted = False
+                _set_currently_running(
+                    "generate_google_flow_images()",
+                    status="pending",
+                    operation_status=f"Automatic restart after: {restart_reason}"
+                )
+            except _ManualStop as stop_reason:
+                print(f"🛑 [SUPERVISOR] {stop_reason}")
+                stop_event.set()
+                terminate_automation = True
+            except Exception as unexpected_error:
+                print(f"❌ [SUPERVISOR] Unexpected supervisor error: {unexpected_error}")
+                traceback.print_exc()
+                operation_status_flag = True
+                operation_aborted = False
+                _set_currently_running(
+                    "generate_google_flow_images()",
+                    status="pending",
+                    operation_status=f"Supervisor caught an error and will retry: {unexpected_error}"
+                )
+
+            if stop_event.is_set() or terminate_automation:
+                break
+
+            if restart_from_url_event.is_set():
+                restart_from_url_event.clear()
+                force_url_restart_pending = True
+                operation_status_flag = True
+                operation_aborted = False
+                print("🌐 [SUPERVISOR] Ctrl+Shift+F12 arrived between attempts; restarting from GOOGLE_FLOW_URL.")
+                continue
+            if restart_event.is_set():
+                restart_event.clear()
+                operation_status_flag = True
+                operation_aborted = False
+                print("🔁 [SUPERVISOR] Ctrl+Shift+F12 arrived at the end of an attempt; starting a fresh attempt instead of accepting the old result.")
+                _set_currently_running(
+                    "generate_google_flow_images()",
+                    status="pending",
+                    operation_status="Manual Ctrl+Shift+F12 restart requested"
+                )
+                continue
+
+            final_panel = _load_panel()
+            final_running = str(_get_status_value(final_panel, "currently_running", "") or "").strip()
+            if final_running == "generate_google_flow_images_successful":
+                print("✅ [SUPERVISOR] Workflow completed successfully; no restart is needed.")
+                break
+
+            operation_status_flag = True
+            operation_aborted = False
+            print("🔁 [SUPERVISOR] Workflow is incomplete; the next attempt will re-read panel.json and inspect the current Edge page.")
+            try:
+                hud.print("The workflow needs recovery. Restarting automatically...", "warning")
+            except Exception:
+                pass
+            _supervisor_wait(2)
+    finally:
+        for hotkey_handle in (restart_hotkey, url_restart_hotkey, stop_hotkey):
+            if hotkey_handle is not None:
+                try:
+                    keyboard.remove_hotkey(hotkey_handle)
+                except Exception:
+                    pass
+
+        if stop_event.is_set() or terminate_automation:
+            try:
+                update_operation_status("Google Flow operation manually stopped by user (Alt+/); work remains resumable")
+                hud.show_summary("Stopped at your request.")
+            except Exception:
+                pass
+            print("🛑 [SUPERVISOR] Google Flow function stopped by the user.")
+
 def execute_engine():
     """Execute the appropriate engine based on the engine value.
     Executes regardless of status - NO STATUS CHECKS OR UPDATES."""
@@ -15068,7 +20035,7 @@ def execute_engine():
     # ============================================================
     # STEP 1: LOAD CONFIG - No status anything
     # ============================================================
-    fetch_settings()
+    #fetch_settings()
     try:
         config_data = load_json_file(AUTHOR_PATH, {})
         
@@ -15202,7 +20169,31 @@ def execute_engine():
             error_msg = f"execute_engine: CSV engine failed: {str(e)}"
             print(f"\n❌ {error_msg}")
             return
+   
+    elif engine_value == "image_generation":
+        # ===== CSV ENGINE =====
+        print(f"\n{'='*80}")
+        print(f"EXECUTING IMAGE GENERATION")
+        print(f"{'='*80}")
+        print(f"Author: {author}")
+        print(f"Time Order: {time_order}")
+        print(f"{'='*80}\n")
+        
+        try:
+            # Call csv_engine which handles the CSV pipeline
+            print("execute_engine: Image Generation")
+            generate_google_flow_images()
+            print("execute_engine: Image generation completed")
             
+
+            print(f"\n✅ execute_engine: Image generation completed successfully for '{author}'")
+            return
+         
+        except Exception as e:
+            error_msg = f"execute_engine: CSV engine failed: {str(e)}"
+            print(f"\n❌ {error_msg}")
+            return
+         
     else:
         # ===== UNKNOWN ENGINE =====
         error_msg = f"execute_engine: ERROR - Unknown engine: '{engine_value}'. Must be 'driver' or 'csv'."
