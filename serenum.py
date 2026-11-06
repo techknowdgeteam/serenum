@@ -15128,9 +15128,13 @@ def generate_google_flow_images():
     """
     Generates images using Google Flow via GUI automation with pyautogui image recognition.
     Also supports AUTHOR_PATH dynamic_values.engine="image_generation": processes every
-    supported image in JPGSFOLDER/<dynamic_values.author>, downloads replicas to generated/,
-    and moves successful originals to processed/. The image_generation branch applies
-    persistent Nano Banana ratios in 20-image blocks: 9:16, 3:4, then 1:1, repeating.
+    supported image in JPGSFOLDER/<dynamic_values.author>, resizes each downloaded
+    result to 25/32 of its original width and height, and saves exactly one processed
+    output in the author's "AI info washed" folder. The original reference is moved
+    to processed/ only after the resized output has been verified. No original-copy,
+    metadata-removal variant, or image-validation JSON sidecar is created.
+    The image_generation branch applies persistent Nano Banana ratios in 20-image blocks:
+    9:16, 3:4, then 1:1, repeating.
     Features:
     - Uses GOOGLE_FLOW_URL and GUI_IMAGES path variable
     - Checks panel.json for image_generation_engine == "Google Flow" (case-insensitive)
@@ -18849,13 +18853,13 @@ def generate_google_flow_images():
         ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"
     }
 
-    def _count_generated_image_files(generated_folder):
-        """Count non-empty image files in generated/, ignoring unrelated files."""
-        if not os.path.isdir(generated_folder):
+    def _count_generated_image_files(ai_info_washed_folder):
+        """Count non-empty resized image outputs in the author's AI info washed folder."""
+        if not os.path.isdir(ai_info_washed_folder):
             return 0
         count = 0
-        for filename in os.listdir(generated_folder):
-            full_path = os.path.join(generated_folder, filename)
+        for filename in os.listdir(ai_info_washed_folder):
+            full_path = os.path.join(ai_info_washed_folder, filename)
             if (
                 os.path.isfile(full_path)
                 and os.path.splitext(filename)[1].lower() in IMAGE_FILE_EXTENSIONS
@@ -18879,8 +18883,8 @@ def generate_google_flow_images():
             os.fsync(handle.fileno())
         os.replace(temp_path, state_path)
 
-    def _load_nanobanana_ratio_state(jpgs_root, author_value, generated_folder):
-        """Load persistent ratio-cycle state; initialize from generated-file count once."""
+    def _load_nanobanana_ratio_state(jpgs_root, author_value, ai_info_washed_folder):
+        """Load persistent ratio-cycle state; initialize from AI info washed image count once."""
         state_path = os.path.join(str(jpgs_root), NANOBANANA_STATE_FILENAME)
         os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
 
@@ -18908,10 +18912,10 @@ def generate_google_flow_images():
         author_key = str(author_value).strip()
         author_state = authors.get(author_key)
         if author_state is None:
-            # Existing non-empty generated files count toward the cycle when the
+            # Existing non-empty AI info washed image count toward the cycle when the
             # state file is first introduced for this author. Thereafter the JSON
             # tracker is authoritative and survives moving originals to processed/.
-            existing_generated = _count_generated_image_files(generated_folder)
+            existing_generated = _count_generated_image_files(ai_info_washed_folder)
             ratio_index = (existing_generated // NANOBANANA_BATCH_SIZE) % len(
                 NANOBANANA_RATIO_CYCLE
             )
@@ -18938,7 +18942,7 @@ def generate_google_flow_images():
             _save_nanobanana_ratio_state(state_path, state_data)
             print(
                 "🧮 [NANOBANANA] Initialized persistent ratio state from "
-                f"{existing_generated} existing generated image(s)."
+                f"{existing_generated} existing AI info washed image(s)."
             )
 
         if not isinstance(author_state, dict):
@@ -19263,94 +19267,26 @@ def generate_google_flow_images():
         update_operation_status(f"Prompt sent for {job_name}; confirming image rendering")
         return True
 
-    def _validate_and_commit_generated_image(staged_path, generated_folder):
-        """Quickly validate a downloaded image, then save its original bytes unchanged.
+    def _validate_and_commit_generated_image(staged_path, ai_info_washed_folder):
+        """Validate a Google Flow download, resize it once, and save one final image.
 
-        This stage deliberately preserves the downloaded pixel data and all embedded
-        provenance/metadata. It does not strip EXIF, XMP, IPTC, C2PA, SynthID, or other
-        origin signals. The check is limited to file integrity, dimensions, format,
-        and a SHA-256 comparison before/after the final move.
+        The output is resized to 25/32 (78.125%) of the original width and height,
+        preserving aspect ratio. Standard image metadata that Pillow can carry
+        through the selected format (EXIF, ICC, supported XMP, DPI and JPEG comment)
+        is retained. No unresized copy, metadata-stripped copy, or JSON audit file is
+        written. Resizing is an image-format operation and does not guarantee any
+        change to third-party AI disclosure or provenance detection.
         """
         import hashlib
+
+        RESIZE_NUMERATOR = 25
+        RESIZE_DENOMINATOR = 32
 
         def _hud(message, state="processing"):
             try:
                 hud.print(message, state)
             except Exception:
                 pass
-
-        if not os.path.isfile(staged_path):
-            abort_operation(f"Downloaded image is missing from staging: {staged_path}")
-        file_size = os.path.getsize(staged_path)
-        if file_size <= 0:
-            abort_operation(f"Downloaded image is empty: {staged_path}")
-
-        extension = os.path.splitext(staged_path)[1].lower()
-        supported = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
-        if extension not in supported:
-            abort_operation(f"Downloaded file has an unsupported image extension: {extension or '(none)'}")
-
-        _hud("Checking downloaded image integrity...", "processing")
-        update_operation_status(f"Validating downloaded image: {os.path.basename(staged_path)}")
-        image_format = extension.lstrip(".").upper()
-        width = None
-        height = None
-        metadata_summary = {
-            "exif_present": None,
-            "icc_profile_present": None,
-            "xmp_present": None,
-            "iptc_present": None,
-            "provenance_modified": False,
-        }
-
-        try:
-            from PIL import Image
-            with Image.open(staged_path) as probe:
-                image_format = str(probe.format or image_format).upper()
-                width, height = probe.size
-                info_keys = {str(key).lower() for key in probe.info.keys()}
-                try:
-                    exif_present = len(probe.getexif()) > 0
-                except Exception:
-                    exif_present = "exif" in info_keys
-                metadata_summary.update({
-                    "exif_present": bool(exif_present),
-                    "icc_profile_present": bool(probe.info.get("icc_profile")) or "icc_profile" in info_keys,
-                    "xmp_present": any("xmp" in key for key in info_keys),
-                    "iptc_present": any("iptc" in key for key in info_keys),
-                    "provenance_modified": False,
-                })
-                probe.verify()
-            # Re-open and decode once to ensure the actual pixel stream is readable.
-            with Image.open(staged_path) as decoded:
-                decoded.load()
-                if width is None or height is None:
-                    width, height = decoded.size
-                if width <= 0 or height <= 0:
-                    abort_operation(f"Downloaded image has invalid dimensions: {staged_path}")
-        except ImportError:
-            # Pillow is optional for this validation stage. Use fast file-signature
-            # checks as a fallback while preserving the original file unchanged.
-            with open(staged_path, "rb") as handle:
-                header = handle.read(16)
-            signature_ok = (
-                (extension in (".jpg", ".jpeg") and header.startswith(b"\xff\xd8\xff"))
-                or (extension == ".png" and header.startswith(b"\x89PNG\r\n\x1a\n"))
-                or (extension == ".webp" and header[:4] == b"RIFF" and header[8:12] == b"WEBP")
-                or (extension == ".gif" and header[:6] in (b"GIF87a", b"GIF89a"))
-                or (extension == ".bmp" and header[:2] == b"BM")
-                or (extension in (".tif", ".tiff") and header[:4] in (b"II*\x00", b"MM\x00*"))
-            )
-            if not signature_ok:
-                abort_operation(
-                    f"Image signature could not be verified (Pillow unavailable): {staged_path}"
-                )
-            _hud("Image signature verified; Pillow is unavailable, preserving original file.", "warning")
-        except (_WorkflowRestart, _ManualStop):
-            raise
-        except Exception as exc:
-            _hud("Image validation failed.", "error")
-            abort_operation(f"Downloaded image failed integrity validation: {exc}")
 
         def _sha256(path):
             digest = hashlib.sha256()
@@ -19359,104 +19295,236 @@ def generate_google_flow_images():
                     digest.update(chunk)
             return digest.hexdigest()
 
-        _hud("Image is valid; preserving original pixels and provenance data...", "processing")
-        before_hash = _sha256(staged_path)
-        before_size = os.path.getsize(staged_path)
-        os.makedirs(generated_folder, exist_ok=True)
+        def _unique_destination(folder, filename):
+            stem, extension = os.path.splitext(filename)
+            candidate = os.path.join(folder, filename)
+            suffix = 2
+            while os.path.exists(candidate):
+                candidate = os.path.join(folder, f"{stem}_{suffix}{extension}")
+                suffix += 1
+            return candidate
 
-        original_name = os.path.basename(staged_path)
-        stem, ext = os.path.splitext(original_name)
-        final_name = original_name
-        final_path = os.path.join(generated_folder, final_name)
-        suffix = 2
-        while os.path.exists(final_path):
-            final_name = f"{stem}_{suffix}{ext}"
-            final_path = os.path.join(generated_folder, final_name)
-            suffix += 1
+        def _prepare_mode(image, image_format):
+            """Convert only modes unsupported by the chosen output format."""
+            if image_format == "JPEG":
+                if image.mode in ("RGBA", "LA") or (
+                    image.mode == "P" and "transparency" in image.info
+                ):
+                    rgba = image.convert("RGBA")
+                    background = Image.new("RGB", rgba.size, (255, 255, 255))
+                    background.paste(rgba, mask=rgba.getchannel("A"))
+                    return background
+                if image.mode not in ("RGB", "L", "CMYK"):
+                    return image.convert("RGB")
+            elif image_format == "WEBP":
+                if image.mode not in ("RGB", "RGBA", "L"):
+                    return image.convert("RGBA" if "A" in image.getbands() else "RGB")
+            elif image_format == "GIF":
+                if image.mode not in ("P", "L"):
+                    return image.convert("P", palette=Image.Palette.ADAPTIVE)
+            elif image_format in ("PNG", "BMP"):
+                if image.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
+                    return image.convert("RGB")
+            return image
 
-        # Move the already-validated file, rather than re-encoding it. This keeps
-        # its bytes, embedded metadata, and any provenance signals unchanged.
+        if not os.path.isfile(staged_path):
+            abort_operation(f"Downloaded image is missing from staging: {staged_path}")
+        if os.path.getsize(staged_path) <= 0:
+            abort_operation(f"Downloaded image is empty: {staged_path}")
+
+        extension = os.path.splitext(staged_path)[1].lower()
+        supported = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+        if extension not in supported:
+            abort_operation(
+                f"Downloaded file has an unsupported image extension: {extension or '(none)'}"
+            )
+
+        _hud("Validating download and resizing image...", "processing")
+        update_operation_status(
+            f"Validating and resizing downloaded image: {os.path.basename(staged_path)}"
+        )
+
         try:
-            os.replace(staged_path, final_path)
-        except OSError:
-            import shutil
-            shutil.copy2(staged_path, final_path)
-            if os.path.getsize(final_path) != before_size or _sha256(final_path) != before_hash:
-                try:
-                    os.remove(final_path)
-                except OSError:
-                    pass
-                raise IOError("Final image copy did not match the validated download")
-            os.remove(staged_path)
+            from PIL import Image
+        except ImportError as exc:
+            abort_operation(
+                "Pillow is required for permanent image resizing. Install it with: python -m pip install Pillow"
+            )
+            raise exc
 
-        after_size = os.path.getsize(final_path)
-        after_hash = _sha256(final_path)
-        if after_size != before_size or after_hash != before_hash:
+        try:
+            with Image.open(staged_path) as probe:
+                image_format = str(probe.format or "").upper()
+                original_width, original_height = probe.size
+                if original_width <= 0 or original_height <= 0:
+                    abort_operation(f"Downloaded image has invalid dimensions: {staged_path}")
+                if int(getattr(probe, "n_frames", 1)) > 1:
+                    abort_operation(
+                        "Animated images are not supported by this single-image resize pipeline: "
+                        f"{staged_path}"
+                    )
+                probe.verify()
+
+            with Image.open(staged_path) as source_image:
+                source_image.load()
+                if source_image.size != (original_width, original_height):
+                    abort_operation(
+                        f"Downloaded image dimensions changed while decoding: {staged_path}"
+                    )
+                image_format = str(source_image.format or image_format).upper()
+                source_info = dict(source_image.info)
+                exif_bytes = None
+                try:
+                    exif_object = source_image.getexif()
+                    if len(exif_object):
+                        exif_bytes = exif_object.tobytes()
+                except Exception:
+                    pass
+                icc_profile = source_info.get("icc_profile")
+                xmp_data = source_info.get("xmp")
+                dpi = source_info.get("dpi")
+                jpeg_comment = source_info.get("comment")
+
+                resized_dimensions = (
+                    max(1, int(round(original_width * RESIZE_NUMERATOR / RESIZE_DENOMINATOR))),
+                    max(1, int(round(original_height * RESIZE_NUMERATOR / RESIZE_DENOMINATOR))),
+                )
+                resampling = getattr(Image, "Resampling", Image).LANCZOS
+                working = source_image.copy()
+                working = working.resize(resized_dimensions, resampling)
+                working = _prepare_mode(working, image_format)
+
+                save_kwargs = {}
+                if exif_bytes and image_format in ("JPEG", "PNG", "WEBP", "TIFF"):
+                    save_kwargs["exif"] = exif_bytes
+                if icc_profile and image_format in ("JPEG", "PNG", "WEBP", "TIFF"):
+                    save_kwargs["icc_profile"] = icc_profile
+                if xmp_data and image_format == "WEBP":
+                    save_kwargs["xmp"] = xmp_data
+                if dpi and image_format in ("JPEG", "PNG", "TIFF"):
+                    save_kwargs["dpi"] = dpi
+                if jpeg_comment and image_format == "JPEG":
+                    save_kwargs["comment"] = jpeg_comment
+
+                if image_format == "JPEG":
+                    save_kwargs.update({
+                        "quality": 92,
+                        "optimize": True,
+                        "progressive": False,
+                        "subsampling": 0,
+                    })
+                elif image_format == "WEBP":
+                    save_kwargs.update({"quality": 92, "method": 6})
+                elif image_format == "PNG":
+                    save_kwargs.update({"optimize": True, "compress_level": 9})
+                elif image_format == "TIFF":
+                    save_kwargs.setdefault("compression", "tiff_adobe_deflate")
+                elif image_format == "GIF":
+                    save_kwargs.setdefault("optimize", True)
+
+                format_extensions = {
+                    "JPEG": ".jpg",
+                    "PNG": ".png",
+                    "WEBP": ".webp",
+                    "BMP": ".bmp",
+                    "GIF": ".gif",
+                    "TIFF": ".tiff",
+                }
+                output_extension = format_extensions.get(image_format)
+                if not output_extension:
+                    raise ValueError(
+                        f"Unsupported decoded image format '{image_format}' for {staged_path}"
+                    )
+
+                os.makedirs(ai_info_washed_folder, exist_ok=True)
+                original_filename = os.path.basename(staged_path)
+                output_stem = os.path.splitext(original_filename)[0]
+                output_filename = output_stem + output_extension
+                output_path = _unique_destination(ai_info_washed_folder, output_filename)
+                temporary_path = output_path + ".tmp"
+
+                try:
+                    working.save(temporary_path, format=image_format, **save_kwargs)
+                finally:
+                    try:
+                        working.close()
+                    except Exception:
+                        pass
+
+            # Re-open and fully decode the saved file before considering it complete.
+            with Image.open(temporary_path) as check_image:
+                check_image.load()
+                if check_image.size != resized_dimensions:
+                    raise IOError(
+                        f"Resized output dimensions {check_image.size} do not match "
+                        f"expected {resized_dimensions}"
+                    )
+                verified_format = str(check_image.format or "").upper()
+                if verified_format != image_format:
+                    raise IOError(
+                        f"Saved format mismatch: expected {image_format}, found {verified_format}"
+                    )
+
+            os.replace(temporary_path, output_path)
+            output_size = os.path.getsize(output_path)
+            if output_size <= 0:
+                raise IOError("Resized output is empty after saving")
+            output_hash = _sha256(output_path)
+
+            # Delete the staged download only after the resized output is verified.
             try:
-                os.remove(final_path)
+                os.remove(staged_path)
+            except OSError as cleanup_error:
+                print(
+                    "⚠️ [IMAGE-RESIZE] Resized file is verified, but the temporary "
+                    f"download could not be removed: {cleanup_error}"
+                )
+
+            dimensions_text = (
+                f"{original_width}x{original_height} -> "
+                f"{resized_dimensions[0]}x{resized_dimensions[1]}"
+            )
+            _hud(
+                f"Resized image saved: {output_filename} ({dimensions_text})",
+                "success",
+            )
+            print(
+                "✅ [IMAGE-RESIZE] Saved one resized image: "
+                f"{output_path}; dimensions {dimensions_text}; "
+                f"{output_size} bytes; SHA-256 {output_hash}."
+            )
+            update_operation_status(
+                f"Resized image saved to AI info washed: {output_filename} "
+                f"({dimensions_text}; {output_size} bytes)"
+            )
+            return output_path
+
+        except (_WorkflowRestart, _ManualStop):
+            raise
+        except Exception as exc:
+            try:
+                if 'temporary_path' in locals() and os.path.exists(temporary_path):
+                    os.remove(temporary_path)
             except OSError:
                 pass
-            abort_operation("Final saved image differs from the validated download; refusing to continue")
+            _hud("Image resize/save failed.", "error")
+            abort_operation(f"Failed to resize and save downloaded image: {exc}")
+            raise
 
-        audit_record = {
-            "filename": final_name,
-            "format": image_format,
-            "width": width,
-            "height": height,
-            "size_bytes": after_size,
-            "sha256": after_hash,
-            "metadata_summary": metadata_summary,
-            "metadata_policy": "preserved_unchanged",
-            "validated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
-        audit_path = os.path.join(generated_folder, "image_validation_audit.json")
-        try:
-            if os.path.isfile(audit_path):
-                with open(audit_path, "r", encoding="utf-8") as handle:
-                    audit_data = json.load(handle)
-                if not isinstance(audit_data, dict):
-                    audit_data = {"images": []}
-            else:
-                audit_data = {"images": []}
-            images_log = audit_data.setdefault("images", [])
-            if not isinstance(images_log, list):
-                images_log = []
-                audit_data["images"] = images_log
-            images_log.append(audit_record)
-            audit_temp = audit_path + ".tmp"
-            with open(audit_temp, "w", encoding="utf-8") as handle:
-                json.dump(audit_data, handle, indent=2, ensure_ascii=False)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(audit_temp, audit_path)
-        except Exception as audit_error:
-            print(f"⚠️ [IMAGE-CLEANUP] Could not save validation audit (image remains valid): {audit_error}")
-
-        dimensions_label = f"{width}x{height}" if width and height else "dimensions not read"
-        _hud(
-            f"Image validated: {image_format} {dimensions_label}. Original metadata preserved.",
-            "success",
-        )
-        update_operation_status(
-            f"Image validated and saved unchanged: {final_name} ({image_format}, {dimensions_label})"
-        )
-        print(
-            f"✅ [IMAGE-CLEANUP] Validated and saved {final_name}; {dimensions_label}; "
-            f"{after_size} bytes; SHA-256 unchanged; embedded metadata/provenance preserved."
-        )
-        return final_path
-
-    def _process_one_reference_image(hwnd, source_path, prompt_text, generated_folder, processed_folder):
+    def _process_one_reference_image(hwnd, source_path, prompt_text, ai_info_washed_folder, processed_folder):
         source_filename = os.path.basename(source_path)
         source_stem, source_extension = os.path.splitext(source_filename)
         safe_stem = re.sub(r'[<>:"/\\|?*]+', "_", source_stem).strip(" ._") or "reference"
         safe_extension = re.sub(r"[^a-z0-9]+", "", source_extension.lower().lstrip(".")) or "image"
         # Include the source extension so different source formats cannot collide.
         job_name = f"{safe_stem}_{safe_extension}_generated"
+        author_folder = os.path.dirname(os.path.abspath(ai_info_washed_folder))
+        staging_folder = os.path.join(author_folder, "_download_staging")
 
         print("\n" + "=" * 72)
         print(f"🖼️ [IMAGE-GENERATION] Reference: {source_filename}")
-        print(f"📁 [IMAGE-GENERATION] Generated folder: {generated_folder}")
+        print(f"📁 [IMAGE-GENERATION] Resized output folder: {ai_info_washed_folder}")
+        print(f"📁 [IMAGE-GENERATION] Temporary download folder: {staging_folder}")
         print(f"📁 [IMAGE-GENERATION] Processed originals folder: {processed_folder}")
         print("=" * 72)
 
@@ -19480,12 +19548,9 @@ def generate_google_flow_images():
                 f"Replica generation was not confirmed: imagerenderingprogress.png did not appear for {job_name}"
             )
 
-        # Stage 4: download into a staging directory. Nothing enters generated/
-        # until the file has passed a quick integrity check.
-        staging_folder = os.path.join(generated_folder, "_download_staging")
+        # Stage 4: download to a temporary author-level folder. The AI info washed
+        # folder contains only the final resized image files, never staging files.
         os.makedirs(staging_folder, exist_ok=True)
-        # Discard only stale temporary results for this exact job, left by an
-        # interrupted attempt before final validation/commit.
         for stale_name in os.listdir(staging_folder):
             if stale_name.casefold().startswith(job_name.casefold() + "."):
                 stale_path = os.path.join(staging_folder, stale_name)
@@ -19493,7 +19558,10 @@ def generate_google_flow_images():
                     if os.path.isfile(stale_path):
                         os.remove(stale_path)
                 except OSError as cleanup_error:
-                    print(f"⚠️ [IMAGE-CLEANUP] Could not remove stale staging file {stale_name}: {cleanup_error}")
+                    print(
+                        "⚠️ [IMAGE-RESIZE] Could not remove stale temporary file "
+                        f"{stale_name}: {cleanup_error}"
+                    )
 
         try:
             hud.print("Downloading image to temporary staging...", "downloading")
@@ -19521,25 +19589,36 @@ def generate_google_flow_images():
             )
         staged_path = max(staged_candidates, key=os.path.getmtime)
 
-        # Stage 5: validate the actual file, show progress in HUD, and commit it
-        # byte-for-byte. This is not metadata removal or AI-label evasion.
+        # Stage 5: validate, resize to 25/32 and save exactly one final output.
         try:
-            hud.print("Validating image before saving...", "processing")
+            hud.print("Validating and resizing image before saving...", "processing")
         except Exception:
             pass
-        output_path = _validate_and_commit_generated_image(staged_path, generated_folder)
+        output_path = _validate_and_commit_generated_image(
+            staged_path, ai_info_washed_folder
+        )
         output_filename = os.path.basename(output_path)
 
-        # Move the original only after the final generated file has been verified.
-        processed_filename = _move_reference_image_to_processed(source_path, processed_folder)
+        # Move the original reference only after the resized output is verified.
+        processed_filename = _move_reference_image_to_processed(
+            source_path, processed_folder
+        )
         print(
-            f"✅ [IMAGE-GENERATION] Completed {source_filename}; generated {output_filename}; "
-            f"original moved to processed/{processed_filename}."
+            f"✅ [IMAGE-GENERATION] Completed {source_filename}; saved resized "
+            f"{output_filename}; original moved to processed/{processed_filename}."
         )
         try:
-            hud.print(f"Saved and verified: {output_filename}", "success")
+            hud.print(f"Saved resized image: {output_filename}", "success")
         except Exception:
             pass
+
+        # Remove the temporary folder when empty; it is not an output folder.
+        try:
+            if os.path.isdir(staging_folder) and not os.listdir(staging_folder):
+                os.rmdir(staging_folder)
+        except OSError:
+            pass
+
         _release_image_render_anchor()
         return output_path
 
@@ -19584,19 +19663,19 @@ def generate_google_flow_images():
             return "failed"
 
         source_folder = os.path.join(str(jpgs_root), author_value)
-        generated_folder = os.path.join(source_folder, "generated")
+        ai_info_washed_folder = os.path.join(source_folder, "AI info washed")
         processed_folder = os.path.join(source_folder, "processed")
 
         if not os.path.isdir(source_folder):
             _set_author_final_status("error", f"Reference image folder does not exist: {source_folder}")
             return "failed"
 
-        os.makedirs(generated_folder, exist_ok=True)
+        os.makedirs(ai_info_washed_folder, exist_ok=True)
         os.makedirs(processed_folder, exist_ok=True)
 
         # Only files directly inside the author folder are new work. Files in
-        # generated/ and processed/ are deliberately excluded because they are
-        # in subfolders, not the source-folder root.
+        # AI info washed/, processed/ and the temporary staging folder are kept
+        # in subfolders, so they are not picked up again as new source images.
         supported_image_extensions = {
             ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"
         }
@@ -19611,7 +19690,7 @@ def generate_google_flow_images():
 
         print(f"📁 [IMAGE-GENERATION] Author value: {author_value}")
         print(f"📁 [IMAGE-GENERATION] Source folder: {source_folder}")
-        print(f"📁 [IMAGE-GENERATION] Generated replicas: {generated_folder}")
+        print(f"📁 [IMAGE-GENERATION] Resized outputs: {ai_info_washed_folder}")
         print(f"📁 [IMAGE-GENERATION] Processed originals: {processed_folder}")
         print(f"📊 [IMAGE-GENERATION] New image files found: {len(image_files)}")
 
@@ -19632,7 +19711,7 @@ def generate_google_flow_images():
         # The selected ratio is always re-applied on a fresh/restarted workflow,
         # so the browser UI cannot silently drift away from the recorded state.
         ratio_state_path, ratio_state_data, ratio_author_state = (
-            _load_nanobanana_ratio_state(jpgs_root, author_value, generated_folder)
+            _load_nanobanana_ratio_state(jpgs_root, author_value, ai_info_washed_folder)
         )
 
         hwnd = ensure_window_ready_and_focused()
@@ -19680,7 +19759,7 @@ def generate_google_flow_images():
                 hwnd,
                 source_path,
                 prompt_text,
-                generated_folder,
+                ai_info_washed_folder,
                 processed_folder,
             )
             processed_this_run += 1
@@ -19728,10 +19807,10 @@ def generate_google_flow_images():
 
         _set_author_final_status(
             "completed",
-            f"Image generation completed: {processed_this_run} image(s) generated and original files moved to {processed_folder}",
+            f"Image generation completed: {processed_this_run} image(s) resized and saved to {ai_info_washed_folder}; original files moved to {processed_folder}",
         )
         try:
-            hud.print("All reference images have been generated and moved to processed.", "success")
+            hud.print("All reference images have been resized and saved.", "success")
         except Exception:
             pass
         return "completed"
