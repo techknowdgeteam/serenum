@@ -15124,14 +15124,19 @@ def sequence():
 
 
 #Photos Generation
-def generate_google_flow_images():
+def serenum_google_flow_images_generation_engine():
     """
     Generates images using Google Flow via GUI automation with pyautogui image recognition.
-    Also supports AUTHOR_PATH dynamic_values.engine="image_generation": processes every
-    supported image in JPGSFOLDER/<dynamic_values.author>, resizes each downloaded
-    result to 25/32 of its original width and height, and saves exactly one processed
-    output in the author's "AI info washed" folder. The original reference is moved
-    to processed/ only after the resized output has been verified. No original-copy,
+    Also supports AUTHOR_PATH dynamic_values.engine="image_generation" with
+    dynamic_values.image_generation_type="Reference" or "Unique" (case-insensitive).
+    Source images are read from JPGSFOLDER/<author>/references/. In Unique mode,
+    one random permanent image is selected from JPGSFOLDER/<author>/unique/ and
+    uploaded before each reference image; that selected unique image is reused for
+    every reference in the operation and is never moved. In Reference mode, only
+    each reference image is uploaded. Successfully processed reference images are
+    moved to JPGSFOLDER/<author>/processed/ after the generated result is verified.
+    Each downloaded result is resized to 25/32 of its original dimensions and saved
+    as exactly one image in the author's "AI info washed" folder. No original-copy,
     metadata-removal variant, or image-validation JSON sidecar is created.
     The image_generation branch applies persistent Nano Banana ratios in 20-image blocks:
     9:16, 3:4, then 1:1, repeating.
@@ -15140,7 +15145,7 @@ def generate_google_flow_images():
     - Checks panel.json for image_generation_engine == "Google Flow" (case-insensitive)
     - If engine is not Google Flow, function exits immediately
     - Always runs when the selected image engine is Google Flow; no currently_running gate
-    - On start sets currently_running to "generate_google_flow_images()"
+    - On start sets currently_running to "serenum_google_flow_images_generation_engine()"
     - Recognizes only entry_N scene images and the canonical Thumbnail.png;
       deletes unrelated image files from the project image folder
     - Resumes by generating only missing entry_N images, without resetting
@@ -15148,7 +15153,7 @@ def generate_google_flow_images():
     - Generates Thumbnail.png only after every scene entry image is verified
     - On completion, verifies every scene image plus Thumbnail.png, appends the
       completed project snapshot to READY_SCRIPT, then removes project_name from PANEL_PATH
-    - On any error/abort keeps currently_running as "generate_google_flow_images()"
+    - On any error/abort keeps currently_running as "serenum_google_flow_images_generation_engine()"
     - Ctrl+Shift+F12 restarts the workflow from its entry point without resuming a scene phase
     - Restart page detection checks whatdoyouwantocreate FIRST, then new_project,
       and navigates to GOOGLE_FLOW_URL only when neither is visible
@@ -15174,6 +15179,7 @@ def generate_google_flow_images():
     import json
     import time
     import re
+    import random
     import subprocess
     import traceback
     import threading
@@ -15682,7 +15688,7 @@ def generate_google_flow_images():
                     snapshot_status_container = {"_automation_status": True}
                     project_snapshot.append(snapshot_status_container)
             if isinstance(snapshot_status_container, dict):
-                snapshot_status_container["currently_running"] = "generate_google_flow_images_successful"
+                snapshot_status_container["currently_running"] = "serenum_google_flow_images_generation_engine_successful"
                 snapshot_status_container["status"] = "completed"
                 snapshot_status_container["operation_status"] = (
                     f"Completed project '{source_title}' with {expected_entries} verified image(s)"
@@ -15749,7 +15755,7 @@ def generate_google_flow_images():
                     else:
                         source_status_container = {"_automation_status": True}
                         source_data.append(source_status_container)
-                source_status_container["currently_running"] = "generate_google_flow_images_successful"
+                source_status_container["currently_running"] = "serenum_google_flow_images_generation_engine_successful"
                 source_status_container["status"] = "completed"
                 source_status_container["operation_status"] = f"Project transferred to ready script: {source_title}"
             with open(PANEL_PATH, "w", encoding="utf-8") as source_file:
@@ -15854,7 +15860,7 @@ def generate_google_flow_images():
                 panel_data = {}
                 print(
                     "✅ [ENGINE] AUTHOR_PATH dynamic_values.engine is 'image_generation'; "
-                    "starting reference-image generation mode."
+                    "starting author image-generation mode (Reference / Unique)."
                 )
             else:
                 if not os.path.exists(PANEL_PATH):
@@ -15921,11 +15927,11 @@ def generate_google_flow_images():
     # image_generation mode records status directly in AUTHOR_PATH instead.
     if not image_generation_mode:
         _set_currently_running(
-            "generate_google_flow_images()",
+            "serenum_google_flow_images_generation_engine()",
             status="pending",
-            operation_status="Running generate_google_flow_images()"
+            operation_status="Running serenum_google_flow_images_generation_engine()"
         )
-        print("🔒 [GF] Claimed currently_running = 'generate_google_flow_images()'")
+        print("🔒 [GF] Claimed currently_running = 'serenum_google_flow_images_generation_engine()'")
 
     # ------------------------------------------------------------------
     # Rest of original logic
@@ -16066,10 +16072,10 @@ def generate_google_flow_images():
 
             status_container['operation_status'] = operation_status_message
             if is_error or is_abort:
-                status_container['currently_running'] = "generate_google_flow_images()"
+                status_container['currently_running'] = "serenum_google_flow_images_generation_engine()"
                 status_container['status'] = "error"
             elif is_success:
-                status_container['currently_running'] = "generate_google_flow_images()"
+                status_container['currently_running'] = "serenum_google_flow_images_generation_engine()"
                 status_container['status'] = "pending"
 
             if not _save_panel(current_panel):
@@ -17662,7 +17668,7 @@ def generate_google_flow_images():
             return False, None
 
     def download_google_flow_image(hwnd, entry_name, images_folder, force_png=False):
-        # These variables belong to generate_google_flow_images(), not this
+        # These variables belong to serenum_google_flow_images_generation_engine(), not this
         # nested function. Declaring them nonlocal also keeps the finally
         # block safe when Alt+/ interrupts the first polling wait.
         nonlocal download_ui_sequence_active
@@ -18451,7 +18457,7 @@ def generate_google_flow_images():
                 )
                 if transferred:
                     _set_currently_running(
-                        "generate_google_flow_images_successful",
+                        "serenum_google_flow_images_generation_engine_successful",
                         status="completed",
                         operation_status=(
                             f"✅ All {total_entries} scene images and Thumbnail.png "
@@ -18754,7 +18760,7 @@ def generate_google_flow_images():
             )
             if transferred:
                 _set_currently_running(
-                    "generate_google_flow_images_successful",
+                    "serenum_google_flow_images_generation_engine_successful",
                     status="completed",
                     operation_status=(
                         f"✅ All {total_entries} entry images plus {THUMBNAIL_FILENAME} "
@@ -19511,45 +19517,97 @@ def generate_google_flow_images():
             abort_operation(f"Failed to resize and save downloaded image: {exc}")
             raise
 
-    def _process_one_reference_image(hwnd, source_path, prompt_text, ai_info_washed_folder, processed_folder):
+    def _process_one_reference_image(
+        hwnd,
+        source_path,
+        prompt_text,
+        ai_info_washed_folder,
+        processed_folder,
+        image_generation_type="Reference",
+        unique_image_path=None,
+    ):
+        """Generate one output from a reference, optionally preceded by a permanent unique image."""
+        mode = str(image_generation_type or "Reference").strip().casefold()
+        if mode not in ("reference", "unique"):
+            abort_operation(
+                f"Unsupported image_generation_type '{image_generation_type}'. "
+                "Use 'Reference' or 'Unique'."
+            )
+        mode_label = "Unique" if mode == "unique" else "Reference"
+
         source_filename = os.path.basename(source_path)
         source_stem, source_extension = os.path.splitext(source_filename)
         safe_stem = re.sub(r'[<>:"/\\|?*]+', "_", source_stem).strip(" ._") or "reference"
         safe_extension = re.sub(r"[^a-z0-9]+", "", source_extension.lower().lstrip(".")) or "image"
-        # Include the source extension so different source formats cannot collide.
-        job_name = f"{safe_stem}_{safe_extension}_generated"
+        # Include source extension and mode so separate files/formats do not collide.
+        job_name = f"{safe_stem}_{safe_extension}_{mode.casefold()}_generated"
         author_folder = os.path.dirname(os.path.abspath(ai_info_washed_folder))
         staging_folder = os.path.join(author_folder, "_download_staging")
 
+        if mode == "unique":
+            if not unique_image_path or not os.path.isfile(unique_image_path):
+                abort_operation(
+                    "Unique mode requires a valid permanent image from the author's unique folder"
+                )
+
         print("\n" + "=" * 72)
-        print(f"🖼️ [IMAGE-GENERATION] Reference: {source_filename}")
+        print(f"🖼️ [IMAGE-GENERATION] Mode: {mode_label}")
+        if mode == "unique":
+            print(
+                "🧷 [IMAGE-GENERATION] Permanent unique image (reused, never moved): "
+                f"{os.path.basename(unique_image_path)}"
+            )
+        print(f"🖼️ [IMAGE-GENERATION] Reference image: {source_filename}")
         print(f"📁 [IMAGE-GENERATION] Resized output folder: {ai_info_washed_folder}")
         print(f"📁 [IMAGE-GENERATION] Temporary download folder: {staging_folder}")
-        print(f"📁 [IMAGE-GENERATION] Processed originals folder: {processed_folder}")
+        print(f"📁 [IMAGE-GENERATION] Processed references folder: {processed_folder}")
         print("=" * 72)
 
-        # Stage 1: paste the single reference image and wait for upload progress.
+        # Stage 1 (Unique mode only): upload the permanent unique image FIRST.
+        # Its upload must finish before the reference image is copied/pasted.
         _release_image_render_anchor()
-        _paste_reference_image_and_wait_for_upload(hwnd, source_path, job_name)
+        if mode == "unique":
+            unique_job_name = f"{safe_stem}_{safe_extension}_unique_upload"
+            update_operation_status(
+                f"Uploading permanent unique image {os.path.basename(unique_image_path)} "
+                f"before reference {source_filename}"
+            )
+            _paste_reference_image_and_wait_for_upload(
+                hwnd, unique_image_path, unique_job_name
+            )
+            print(
+                "✅ [IMAGE-GENERATION] Permanent unique image upload confirmed; "
+                "now uploading the reference image."
+            )
 
-        # Stage 2: return to the prompt field, paste the configured text, and Send.
+        # Stage 2: upload the reference image. In Reference mode this is the only
+        # image upload; in Unique mode it is the second upload in the required pair.
+        _paste_reference_image_and_wait_for_upload(hwnd, source_path, job_name)
+        if mode == "unique":
+            print(
+                "✅ [IMAGE-GENERATION] Both uploads confirmed: unique image + "
+                f"reference image ({source_filename})."
+            )
+
+        # Stage 3: after all required uploads are confirmed, paste the prompt and Send.
         _paste_image_prompt_and_send(hwnd, prompt_text, job_name)
 
-        # Stage 3: require a second rendering indicator for the actual replica.
+        # Stage 4: require a fresh rendering-progress cycle for the generated result.
         generated = wait_for_imagerenderingprogress_and_jump_to_search(
             hwnd,
             job_name,
             max_wait_seconds=STAGE_TIMEOUT_SECONDS,
             check_interval=0.35,
-            phase_label="Image replica generation",
+            phase_label=f"{mode_label} image generation",
         )
         if not generated:
             abort_operation(
-                f"Replica generation was not confirmed: imagerenderingprogress.png did not appear for {job_name}"
+                "Generated image rendering was not confirmed: "
+                f"imagerenderingprogress.png did not appear for {job_name}"
             )
 
-        # Stage 4: download to a temporary author-level folder. The AI info washed
-        # folder contains only the final resized image files, never staging files.
+        # Stage 5: download to temporary author-level staging. The final output
+        # folder contains only the verified, resized image.
         os.makedirs(staging_folder, exist_ok=True)
         for stale_name in os.listdir(staging_folder):
             if stale_name.casefold().startswith(job_name.casefold() + "."):
@@ -19564,10 +19622,12 @@ def generate_google_flow_images():
                     )
 
         try:
-            hud.print("Downloading image to temporary staging...", "downloading")
+            hud.print("Downloading generated image to temporary staging...", "downloading")
         except Exception:
             pass
-        update_operation_status(f"Downloading {source_filename} to temporary staging")
+        update_operation_status(
+            f"Downloading generated {mode_label.lower()} image for {source_filename}"
+        )
         downloaded = download_google_flow_image(
             hwnd, job_name, staging_folder, force_png=False
         )
@@ -19585,11 +19645,12 @@ def generate_google_flow_images():
         ]
         if not staged_candidates:
             abort_operation(
-                f"Download returned success but no staged image was found for {source_filename}"
+                "Download returned success but no staged image was found for "
+                f"{source_filename}"
             )
         staged_path = max(staged_candidates, key=os.path.getmtime)
 
-        # Stage 5: validate, resize to 25/32 and save exactly one final output.
+        # Stage 6: validate, wash/resize to 25/32, and save one final image.
         try:
             hud.print("Validating and resizing image before saving...", "processing")
         except Exception:
@@ -19599,14 +19660,21 @@ def generate_google_flow_images():
         )
         output_filename = os.path.basename(output_path)
 
-        # Move the original reference only after the resized output is verified.
+        # Only the reference source is moved after the output is verified.
+        # The selected unique image is permanent and is never moved or modified.
         processed_filename = _move_reference_image_to_processed(
             source_path, processed_folder
         )
         print(
-            f"✅ [IMAGE-GENERATION] Completed {source_filename}; saved resized "
-            f"{output_filename}; original moved to processed/{processed_filename}."
+            f"✅ [IMAGE-GENERATION] Completed {mode_label} job for {source_filename}; "
+            f"saved resized {output_filename}; reference moved to "
+            f"processed/{processed_filename}."
         )
+        if mode == "unique":
+            print(
+                "🔒 [IMAGE-GENERATION] Permanent unique image remains in its "
+                f"unique folder: {unique_image_path}"
+            )
         try:
             hud.print(f"Saved resized image: {output_filename}", "success")
         except Exception:
@@ -19622,34 +19690,93 @@ def generate_google_flow_images():
         _release_image_render_anchor()
         return output_path
 
+    # Cache the randomly selected Unique image for the lifetime of this function
+    # invocation. Automatic retries therefore keep using the same permanent image.
+    selected_unique_image_state = {"author_key": None, "unique_folder": None, "path": None}
+
+    def _select_permanent_unique_image(unique_folder, author_value):
+        """Select one random image once per author/run and reuse it across retries/jobs."""
+        author_key = str(author_value).strip().casefold()
+        normalized_folder = os.path.normcase(os.path.abspath(unique_folder))
+        cached_path = selected_unique_image_state.get("path")
+
+        if (
+            selected_unique_image_state.get("author_key") == author_key
+            and selected_unique_image_state.get("unique_folder") == normalized_folder
+            and cached_path
+            and os.path.isfile(cached_path)
+        ):
+            print(
+                "♻️ [IMAGE-GENERATION] Reusing the same permanent Unique image "
+                f"for this operation: {os.path.basename(cached_path)}"
+            )
+            return cached_path
+
+        if not os.path.isdir(unique_folder):
+            abort_operation(f"Unique image folder does not exist: {unique_folder}")
+
+        unique_files = sorted(
+            [
+                os.path.join(unique_folder, name)
+                for name in os.listdir(unique_folder)
+                if os.path.isfile(os.path.join(unique_folder, name))
+                and os.path.splitext(name)[1].lower() in IMAGE_FILE_EXTENSIONS
+            ],
+            key=lambda path: os.path.basename(path).casefold(),
+        )
+        if not unique_files:
+            abort_operation(
+                f"Unique mode has no supported image files in: {unique_folder}"
+            )
+
+        selected_path = random.choice(unique_files)
+        selected_unique_image_state.update({
+            "author_key": author_key,
+            "unique_folder": normalized_folder,
+            "path": selected_path,
+        })
+        print(
+            "🎲 [IMAGE-GENERATION] Random permanent Unique image selected: "
+            f"{os.path.basename(selected_path)}"
+        )
+        return selected_path
+
     def _run_image_generation_batch(force_url_restart=False):
-        """Process every supported image file currently in the author's source-folder root."""
+        """Process every supported reference image using Reference or Unique mode."""
         data, record, dynamic, _, _ = _load_author_configuration()
         engine_value = str(dynamic.get("engine") or record.get("engine") or "").strip()
-        if engine_value.lower() != "image_generation":
+        if engine_value.casefold() != "image_generation":
             print(f"ℹ️ [IMAGE-GENERATION] Engine changed to '{engine_value}'; stopping this worker.")
             return "engine_changed"
 
         current_status = record.get("status", "pending")
         if dynamic.get("status"):
             current_status = dynamic.get("status")
-        if str(current_status).strip().lower() != "pending":
+        if str(current_status).strip().casefold() != "pending":
             print(f"ℹ️ [IMAGE-GENERATION] Status is '{current_status}', not pending; skipping.")
             return "not_pending"
 
-        # The folder author is dynamic_values.author (e.g. silverrose).
-        # Top-level author is only a fallback for older configuration records.
+        # The type value is deliberately case-insensitive. Missing values retain
+        # backwards compatibility by using the former single-reference workflow.
+        image_generation_type = str(
+            dynamic.get("image_generation_type")
+            or record.get("image_generation_type")
+            or "Reference"
+        ).strip()
+        mode_key = image_generation_type.casefold()
+        if mode_key not in ("reference", "unique"):
+            _set_author_final_status(
+                "error",
+                "dynamic_values.image_generation_type must be 'Reference' or 'Unique' "
+                f"(case-insensitive); received '{image_generation_type}'",
+            )
+            return "failed"
+        image_generation_type = "Unique" if mode_key == "unique" else "Reference"
+
+        # The author value controls all three folders beneath JPGSFOLDER.
         author_value = str(dynamic.get("author") or record.get("author") or "").strip()
         if not author_value:
             _set_author_final_status("error", "dynamic_values.author is missing or empty")
-            return "failed"
-
-        reference_flag = str(dynamic.get("reference_image", "")).strip().lower()
-        if reference_flag not in ("yes", "true", "1"):
-            _set_author_final_status(
-                "error",
-                "dynamic_values.reference_image must be 'yes' for this workflow",
-            )
             return "failed"
 
         prompt_text = dynamic.get("prompt") or record.get("prompt") or ""
@@ -19662,54 +19789,69 @@ def generate_google_flow_images():
             _set_author_final_status("error", "Global JPGSFOLDER is not defined")
             return "failed"
 
-        source_folder = os.path.join(str(jpgs_root), author_value)
-        ai_info_washed_folder = os.path.join(source_folder, "AI info washed")
-        processed_folder = os.path.join(source_folder, "processed")
+        author_folder = os.path.join(str(jpgs_root), author_value)
+        references_folder = os.path.join(author_folder, "references")
+        unique_folder = os.path.join(author_folder, "unique")
+        ai_info_washed_folder = os.path.join(author_folder, "AI info washed")
+        processed_folder = os.path.join(author_folder, "processed")
 
-        if not os.path.isdir(source_folder):
-            _set_author_final_status("error", f"Reference image folder does not exist: {source_folder}")
+        if not os.path.isdir(author_folder):
+            _set_author_final_status(
+                "error", f"Author folder does not exist: {author_folder}"
+            )
+            return "failed"
+        if not os.path.isdir(references_folder):
+            _set_author_final_status(
+                "error", f"Reference image folder does not exist: {references_folder}"
+            )
             return "failed"
 
         os.makedirs(ai_info_washed_folder, exist_ok=True)
         os.makedirs(processed_folder, exist_ok=True)
 
-        # Only files directly inside the author folder are new work. Files in
-        # AI info washed/, processed/ and the temporary staging folder are kept
-        # in subfolders, so they are not picked up again as new source images.
-        supported_image_extensions = {
-            ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"
-        }
-        image_files = sorted(
+        reference_files = sorted(
             [
-                name for name in os.listdir(source_folder)
-                if os.path.isfile(os.path.join(source_folder, name))
-                and os.path.splitext(name)[1].lower() in supported_image_extensions
+                name for name in os.listdir(references_folder)
+                if os.path.isfile(os.path.join(references_folder, name))
+                and os.path.splitext(name)[1].lower() in IMAGE_FILE_EXTENSIONS
             ],
             key=str.casefold,
         )
 
         print(f"📁 [IMAGE-GENERATION] Author value: {author_value}")
-        print(f"📁 [IMAGE-GENERATION] Source folder: {source_folder}")
+        print(f"🧭 [IMAGE-GENERATION] Image generation type: {image_generation_type}")
+        print(f"📁 [IMAGE-GENERATION] References folder: {references_folder}")
+        print(f"📁 [IMAGE-GENERATION] Unique folder: {unique_folder}")
         print(f"📁 [IMAGE-GENERATION] Resized outputs: {ai_info_washed_folder}")
-        print(f"📁 [IMAGE-GENERATION] Processed originals: {processed_folder}")
-        print(f"📊 [IMAGE-GENERATION] New image files found: {len(image_files)}")
+        print(f"📁 [IMAGE-GENERATION] Processed references: {processed_folder}")
+        print(f"📊 [IMAGE-GENERATION] Unprocessed reference images found: {len(reference_files)}")
 
-        if not image_files:
-            message = f"No new supported image files remain in {source_folder}; all source-root images have been processed"
+        if not reference_files:
+            message = (
+                f"No supported reference images remain in {references_folder}; "
+                "there is nothing left to process"
+            )
             _set_author_final_status("completed", message)
             return "completed"
+
+        unique_image_path = None
+        if image_generation_type == "Unique":
+            # A single random image is selected once and reused for every reference
+            # in this operation. It remains permanently in the unique/ folder.
+            unique_image_path = _select_permanent_unique_image(
+                unique_folder, author_value
+            )
 
         if not os.path.isdir(GUI_IMAGES):
             abort_operation(f"GUI_IMAGES path not found: {GUI_IMAGES}")
 
         _set_author_final_status(
             "pending",
-            f"Starting image_generation: {len(image_files)} image file(s) found in the author folder",
+            f"Starting {image_generation_type} image generation: "
+            f"{len(reference_files)} reference image(s) found",
         )
 
-        # Load the per-author persistent ratio tracker before opening the prompt.
-        # The selected ratio is always re-applied on a fresh/restarted workflow,
-        # so the browser UI cannot silently drift away from the recorded state.
+        # Preserve the existing per-author Nano Banana ratio rotation.
         ratio_state_path, ratio_state_data, ratio_author_state = (
             _load_nanobanana_ratio_state(jpgs_root, author_value, ai_info_washed_folder)
         )
@@ -19730,8 +19872,6 @@ def generate_google_flow_images():
         else:
             _ensure_image_generation_workspace(hwnd)
 
-        # Required initial step: configure Nano Banana before interacting with
-        # whatdoyouwantocreate or uploading the first reference image.
         _configure_nanobanana_ratio(
             hwnd,
             ratio_state_path,
@@ -19740,20 +19880,26 @@ def generate_google_flow_images():
             reason="batch start / resume",
         )
         try:
-            hud.print(f"Starting {len(image_files)} reference image(s)...", "success")
+            hud.print(
+                f"Starting {len(reference_files)} {image_generation_type} image job(s)...",
+                "success",
+            )
         except Exception:
             pass
 
         processed_this_run = 0
-        for index, filename in enumerate(image_files, start=1):
+        for index, filename in enumerate(reference_files, start=1):
             check_for_termination()
-            source_path = os.path.join(source_folder, filename)
+            source_path = os.path.join(references_folder, filename)
             if not os.path.isfile(source_path):
-                print(f"⏭️ [IMAGE-GENERATION] Source file is no longer present; skipping: {filename}")
+                print(
+                    "⏭️ [IMAGE-GENERATION] Reference file is no longer present; "
+                    f"skipping: {filename}"
+                )
                 continue
 
             update_operation_status(
-                f"Processing image {index}/{len(image_files)}: {filename}"
+                f"Processing {image_generation_type} image {index}/{len(reference_files)}: {filename}"
             )
             generated_output_path = _process_one_reference_image(
                 hwnd,
@@ -19761,18 +19907,22 @@ def generate_google_flow_images():
                 prompt_text,
                 ai_info_washed_folder,
                 processed_folder,
+                image_generation_type=image_generation_type,
+                unique_image_path=unique_image_path,
             )
             processed_this_run += 1
 
             # Handle any browser download confirmation after the output has been
-            # verified and the source has been moved to processed/.
+            # verified and the reference has been moved to processed/.
             try:
                 handle_webdownloadconfirmationmodal()
             except Exception as modal_error:
-                print(f"⚠️ [IMAGE-GENERATION] Modal check after download failed safely: {modal_error}")
+                print(
+                    "⚠️ [IMAGE-GENERATION] Modal check after download failed safely: "
+                    f"{modal_error}"
+                )
 
-            # A file counts only after _process_one_reference_image has verified
-            # the downloaded output and moved the original into processed/.
+            # Count only verified generated outputs, preserving the existing ratio cycle.
             ratio_changed = _record_image_and_advance_nanobanana_ratio(
                 ratio_state_path,
                 ratio_state_data,
@@ -19781,36 +19931,46 @@ def generate_google_flow_images():
                 generated_output_path,
             )
 
-            # The 20th image is completed with the old ratio. Only now select
-            # the next ratio, before allowing the next reference to be uploaded.
             if ratio_changed:
                 _configure_nanobanana_ratio(
                     hwnd,
                     ratio_state_path,
                     ratio_state_data,
                     ratio_author_state,
-                    reason=f"completed 20-image block at {ratio_author_state['last_completed_ratio_block']}",
+                    reason=(
+                        "completed 20-image block at "
+                        f"{ratio_author_state['last_completed_ratio_block']}"
+                    ),
                 )
 
         remaining_files = [
-            name for name in os.listdir(source_folder)
-            if os.path.isfile(os.path.join(source_folder, name))
-            and os.path.splitext(name)[1].lower() in supported_image_extensions
+            name for name in os.listdir(references_folder)
+            if os.path.isfile(os.path.join(references_folder, name))
+            and os.path.splitext(name)[1].lower() in IMAGE_FILE_EXTENSIONS
         ]
         if remaining_files:
-            # Do not report success if any source-root files remain unprocessed.
             _set_author_final_status(
                 "error",
-                f"Processed {processed_this_run} image(s), but {len(remaining_files)} source image(s) remain in the folder",
+                f"Processed {processed_this_run} image(s), but "
+                f"{len(remaining_files)} reference image(s) remain in {references_folder}",
             )
             return "failed"
 
+        unique_message = (
+            f" Permanent Unique image retained at {unique_image_path}."
+            if unique_image_path else ""
+        )
         _set_author_final_status(
             "completed",
-            f"Image generation completed: {processed_this_run} image(s) resized and saved to {ai_info_washed_folder}; original files moved to {processed_folder}",
+            f"{image_generation_type} image generation completed: {processed_this_run} "
+            f"image(s) resized and saved to {ai_info_washed_folder}; reference images "
+            f"moved to {processed_folder}.{unique_message}",
         )
         try:
-            hud.print("All reference images have been resized and saved.", "success")
+            hud.print(
+                f"All {image_generation_type} images have been resized and saved.",
+                "success",
+            )
         except Exception:
             pass
         return "completed"
@@ -19914,7 +20074,7 @@ def generate_google_flow_images():
                         pass
 
     if image_generation_mode:
-        print("🚀 [IMAGE-GENERATION] Running AUTHOR_PATH reference-image engine.")
+        print("🚀 [IMAGE-GENERATION] Running AUTHOR_PATH Reference / Unique image engine.")
         _run_image_generation_supervisor()
         return
 
@@ -19983,7 +20143,7 @@ def generate_google_flow_images():
             except Exception as reload_error:
                 print(f"⚠️ [SUPERVISOR] Could not refresh project configuration: {reload_error}")
                 _set_currently_running(
-                    "generate_google_flow_images()",
+                    "serenum_google_flow_images_generation_engine()",
                     status="pending",
                     operation_status=f"Waiting for a readable Google Flow project configuration: {reload_error}"
                 )
@@ -19993,7 +20153,7 @@ def generate_google_flow_images():
             if total_entries <= 0:
                 print("⚠️ [SUPERVISOR] No scene entries found; checking panel.json again in 3 seconds.")
                 _set_currently_running(
-                    "generate_google_flow_images()",
+                    "serenum_google_flow_images_generation_engine()",
                     status="pending",
                     operation_status="No scene entries found yet; waiting and retrying automatically"
                 )
@@ -20007,7 +20167,7 @@ def generate_google_flow_images():
                 f"project='{project_title}', scenes={total_entries}."
             )
             _set_currently_running(
-                "generate_google_flow_images()",
+                "serenum_google_flow_images_generation_engine()",
                 status="pending",
                 operation_status=f"Starting Google Flow workflow attempt {restart_number}"
             )
@@ -20023,7 +20183,7 @@ def generate_google_flow_images():
                 operation_status_flag = True
                 operation_aborted = False
                 _set_currently_running(
-                    "generate_google_flow_images()",
+                    "serenum_google_flow_images_generation_engine()",
                     status="pending",
                     operation_status=f"Automatic restart after: {restart_reason}"
                 )
@@ -20037,7 +20197,7 @@ def generate_google_flow_images():
                 operation_status_flag = True
                 operation_aborted = False
                 _set_currently_running(
-                    "generate_google_flow_images()",
+                    "serenum_google_flow_images_generation_engine()",
                     status="pending",
                     operation_status=f"Supervisor caught an error and will retry: {unexpected_error}"
                 )
@@ -20058,7 +20218,7 @@ def generate_google_flow_images():
                 operation_aborted = False
                 print("🔁 [SUPERVISOR] Ctrl+Shift+F12 arrived at the end of an attempt; starting a fresh attempt instead of accepting the old result.")
                 _set_currently_running(
-                    "generate_google_flow_images()",
+                    "serenum_google_flow_images_generation_engine()",
                     status="pending",
                     operation_status="Manual Ctrl+Shift+F12 restart requested"
                 )
@@ -20066,7 +20226,7 @@ def generate_google_flow_images():
 
             final_panel = _load_panel()
             final_running = str(_get_status_value(final_panel, "currently_running", "") or "").strip()
-            if final_running == "generate_google_flow_images_successful":
+            if final_running == "serenum_google_flow_images_generation_engine_successful":
                 print("✅ [SUPERVISOR] Workflow completed successfully; no restart is needed.")
                 break
 
@@ -20261,7 +20421,7 @@ def execute_engine():
         try:
             # Call csv_engine which handles the CSV pipeline
             print("execute_engine: Image Generation")
-            generate_google_flow_images()
+            serenum_google_flow_images_generation_engine()
             print("execute_engine: Image generation completed")
             
 
