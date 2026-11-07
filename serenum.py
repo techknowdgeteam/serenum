@@ -15129,14 +15129,16 @@ def serenum_google_flow_images_generation_engine():
     Generates images using Google Flow via GUI automation with pyautogui image recognition.
     Also supports AUTHOR_PATH dynamic_values.engine values such as "image_generation",
     "image generation", and "image-generation" (case-insensitive and punctuation-agnostic).
-    Every image_generation run downloads its source images from the configured URL lists:
-    reference_image_url_source is refreshed into JPGSFOLDER/<author>/references/;
-    Unique mode also refreshes unique_image_url_source into JPGSFOLDER/<author>/unique/.
-    Existing source images in the relevant folders are removed before these downloads.
-    In Unique mode, one random downloaded unique image is selected and uploaded before
-    each reference image; that selected unique image is reused for the operation and never
-    moved. In Reference mode, only each reference image is uploaded. Successfully processed
-    reference images are moved to JPGSFOLDER/<author>/processed/ after verification.
+    Source files are tracked by two simple URL/filename JSON arrays:
+      unique/downloaded_unique.json
+      references/reference_downloaded image.json
+    On every start, recorded files are verified and reused; only unrecognized image files
+    without a filename record are removed. Missing/corrupt tracked files are redownloaded
+    using their recorded filename. No tracked source image is cleared or moved.
+    AI info washed/processed_image_records.json records each reference URL, selected unique
+    URL (when applicable), and verified output filename. Completed URL pairs are skipped
+    after restarts as long as their saved output still exists and validates. In Unique mode,
+    one randomly selected unique image is persisted and reused across restarts.
     The prompt is read from dynamic_values.image_generation_prompt (legacy prompt is a fallback).
     Each downloaded result is resized to 25/32 of its original dimensions and saved
     as exactly one image in the author's "AI info washed" folder. No original-copy,
@@ -15859,16 +15861,16 @@ def serenum_google_flow_images_generation_engine():
                 dynamic_status = author_initial_dynamic.get("status")
                 if dynamic_status:
                     author_status = dynamic_status
-                if str(author_status).strip().lower() != "pending":
+                if str(author_status).strip().lower() not in ("pending", "error"):
                     print(
                         f"ℹ️ [IMAGE-GENERATION] Skipping because AUTHOR_PATH status is "
-                        f"'{author_status}'. This engine only runs when status is 'pending'."
+                        f"'{author_status}'. This engine runs when status is 'pending' or 'error'."
                     )
                     return
                 panel_data = {}
                 print(
-                    "✅ [ENGINE] AUTHOR_PATH dynamic_values.engine is 'image_generation'; "
-                    "starting author image-generation mode (Reference / Unique)."
+                    "✅ [ENGINE] AUTHOR_PATH dynamic_values.engine matches image_generation "
+                    "(case/punctuation-insensitive); starting author image-generation mode."
                 )
             else:
                 if not os.path.exists(PANEL_PATH):
@@ -18816,29 +18818,6 @@ def serenum_google_flow_images_generation_engine():
             os.fsync(handle.fileno())
         os.replace(temp_path, author_path)
 
-    def _move_reference_image_to_processed(source_path, processed_folder):
-        """Move a successfully replicated original into the processed subfolder."""
-        import shutil
-
-        if not os.path.isfile(source_path):
-            raise FileNotFoundError(f"Original reference image disappeared before processing move: {source_path}")
-
-        os.makedirs(processed_folder, exist_ok=True)
-        source_filename = os.path.basename(source_path)
-        stem, extension = os.path.splitext(source_filename)
-        destination_path = os.path.join(processed_folder, source_filename)
-        suffix = 2
-        while os.path.exists(destination_path):
-            destination_path = os.path.join(processed_folder, f"{stem}_{suffix}{extension}")
-            suffix += 1
-
-        shutil.move(source_path, destination_path)
-        if not os.path.isfile(destination_path) or os.path.getsize(destination_path) <= 0:
-            raise IOError(f"Could not verify original image in processed folder: {destination_path}")
-
-        print(f"📦 [IMAGE-GENERATION] Original moved to processed: {destination_path}")
-        return os.path.basename(destination_path)
-
     def _set_author_final_status(status_value, message):
         data, record, dynamic, _, _ = _load_author_configuration()
         normalized_status = str(status_value or "pending").strip().lower()
@@ -19066,9 +19045,18 @@ def serenum_google_flow_images_generation_engine():
         return True
 
     def _record_image_and_advance_nanobanana_ratio(
-        state_path, state_data, author_state, source_filename, output_path
+        state_path, state_data, author_state, source_filename, output_path,
+        source_job_id=None,
     ):
-        """Count a verified download; rotate ratio after each complete 20-image block."""
+        """Count a verified download exactly once; rotate after each 20-image block."""
+        recorded_jobs = author_state.setdefault("recorded_source_jobs", [])
+        if source_job_id and source_job_id in recorded_jobs:
+            print(
+                "♻️ [NANOBANANA] Ratio counter already includes this manifest job; "
+                f"not counting it twice ({source_filename})."
+            )
+            return False
+
         current_index = int(author_state["ratio_index"])
         current_config = NANOBANANA_RATIO_CYCLE[current_index]
         author_state["total_generated"] = int(author_state.get("total_generated", 0)) + 1
@@ -19080,6 +19068,8 @@ def serenum_google_flow_images_generation_engine():
         author_state["last_generated_filename"] = os.path.basename(output_path)
         author_state["last_generated_path"] = output_path
         author_state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if source_job_id:
+            recorded_jobs.append(source_job_id)
 
         switched = False
         if author_state["images_in_current_ratio_batch"] >= NANOBANANA_BATCH_SIZE:
@@ -19208,8 +19198,10 @@ def serenum_google_flow_images_generation_engine():
         abort_operation("Google Flow did not reach the prompt workspace")
         return False
 
-    def _paste_reference_image_and_wait_for_upload(hwnd, reference_path, job_name):
-        """Paste one JPG, require the upload progress indicator, and wait for it to finish."""
+    def _paste_reference_image_and_wait_for_upload(
+        hwnd, reference_path, job_name, upload_kind="reference"
+    ):
+        """Paste one image and show the correct Unique/Reference HUD label."""
         check_for_termination()
         enforce_window_focus(hwnd)
         input_location = find_whatdoyouwantocreate_with_fallbacks(
@@ -19225,12 +19217,18 @@ def serenum_google_flow_images_generation_engine():
         pyautogui.hotkey("ctrl", "v")
         _sleep(0.4)
 
+        upload_label = (
+            "Uploading unique character image"
+            if str(upload_kind).strip().casefold() == "unique"
+            else "Uploading reference image"
+        )
         try:
-            hud.print(f"File uploading... {os.path.basename(reference_path)}", "uploading")
+            hud.print(upload_label, "uploading")
         except Exception:
             pass
         update_operation_status(
-            f"File uploading: {os.path.basename(reference_path)}; waiting for imagerenderingprogress.png"
+            f"{upload_label}: {os.path.basename(reference_path)}; "
+            "waiting for imagerenderingprogress.png"
         )
 
         upload_complete = wait_for_imagerenderingprogress_and_jump_to_search(
@@ -19238,7 +19236,7 @@ def serenum_google_flow_images_generation_engine():
             job_name,
             max_wait_seconds=STAGE_TIMEOUT_SECONDS,
             check_interval=0.35,
-            phase_label="File uploading",
+            phase_label=upload_label,
         )
         if not upload_complete:
             abort_operation(
@@ -19533,6 +19531,12 @@ def serenum_google_flow_images_generation_engine():
         processed_folder,
         image_generation_type="Reference",
         unique_image_path=None,
+        reference_url=None,
+        unique_url=None,
+        unique_filename=None,
+        prompt_sha256="",
+        processed_records_path=None,
+        processed_job_id=None,
     ):
         """Generate one output from a reference, optionally preceded by a permanent unique image."""
         mode = str(image_generation_type or "Reference").strip().casefold()
@@ -19568,7 +19572,7 @@ def serenum_google_flow_images_generation_engine():
         print(f"🖼️ [IMAGE-GENERATION] Reference image: {source_filename}")
         print(f"📁 [IMAGE-GENERATION] Resized output folder: {ai_info_washed_folder}")
         print(f"📁 [IMAGE-GENERATION] Temporary download folder: {staging_folder}")
-        print(f"📁 [IMAGE-GENERATION] Processed references folder: {processed_folder}")
+        print(f"📁 [IMAGE-GENERATION] Source references remain in their tracked folder; output records are written to AI info washed.")
         print("=" * 72)
 
         # Stage 1 (Unique mode only): upload the permanent unique image FIRST.
@@ -19577,11 +19581,11 @@ def serenum_google_flow_images_generation_engine():
         if mode == "unique":
             unique_job_name = f"{safe_stem}_{safe_extension}_unique_upload"
             update_operation_status(
-                f"Uploading permanent unique image {os.path.basename(unique_image_path)} "
+                f"Uploading unique character image {os.path.basename(unique_image_path)} "
                 f"before reference {source_filename}"
             )
             _paste_reference_image_and_wait_for_upload(
-                hwnd, unique_image_path, unique_job_name
+                hwnd, unique_image_path, unique_job_name, upload_kind="unique"
             )
             print(
                 "✅ [IMAGE-GENERATION] Permanent unique image upload confirmed; "
@@ -19590,7 +19594,9 @@ def serenum_google_flow_images_generation_engine():
 
         # Stage 2: upload the reference image. In Reference mode this is the only
         # image upload; in Unique mode it is the second upload in the required pair.
-        _paste_reference_image_and_wait_for_upload(hwnd, source_path, job_name)
+        _paste_reference_image_and_wait_for_upload(
+            hwnd, source_path, job_name, upload_kind="reference"
+        )
         if mode == "unique":
             print(
                 "✅ [IMAGE-GENERATION] Both uploads confirmed: unique image + "
@@ -19668,15 +19674,27 @@ def serenum_google_flow_images_generation_engine():
         )
         output_filename = os.path.basename(output_path)
 
-        # Only the reference source is moved after the output is verified.
-        # The selected unique image is permanent and is never moved or modified.
-        processed_filename = _move_reference_image_to_processed(
-            source_path, processed_folder
-        )
+        # Commit the URL pair immediately after the output has been validated and
+        # saved. This closes the restart window that previously caused repeated
+        # generations when the browser or Python process restarted.
+        if processed_records_path and processed_job_id:
+            _record_processed_image_pair(
+                processed_records_path=processed_records_path,
+                job_id=processed_job_id,
+                mode=mode_label,
+                reference_url=reference_url or "",
+                reference_filename=source_filename,
+                unique_url=unique_url if mode == "unique" else None,
+                unique_filename=unique_filename if mode == "unique" else None,
+                prompt_sha256=prompt_sha256 or "",
+                output_path=output_path,
+            )
+
+        # Keep the original reference permanently in references/. The manifest,
+        # rather than moving/deleting this source file, records its completed output.
         print(
             f"✅ [IMAGE-GENERATION] Completed {mode_label} job for {source_filename}; "
-            f"saved resized {output_filename}; reference moved to "
-            f"processed/{processed_filename}."
+            f"saved resized {output_filename}; original source retained in references/."
         )
         if mode == "unique":
             print(
@@ -19698,64 +19716,36 @@ def serenum_google_flow_images_generation_engine():
         _release_image_render_anchor()
         return output_path
 
-    # Cache the randomly selected Unique image for the lifetime of this function
-    # invocation. Automatic retries therefore keep using the same permanent image.
+    # ------------------------------------------------------------------
+    # Durable URL -> filename records and processed-output records.
+    # Source manifests are intentionally kept as simple JSON arrays containing
+    # only {"url": ..., "filename": ...}, as requested.
+    # ------------------------------------------------------------------
     selected_unique_image_state = {"author_key": None, "unique_folder": None, "path": None}
+    processed_records_state = {"path": None, "data": None}
 
-    def _select_permanent_unique_image(unique_folder, author_value):
-        """Select one random image once per author/run and reuse it across retries/jobs."""
-        author_key = str(author_value).strip().casefold()
-        normalized_folder = os.path.normcase(os.path.abspath(unique_folder))
-        cached_path = selected_unique_image_state.get("path")
+    UNIQUE_DOWNLOAD_RECORD_FILENAME = "downloaded_unique.json"
+    REFERENCE_DOWNLOAD_RECORD_FILENAME = "reference_downloaded image.json"
+    SELECTED_UNIQUE_RECORD_FILENAME = "selected_unique_image.json"
+    PROCESSED_OUTPUT_RECORD_FILENAME = "processed_image_records.json"
+    LEGACY_SOURCE_MANIFEST_FILENAME = "source_image_manifest.json"
 
-        if (
-            selected_unique_image_state.get("author_key") == author_key
-            and selected_unique_image_state.get("unique_folder") == normalized_folder
-            and cached_path
-            and os.path.isfile(cached_path)
-        ):
-            print(
-                "♻️ [IMAGE-GENERATION] Reusing the same permanent Unique image "
-                f"for this operation: {os.path.basename(cached_path)}"
-            )
-            return cached_path
+    def _manifest_timestamp():
+        return time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        if not os.path.isdir(unique_folder):
-            abort_operation(f"Unique image folder does not exist: {unique_folder}")
-
-        unique_files = sorted(
-            [
-                os.path.join(unique_folder, name)
-                for name in os.listdir(unique_folder)
-                if os.path.isfile(os.path.join(unique_folder, name))
-                and os.path.splitext(name)[1].lower() in IMAGE_FILE_EXTENSIONS
-            ],
-            key=lambda path: os.path.basename(path).casefold(),
-        )
-        if not unique_files:
-            abort_operation(
-                f"Unique mode has no supported image files in: {unique_folder}"
-            )
-
-        selected_path = random.choice(unique_files)
-        selected_unique_image_state.update({
-            "author_key": author_key,
-            "unique_folder": normalized_folder,
-            "path": selected_path,
-        })
-        print(
-            "🎲 [IMAGE-GENERATION] Random permanent Unique image selected: "
-            f"{os.path.basename(selected_path)}"
-        )
-        return selected_path
-
-    # The URL source download is a one-time setup per in-memory workflow run.
-    # Automatic/manual retries retain the downloaded source files and therefore do
-    # not erase images that are already queued or resume from the middle of a batch.
-    source_download_state = {"signature": None, "complete": False}
+    def _atomic_write_json(file_path, payload):
+        directory = os.path.dirname(file_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        temporary_path = file_path + ".tmp"
+        with open(temporary_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=4, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, file_path)
 
     def _read_image_url_list(dynamic, record, field_name):
-        """Read a URL field as a clean list, accepting either a string or string list."""
+        """Read URL values as a de-duplicated, ordered list of HTTP(S) URLs."""
         value = _find_field(dynamic, (field_name,))
         if value in (None, "", [], {}):
             value = _find_field(record, (field_name,))
@@ -19769,6 +19759,7 @@ def serenum_google_flow_images_generation_engine():
             raise ValueError(f"{field_name} must be a URL string or a list of URL strings")
 
         urls = []
+        seen = set()
         for index, item in enumerate(values, start=1):
             if not isinstance(item, str) or not item.strip():
                 continue
@@ -19777,29 +19768,146 @@ def serenum_google_flow_images_generation_engine():
                 raise ValueError(
                     f"{field_name}[{index}] must start with http:// or https://; received: {url!r}"
                 )
-            urls.append(url)
+            if url not in seen:
+                urls.append(url)
+                seen.add(url)
         return urls
 
-    def _clear_source_image_folder(folder):
-        """Delete existing image files and stale partial downloads, preserving other files."""
+    def _is_valid_image_file(image_path):
+        """Return True only when a non-empty file can be decoded as an image."""
+        if not image_path or not os.path.isfile(image_path):
+            return False
+        try:
+            if os.path.getsize(image_path) <= 0:
+                return False
+            from PIL import Image
+            with Image.open(image_path) as image_file:
+                if image_file.width <= 0 or image_file.height <= 0:
+                    return False
+                image_file.verify()
+            return True
+        except Exception:
+            return False
+
+    def _load_download_records(records_path, label):
+        """Load a source URL/filename array without silently resetting a corrupt file."""
+        if not os.path.isfile(records_path):
+            return [], False
+        try:
+            with open(records_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception as exc:
+            raise RuntimeError(f"Could not read {label} download records {records_path}: {exc}") from exc
+        if not isinstance(payload, list):
+            raise ValueError(f"{label} download records must be a JSON array: {records_path}")
+
+        records = []
+        seen_urls = set()
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            filename = os.path.basename(str(item.get("filename") or "").strip())
+            if not url or not filename or url in seen_urls:
+                continue
+            records.append({"url": url, "filename": filename})
+            seen_urls.add(url)
+        return records, True
+
+    def _load_legacy_source_records(author_folder, category):
+        """Read old source_image_manifest.json entries for a safe one-time migration."""
+        legacy_path = os.path.join(author_folder, LEGACY_SOURCE_MANIFEST_FILENAME)
+        if not os.path.isfile(legacy_path):
+            return []
+        try:
+            with open(legacy_path, "r", encoding="utf-8") as handle:
+                legacy = json.load(handle)
+        except Exception as exc:
+            print(f"⚠️ [IMAGE-GENERATION] Legacy source manifest could not be read: {exc}")
+            return []
+        sources = legacy.get("sources", {}) if isinstance(legacy, dict) else {}
+        bucket = sources.get(category, []) if isinstance(sources, dict) else []
+        migrated = []
+        if isinstance(bucket, list):
+            for item in bucket:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "").strip()
+                filename = os.path.basename(str(item.get("filename") or "").strip())
+                if url and filename:
+                    migrated.append({"url": url, "filename": filename})
+        return migrated
+
+    def _merge_download_records(existing_records, legacy_records):
+        """Retain existing records and append missing URL entries from the legacy tracker."""
+        result = list(existing_records)
+        known_urls = {str(item.get("url") or "").strip() for item in result}
+        for item in legacy_records:
+            url = str(item.get("url") or "").strip()
+            filename = os.path.basename(str(item.get("filename") or "").strip())
+            if url and filename and url not in known_urls:
+                result.append({"url": url, "filename": filename})
+                known_urls.add(url)
+        return result
+
+    def _save_download_records(records_path, records):
+        """Persist only the simple URL/filename pairs in a stable JSON array."""
+        clean_records = []
+        seen_urls = set()
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            filename = os.path.basename(str(item.get("filename") or "").strip())
+            if not url or not filename or url in seen_urls:
+                continue
+            clean_records.append({"url": url, "filename": filename})
+            seen_urls.add(url)
+        _atomic_write_json(records_path, clean_records)
+
+    def _delete_unrecognized_source_images(folder, records, label):
+        """Delete only image files whose filename has no record in that folder's JSON."""
         os.makedirs(folder, exist_ok=True)
-        removed = 0
+        recognized = {
+            os.path.normcase(os.path.basename(str(item.get("filename") or "")))
+            for item in records
+            if isinstance(item, dict) and str(item.get("filename") or "").strip()
+        }
+        removed_images = 0
+        removed_partials = 0
         for filename in os.listdir(folder):
             full_path = os.path.join(folder, filename)
             if not os.path.isfile(full_path):
                 continue
-            is_image = os.path.splitext(filename)[1].casefold() in IMAGE_FILE_EXTENSIONS
-            is_partial = filename.casefold().endswith(".part")
-            if is_image or is_partial:
+            extension = os.path.splitext(filename)[1].casefold()
+            if extension in IMAGE_FILE_EXTENSIONS:
+                if os.path.normcase(filename) not in recognized:
+                    try:
+                        os.remove(full_path)
+                        removed_images += 1
+                        print(
+                            f"🧹 [IMAGE-GENERATION] Removed unrecognized {label} image "
+                            f"(no filename record): {filename}"
+                        )
+                    except OSError as exc:
+                        raise OSError(f"Could not remove unrecognized source image {full_path}: {exc}") from exc
+            elif filename.casefold().endswith(".part"):
+                # A .part file is an interrupted download, never a completed source image.
                 try:
                     os.remove(full_path)
-                    removed += 1
+                    removed_partials += 1
                 except OSError as exc:
-                    raise OSError(f"Could not remove old source file {full_path}: {exc}") from exc
-        print(f"🧹 [IMAGE-GENERATION] Cleared {removed} existing image/partial file(s) from {folder}")
+                    raise OSError(f"Could not remove stale partial download {full_path}: {exc}") from exc
+        if removed_images or removed_partials:
+            print(
+                f"🧹 [IMAGE-GENERATION] {label}: removed {removed_images} unrecognized image(s) "
+                f"and {removed_partials} stale partial file(s). Tracked files were preserved."
+            )
 
-    def _download_one_source_image(url, destination_folder, label, index):
-        """Download and verify one HTTP(S) image, using its real image format for extension."""
+    def _download_one_source_image(
+        url, destination_folder, label, index, preferred_filename=None
+    ):
+        """Download and verify an image, reusing the saved filename when replacing a missing file."""
         import urllib.request
         import urllib.parse
 
@@ -19808,6 +19916,7 @@ def serenum_google_flow_images_generation_engine():
         except ImportError as exc:
             raise RuntimeError("Pillow is required to verify downloaded source images") from exc
 
+        os.makedirs(destination_folder, exist_ok=True)
         request = urllib.request.Request(
             url,
             headers={
@@ -19821,7 +19930,9 @@ def serenum_google_flow_images_generation_engine():
         if not raw_name:
             raw_name = f"{label}_{index:03d}"
         raw_stem = os.path.splitext(raw_name)[0] or f"{label}_{index:03d}"
-        temp_path = os.path.join(destination_folder, f".{label}_{index:03d}_{int(time.time() * 1000)}.part")
+        temp_path = os.path.join(
+            destination_folder, f".{label}_{index:03d}_{time.time_ns()}.part"
+        )
         last_error = None
 
         for attempt in range(1, 4):
@@ -19847,18 +19958,15 @@ def serenum_google_flow_images_generation_engine():
 
                 if total_bytes <= 0 or not os.path.isfile(temp_path):
                     raise IOError("The URL returned an empty image file")
-
                 with Image.open(temp_path) as downloaded_image:
                     actual_format = str(downloaded_image.format or "").upper()
+                    if downloaded_image.width <= 0 or downloaded_image.height <= 0:
+                        raise ValueError("Downloaded image has invalid dimensions")
                     downloaded_image.verify()
 
                 format_extensions = {
-                    "JPEG": ".jpg",
-                    "JPG": ".jpg",
-                    "PNG": ".png",
-                    "WEBP": ".webp",
-                    "BMP": ".bmp",
-                    "GIF": ".gif",
+                    "JPEG": ".jpg", "JPG": ".jpg", "PNG": ".png",
+                    "WEBP": ".webp", "BMP": ".bmp", "GIF": ".gif",
                     "TIFF": ".tiff",
                 }
                 extension = format_extensions.get(actual_format)
@@ -19867,16 +19975,27 @@ def serenum_google_flow_images_generation_engine():
                         f"Unsupported downloaded image format '{actual_format}' from {url}"
                     )
 
-                destination_name = f"{raw_stem}{extension}"
-                destination_path = os.path.join(destination_folder, destination_name)
-                suffix = 2
-                while os.path.exists(destination_path):
-                    destination_name = f"{raw_stem}_{suffix}{extension}"
+                if preferred_filename:
+                    preferred_name = os.path.basename(preferred_filename)
+                    preferred_stem = os.path.splitext(preferred_name)[0]
+                    preferred_extension = os.path.splitext(preferred_name)[1].lower()
+                    destination_name = (
+                        preferred_name if preferred_extension == extension
+                        else f"{preferred_stem}{extension}"
+                    )
+                else:
+                    destination_name = f"{label}_{index:03d}_{raw_stem}{extension}"
+                    stem, ext = os.path.splitext(destination_name)
                     destination_path = os.path.join(destination_folder, destination_name)
-                    suffix += 1
+                    suffix = 2
+                    while os.path.exists(destination_path):
+                        destination_name = f"{stem}_{suffix}{ext}"
+                        destination_path = os.path.join(destination_folder, destination_name)
+                        suffix += 1
 
+                destination_path = os.path.join(destination_folder, destination_name)
                 os.replace(temp_path, destination_path)
-                if not os.path.isfile(destination_path) or os.path.getsize(destination_path) <= 0:
+                if not _is_valid_image_file(destination_path):
                     raise IOError(f"Downloaded image could not be verified at {destination_path}")
 
                 print(
@@ -19900,94 +20019,422 @@ def serenum_google_flow_images_generation_engine():
                 )
                 if attempt < 3:
                     _sleep(1.0)
-
         raise RuntimeError(f"Could not download image URL {url}: {last_error}")
 
-    def _download_author_source_images(
-        author_folder,
-        references_folder,
-        unique_folder,
-        mode,
-        reference_urls,
-        unique_urls,
-        author_value,
+    def _sync_source_folder_from_urls(
+        author_folder, destination_folder, category, urls, records_filename
     ):
-        """Refresh source folders from URL configuration before any Google Flow work."""
-        mode_key = str(mode).strip().casefold()
-        signature_payload = {
-            "author": str(author_value),
-            "mode": mode_key,
-            "references": list(reference_urls),
-            "unique": list(unique_urls) if mode_key == "unique" else [],
-        }
-        signature = json.dumps(signature_payload, sort_keys=True, ensure_ascii=False)
+        """Verify prior URL downloads, prune only unrecorded images, then fetch missing URLs."""
+        os.makedirs(destination_folder, exist_ok=True)
+        records_path = os.path.join(destination_folder, records_filename)
+        records, existed = _load_download_records(records_path, category)
+        legacy_records = _load_legacy_source_records(author_folder, category)
+        merged_records = _merge_download_records(records, legacy_records)
+        if not existed or len(merged_records) != len(records):
+            _save_download_records(records_path, merged_records)
+            records = merged_records
 
-        if source_download_state.get("complete") and source_download_state.get("signature") == signature:
-            print(
-                "♻️ [IMAGE-GENERATION] Source URL downloads already completed for this "
-                "workflow; preserving remaining files for retry/resume."
+        # First remove only images which are not represented in this folder's JSON.
+        _delete_unrecognized_source_images(destination_folder, records, category)
+
+        active_entries = []
+        for index, url in enumerate(urls, start=1):
+            check_for_termination()
+            entry = next(
+                (item for item in records if str(item.get("url") or "").strip() == url),
+                None,
             )
-            return
+            if entry is None:
+                entry = {"url": url, "filename": ""}
+                records.append(entry)
 
-        os.makedirs(author_folder, exist_ok=True)
-        _clear_source_image_folder(references_folder)
-        if mode_key == "unique":
-            _clear_source_image_folder(unique_folder)
-
-        # Unique sources are downloaded first, exactly as the Unique upload sequence
-        # expects; all reference URLs are downloaded immediately afterwards.
-        if mode_key == "unique":
-            if not unique_urls:
-                raise ValueError(
-                    "Unique mode requires at least one URL in dynamic_values.unique_image_url_source"
+            filename = os.path.basename(str(entry.get("filename") or "").strip())
+            existing_path = os.path.join(destination_folder, filename) if filename else None
+            if existing_path and _is_valid_image_file(existing_path):
+                print(
+                    f"♻️ [IMAGE-GENERATION] Reusing verified {category} image "
+                    f"{index}/{len(urls)}: {filename}"
                 )
-            print(
-                f"🌐 [IMAGE-GENERATION] Downloading {len(unique_urls)} unique source image(s) "
-                f"into {unique_folder}..."
-            )
-            for index, url in enumerate(unique_urls, start=1):
-                _download_one_source_image(url, unique_folder, "unique", index)
+            else:
+                if filename:
+                    print(
+                        f"⚠️ [IMAGE-GENERATION] Recorded {category} image is missing or invalid; "
+                        f"redownloading the same URL as {filename}."
+                    )
+                else:
+                    print(
+                        f"🌐 [IMAGE-GENERATION] Downloading new {category} URL "
+                        f"{index}/{len(urls)}..."
+                    )
+                downloaded_path = _download_one_source_image(
+                    url,
+                    destination_folder,
+                    category,
+                    index,
+                    preferred_filename=filename or None,
+                )
+                new_filename = os.path.basename(downloaded_path)
+                old_filename = filename
+                entry["filename"] = new_filename
+                if old_filename and old_filename != new_filename:
+                    print(
+                        f"ℹ️ [IMAGE-GENERATION] Source format changed; filename updated "
+                        f"from {old_filename} to {new_filename}."
+                    )
+                # Save immediately after each verified download. A stop/restart on
+                # the next image cannot cause this successful download to repeat.
+                _save_download_records(records_path, records)
 
-        if not reference_urls:
-            raise ValueError(
-                "At least one URL is required in dynamic_values.reference_image_url_source"
-            )
-        print(
-            f"🌐 [IMAGE-GENERATION] Downloading {len(reference_urls)} reference source image(s) "
-            f"into {references_folder}..."
-        )
-        for index, url in enumerate(reference_urls, start=1):
-            _download_one_source_image(url, references_folder, "reference", index)
+            entry["url"] = url
+            entry["filename"] = os.path.basename(str(entry.get("filename") or ""))
+            active_entries.append({"url": url, "filename": entry["filename"]})
 
-        downloaded_references = [
-            name for name in os.listdir(references_folder)
-            if os.path.isfile(os.path.join(references_folder, name))
-            and os.path.splitext(name)[1].casefold() in IMAGE_FILE_EXTENSIONS
-        ]
-        if len(downloaded_references) != len(reference_urls):
-            raise RuntimeError(
-                f"Downloaded {len(downloaded_references)} of {len(reference_urls)} reference images"
-            )
-
-        if mode_key == "unique":
-            downloaded_unique = [
-                name for name in os.listdir(unique_folder)
-                if os.path.isfile(os.path.join(unique_folder, name))
-                and os.path.splitext(name)[1].casefold() in IMAGE_FILE_EXTENSIONS
-            ]
-            if len(downloaded_unique) != len(unique_urls):
+        # Persist any migration/update and remove only now-unrecognized stale images.
+        _save_download_records(records_path, records)
+        _delete_unrecognized_source_images(destination_folder, records, category)
+        verified_active = []
+        for item in active_entries:
+            full_path = os.path.join(destination_folder, item["filename"])
+            if not _is_valid_image_file(full_path):
                 raise RuntimeError(
-                    f"Downloaded {len(downloaded_unique)} of {len(unique_urls)} unique images"
+                    f"{category.title()} source image failed final validation: {full_path}"
+                )
+            verified_active.append(item)
+        print(
+            f"✅ [IMAGE-GENERATION] {category.title()} source sync complete: "
+            f"{len(verified_active)}/{len(urls)} configured URL(s) verified. "
+            f"Record: {records_path}"
+        )
+        return verified_active
+
+    def _save_selected_unique_record(file_path, payload):
+        _atomic_write_json(file_path, payload)
+
+    def _select_permanent_unique_image(unique_folder, unique_entries, author_value):
+        """Persist one random URL-backed unique image and reuse it after every restart."""
+        if not unique_entries:
+            abort_operation("Unique mode requires at least one downloaded unique image")
+        selected_path = os.path.join(unique_folder, SELECTED_UNIQUE_RECORD_FILENAME)
+        active_by_url = {item["url"]: item for item in unique_entries}
+        selected = None
+        if os.path.isfile(selected_path):
+            try:
+                with open(selected_path, "r", encoding="utf-8") as handle:
+                    candidate = json.load(handle)
+                if isinstance(candidate, dict):
+                    candidate_url = str(candidate.get("url") or "")
+                    candidate_filename = os.path.basename(str(candidate.get("filename") or ""))
+                    if candidate_url in active_by_url:
+                        candidate_file = os.path.join(unique_folder, candidate_filename)
+                        if (
+                            candidate_filename == active_by_url[candidate_url]["filename"]
+                            and _is_valid_image_file(candidate_file)
+                        ):
+                            selected = {
+                                "url": candidate_url,
+                                "filename": candidate_filename,
+                            }
+            except Exception as exc:
+                print(
+                    f"⚠️ [IMAGE-GENERATION] Could not read selected unique image record; "
+                    f"a new selection will be saved: {exc}"
                 )
 
-        source_download_state.update({"signature": signature, "complete": True})
-        print(
-            "✅ [IMAGE-GENERATION] All source URL images downloaded and verified before "
-            "starting Google Flow generation."
+        if selected is None:
+            selected = random.choice(unique_entries)
+            _save_selected_unique_record(
+                selected_path,
+                {
+                    "url": selected["url"],
+                    "filename": selected["filename"],
+                    "selected_at": _manifest_timestamp(),
+                    "author": str(author_value),
+                },
+            )
+            print(
+                "🎲 [IMAGE-GENERATION] Selected and saved a random Unique image: "
+                f"{selected['filename']}"
+            )
+        else:
+            print(
+                "♻️ [IMAGE-GENERATION] Reusing the previously selected Unique image: "
+                f"{selected['filename']}"
+            )
+
+        selected_full_path = os.path.join(unique_folder, selected["filename"])
+        selected_unique_image_state.update({
+            "author_key": str(author_value).strip().casefold(),
+            "unique_folder": os.path.normcase(os.path.abspath(unique_folder)),
+            "path": selected_full_path,
+        })
+        return selected, selected_full_path
+
+    def _prompt_fingerprint(prompt_text):
+        import hashlib
+        return hashlib.sha256(str(prompt_text).encode("utf-8")).hexdigest()
+
+    def _processed_job_identity(mode, reference_url, unique_url, prompt_sha256):
+        import hashlib
+        identity = json.dumps(
+            {
+                "mode": str(mode).casefold(),
+                "reference_url": str(reference_url or ""),
+                "unique_url": str(unique_url or ""),
+                "prompt_sha256": str(prompt_sha256 or ""),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
         )
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    def _legacy_output_path(author_folder, ai_info_washed_folder, item):
+        raw = str(item.get("output_path") or "").strip()
+        if raw:
+            candidate = raw if os.path.isabs(raw) else os.path.join(author_folder, raw)
+            candidate = os.path.normpath(candidate)
+            try:
+                if os.path.commonpath([
+                    os.path.abspath(author_folder), os.path.abspath(candidate)
+                ]) == os.path.abspath(author_folder):
+                    return candidate
+            except Exception:
+                pass
+        filename = os.path.basename(str(item.get("output_filename") or "").strip())
+        return os.path.join(ai_info_washed_folder, filename) if filename else None
+
+    def _load_processed_image_records(
+        records_path, author_folder, ai_info_washed_folder
+    ):
+        """Load the output ledger and migrate verified completions from the older manifest."""
+        if os.path.isfile(records_path):
+            try:
+                with open(records_path, "r", encoding="utf-8") as handle:
+                    records = json.load(handle)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not read processed-image records {records_path}: {exc}"
+                ) from exc
+            if not isinstance(records, list):
+                raise ValueError(
+                    f"Processed-image records must be a JSON array: {records_path}"
+                )
+        else:
+            records = []
+
+        # Backward compatibility: transfer finished jobs from the prior
+        # source_image_manifest.json without repeating valid generated images.
+        legacy_path = os.path.join(author_folder, LEGACY_SOURCE_MANIFEST_FILENAME)
+        migrated = False
+        if os.path.isfile(legacy_path):
+            try:
+                with open(legacy_path, "r", encoding="utf-8") as handle:
+                    legacy = json.load(handle)
+                legacy_sources = legacy.get("sources", {}) if isinstance(legacy, dict) else {}
+                old_refs = legacy_sources.get("references", []) if isinstance(legacy_sources, dict) else []
+                selected_old = legacy.get("selected_unique", {}) if isinstance(legacy, dict) else {}
+                if not isinstance(selected_old, dict):
+                    selected_old = {}
+                legacy_mode = str(legacy.get("last_mode") or "reference").casefold()
+                unique_url = (
+                    str(selected_old.get("url") or "") or None
+                    if legacy_mode == "unique" else None
+                )
+                unique_filename = (
+                    str(selected_old.get("filename") or "") or None
+                    if legacy_mode == "unique" else None
+                )
+                known_legacy_keys = {
+                    (str(item.get("reference_url") or ""), str(item.get("unique_url") or ""),
+                     os.path.basename(str(item.get("output_filename") or "")))
+                    for item in records if isinstance(item, dict)
+                }
+                if isinstance(old_refs, list):
+                    for old in old_refs:
+                        if not isinstance(old, dict):
+                            continue
+                        state = str(old.get("status") or "").casefold()
+                        if state not in ("generated", "processed"):
+                            continue
+                        output_path = _legacy_output_path(author_folder, ai_info_washed_folder, old)
+                        if not _is_valid_image_file(output_path):
+                            continue
+                        reference_url = str(old.get("url") or "")
+                        output_filename = os.path.basename(output_path)
+                        key = (reference_url, unique_url or "", output_filename)
+                        if not reference_url or key in known_legacy_keys:
+                            continue
+                        records.append({
+                            "job_id": "legacy:" + reference_url + ":" + output_filename,
+                            "mode": "Unique" if unique_url else "Reference",
+                            "reference_url": reference_url,
+                            "reference_filename": os.path.basename(str(old.get("filename") or "")),
+                            "unique_url": unique_url,
+                            "unique_filename": unique_filename,
+                            "prompt_sha256": "",
+                            "output_filename": output_filename,
+                            "output_path": os.path.relpath(output_path, author_folder),
+                            "processed_at": old.get("processed_at") or old.get("generated_at") or _manifest_timestamp(),
+                            "ratio_recorded": bool(old.get("ratio_recorded", False)),
+                            "ratio_job_id": old.get("ratio_job_id"),
+                            "legacy_migrated": True,
+                        })
+                        known_legacy_keys.add(key)
+                        migrated = True
+            except Exception as exc:
+                print(
+                    f"⚠️ [IMAGE-GENERATION] Could not migrate old output records: {exc}"
+                )
+
+        processed_records_state.update({"path": records_path, "data": records})
+        if migrated or not os.path.isfile(records_path):
+            _save_processed_image_records()
+        return records
+
+    def _save_processed_image_records():
+        records_path = processed_records_state.get("path")
+        records = processed_records_state.get("data")
+        if not records_path or not isinstance(records, list):
+            raise ValueError("Processed-image record file is not initialized")
+        _atomic_write_json(records_path, records)
+
+    def _record_processed_image_pair(
+        processed_records_path,
+        job_id,
+        mode,
+        reference_url,
+        reference_filename,
+        unique_url,
+        unique_filename,
+        prompt_sha256,
+        output_path,
+    ):
+        """Immediately save both source URLs against the verified washed output file."""
+        records = processed_records_state.get("data")
+        if processed_records_state.get("path") != processed_records_path or not isinstance(records, list):
+            # Safe fallback for an invocation that reaches this helper before batch setup.
+            if os.path.isfile(processed_records_path):
+                with open(processed_records_path, "r", encoding="utf-8") as handle:
+                    records = json.load(handle)
+            else:
+                records = []
+            if not isinstance(records, list):
+                raise ValueError("Processed-image record file must contain a JSON array")
+            processed_records_state.update({"path": processed_records_path, "data": records})
+
+        output_path = os.path.abspath(output_path)
+        author_folder = os.path.dirname(os.path.dirname(output_path))
+        try:
+            relative_output = os.path.relpath(output_path, author_folder)
+        except Exception:
+            relative_output = os.path.basename(output_path)
+        record = next(
+            (item for item in records if isinstance(item, dict) and item.get("job_id") == job_id),
+            None,
+        )
+        if record is None:
+            record = {"job_id": job_id}
+            records.append(record)
+        record.update({
+            "mode": mode,
+            "reference_url": reference_url,
+            "reference_filename": reference_filename,
+            "unique_url": unique_url,
+            "unique_filename": unique_filename,
+            "prompt_sha256": prompt_sha256,
+            "output_filename": os.path.basename(output_path),
+            "output_path": relative_output,
+            "processed_at": _manifest_timestamp(),
+            "status": "processed",
+            "ratio_recorded": False,
+            "ratio_job_id": job_id,
+        })
+        _save_processed_image_records()
+        print(
+            "🧾 [IMAGE-GENERATION] Saved processed URL pair: "
+            f"reference={reference_url}; unique={unique_url or '(none)'}; "
+            f"output={os.path.basename(output_path)}"
+        )
+        return record
+
+    def _processed_output_path(record, author_folder, ai_info_washed_folder):
+        if not isinstance(record, dict):
+            return None
+        raw_path = str(record.get("output_path") or "").strip()
+        if raw_path:
+            candidate = raw_path if os.path.isabs(raw_path) else os.path.join(author_folder, raw_path)
+            candidate = os.path.normpath(candidate)
+            try:
+                if os.path.commonpath([
+                    os.path.abspath(author_folder), os.path.abspath(candidate)
+                ]) == os.path.abspath(author_folder):
+                    return candidate
+            except Exception:
+                pass
+        filename = os.path.basename(str(record.get("output_filename") or "").strip())
+        return os.path.join(ai_info_washed_folder, filename) if filename else None
+
+    def _find_processed_pair_record(
+        records, job_id, reference_url, unique_url, prompt_sha256
+    ):
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            if item.get("job_id") == job_id:
+                return item
+            # Legacy migrated rows do not know the prompt hash; keep their verified
+            # output as a completed pair rather than looping and generating again.
+            if (
+                str(item.get("reference_url") or "") == str(reference_url or "")
+                and str(item.get("unique_url") or "") == str(unique_url or "")
+                and str(item.get("prompt_sha256") or "") in ("", prompt_sha256)
+            ):
+                return item
+        return None
+
+    def _select_recorded_unique_image(unique_folder, unique_entries, author_value):
+        """Select once and persist the selected URL/filename in unique/selected_unique_image.json."""
+        if not unique_entries:
+            abort_operation("Unique mode requires at least one verified unique image URL")
+        selection_path = os.path.join(unique_folder, SELECTED_UNIQUE_RECORD_FILENAME)
+        by_url = {item["url"]: item for item in unique_entries}
+        selected = None
+        if os.path.isfile(selection_path):
+            try:
+                with open(selection_path, "r", encoding="utf-8") as handle:
+                    saved = json.load(handle)
+                if isinstance(saved, dict):
+                    url = str(saved.get("url") or "")
+                    filename = os.path.basename(str(saved.get("filename") or ""))
+                    if url in by_url and filename == by_url[url]["filename"]:
+                        full_path = os.path.join(unique_folder, filename)
+                        if _is_valid_image_file(full_path):
+                            selected = {"url": url, "filename": filename}
+            except Exception as exc:
+                print(f"⚠️ [IMAGE-GENERATION] Selected unique record could not be read: {exc}")
+        if selected is None:
+            selected = random.choice(unique_entries)
+            _save_selected_unique_record(
+                selection_path,
+                {
+                    "url": selected["url"],
+                    "filename": selected["filename"],
+                    "author": str(author_value),
+                    "selected_at": _manifest_timestamp(),
+                },
+            )
+            print(f"🎲 [IMAGE-GENERATION] Random Unique image selected: {selected['filename']}")
+        else:
+            print(f"♻️ [IMAGE-GENERATION] Reusing selected Unique image: {selected['filename']}")
+        selected_path = os.path.join(unique_folder, selected["filename"])
+        selected_unique_image_state.update({
+            "author_key": str(author_value).strip().casefold(),
+            "unique_folder": os.path.normcase(os.path.abspath(unique_folder)),
+            "path": selected_path,
+        })
+        return selected, selected_path
 
     def _run_image_generation_batch(force_url_restart=False):
-        """Download fresh source images, then process them using Reference or Unique mode."""
+        """Resume only URL pairs that do not yet have a verified AI-info-washed output."""
         data, record, dynamic, _, _ = _load_author_configuration()
         engine_value = str(dynamic.get("engine") or record.get("engine") or "").strip()
         if not _is_image_generation_engine(engine_value):
@@ -19997,18 +20444,16 @@ def serenum_google_flow_images_generation_engine():
         current_status = record.get("status", "pending")
         if dynamic.get("status"):
             current_status = dynamic.get("status")
-        if str(current_status).strip().casefold() != "pending":
+        if str(current_status).strip().casefold() not in ("pending", "error"):
             print(f"ℹ️ [IMAGE-GENERATION] Status is '{current_status}', not pending; skipping.")
             return "not_pending"
 
-        # The type value is deliberately case-insensitive. Missing values retain
-        # backwards compatibility by using the former single-reference workflow.
         image_generation_type = str(
             dynamic.get("image_generation_type")
             or record.get("image_generation_type")
             or "Reference"
         ).strip()
-        mode_key = image_generation_type.casefold()
+        mode_key = _normalise_key(image_generation_type)
         if mode_key not in ("reference", "unique"):
             _set_author_final_status(
                 "error",
@@ -20018,7 +20463,6 @@ def serenum_google_flow_images_generation_engine():
             return "failed"
         image_generation_type = "Unique" if mode_key == "unique" else "Reference"
 
-        # The author value controls all three folders beneath JPGSFOLDER.
         author_value = str(dynamic.get("author") or record.get("author") or "").strip()
         if not author_value:
             _set_author_final_status("error", "dynamic_values.author is missing or empty")
@@ -20036,6 +20480,7 @@ def serenum_google_flow_images_generation_engine():
                 "error", "dynamic_values.image_generation_prompt is missing or empty"
             )
             return "failed"
+        prompt_sha256 = _prompt_fingerprint(prompt_text)
 
         jpgs_root = globals().get("JPGSFOLDER")
         if not jpgs_root:
@@ -20047,93 +20492,223 @@ def serenum_google_flow_images_generation_engine():
         unique_folder = os.path.join(author_folder, "unique")
         ai_info_washed_folder = os.path.join(author_folder, "AI info washed")
         processed_folder = os.path.join(author_folder, "processed")
-
-        # URLs are now the sole source of input images; do not depend on a pre-filled
-        # references/unique directory. Create the author's folders as needed.
         os.makedirs(author_folder, exist_ok=True)
         os.makedirs(references_folder, exist_ok=True)
-        if image_generation_type == "Unique":
-            os.makedirs(unique_folder, exist_ok=True)
         os.makedirs(ai_info_washed_folder, exist_ok=True)
+        # Retain the historic directory for compatibility, but never move sources into it.
         os.makedirs(processed_folder, exist_ok=True)
+
+        reference_records_path = os.path.join(
+            references_folder, REFERENCE_DOWNLOAD_RECORD_FILENAME
+        )
+        unique_records_path = os.path.join(unique_folder, UNIQUE_DOWNLOAD_RECORD_FILENAME)
+        processed_records_path = os.path.join(
+            ai_info_washed_folder, PROCESSED_OUTPUT_RECORD_FILENAME
+        )
 
         try:
             reference_urls = _read_image_url_list(
                 dynamic, record, "reference_image_url_source"
             )
+            if not reference_urls:
+                raise ValueError(
+                    "At least one URL is required in dynamic_values.reference_image_url_source"
+                )
             unique_urls = (
                 _read_image_url_list(dynamic, record, "unique_image_url_source")
                 if image_generation_type == "Unique" else []
             )
-            _download_author_source_images(
+            if image_generation_type == "Unique" and not unique_urls:
+                raise ValueError(
+                    "Unique mode requires at least one URL in dynamic_values.unique_image_url_source"
+                )
+
+            # Unique images are synchronized first, then references, exactly in
+            # the required workflow order. Each folder owns its own JSON URL map.
+            unique_entries = []
+            if image_generation_type == "Unique":
+                os.makedirs(unique_folder, exist_ok=True)
+                print(
+                    f"📥 [IMAGE-GENERATION] Syncing {len(unique_urls)} Unique URL(s) "
+                    f"into {unique_folder}..."
+                )
+                unique_entries = _sync_source_folder_from_urls(
+                    author_folder,
+                    unique_folder,
+                    "unique",
+                    unique_urls,
+                    UNIQUE_DOWNLOAD_RECORD_FILENAME,
+                )
+
+            print(
+                f"📥 [IMAGE-GENERATION] Syncing {len(reference_urls)} Reference URL(s) "
+                f"into {references_folder}..."
+            )
+            reference_entries = _sync_source_folder_from_urls(
                 author_folder,
                 references_folder,
-                unique_folder,
-                image_generation_type,
+                "references",
                 reference_urls,
-                unique_urls,
-                author_value,
+                REFERENCE_DOWNLOAD_RECORD_FILENAME,
             )
         except (_WorkflowRestart, _ManualStop):
             raise
         except Exception as download_error:
             _set_author_final_status(
-                "error", f"Source image URL download failed: {download_error}"
+                "error", f"Source image URL download/record operation failed: {download_error}"
             )
-            print(f"❌ [IMAGE-GENERATION] Source image download failed: {download_error}")
+            print(f"❌ [IMAGE-GENERATION] Source image URL operation failed: {download_error}")
             traceback.print_exc()
             return "failed"
 
-        reference_files = sorted(
-            [
-                name for name in os.listdir(references_folder)
-                if os.path.isfile(os.path.join(references_folder, name))
-                and os.path.splitext(name)[1].lower() in IMAGE_FILE_EXTENSIONS
-            ],
-            key=str.casefold,
-        )
-
-        print(f"📁 [IMAGE-GENERATION] Author value: {author_value}")
-        print(f"🧭 [IMAGE-GENERATION] Image generation type: {image_generation_type}")
-        print(f"📁 [IMAGE-GENERATION] References folder: {references_folder}")
-        print(f"📁 [IMAGE-GENERATION] Unique folder: {unique_folder}")
-        print(f"📁 [IMAGE-GENERATION] Resized outputs: {ai_info_washed_folder}")
-        print(f"📁 [IMAGE-GENERATION] Processed references: {processed_folder}")
-        print(f"📊 [IMAGE-GENERATION] Unprocessed reference images found: {len(reference_files)}")
-
-        if not reference_files:
-            message = (
-                f"No supported reference images remain in {references_folder}; "
-                "there is nothing left to process"
-            )
-            _set_author_final_status("completed", message)
-            return "completed"
-
+        unique_selection = None
         unique_image_path = None
         if image_generation_type == "Unique":
-            # Select one random image from the freshly downloaded unique/ set.
-            # It is reused for every reference in this operation and never moved.
-            unique_image_path = _select_permanent_unique_image(
-                unique_folder, author_value
+            unique_selection, unique_image_path = _select_recorded_unique_image(
+                unique_folder, unique_entries, author_value
             )
+        unique_url = unique_selection["url"] if unique_selection else None
+        unique_filename = unique_selection["filename"] if unique_selection else None
+
+        processed_records = _load_processed_image_records(
+            processed_records_path, author_folder, ai_info_washed_folder
+        )
+        print(f"📁 [IMAGE-GENERATION] Author: {author_value}")
+        print(f"🧭 [IMAGE-GENERATION] Generation type: {image_generation_type}")
+        print(f"📁 [IMAGE-GENERATION] Reference images: {references_folder}")
+        print(f"📄 [IMAGE-GENERATION] Reference download records: {reference_records_path}")
+        if image_generation_type == "Unique":
+            print(f"📁 [IMAGE-GENERATION] Unique images: {unique_folder}")
+            print(f"📄 [IMAGE-GENERATION] Unique download records: {unique_records_path}")
+            print(f"🧷 [IMAGE-GENERATION] Selected unique: {unique_filename} ({unique_url})")
+        print(f"📁 [IMAGE-GENERATION] AI info washed: {ai_info_washed_folder}")
+        print(f"📄 [IMAGE-GENERATION] Processed URL-pair records: {processed_records_path}")
+
+        # Load the ratio tracker BEFORE recovery. If this author's ratio state has
+        # never existed, initialization counts the already-saved AI-washed images;
+        # in that case those existing outputs must not be counted a second time.
+        ratio_state_path = os.path.join(str(jpgs_root), NANOBANANA_STATE_FILENAME)
+        ratio_author_had_state = False
+        if os.path.isfile(ratio_state_path):
+            try:
+                with open(ratio_state_path, "r", encoding="utf-8") as ratio_handle:
+                    ratio_disk_data = json.load(ratio_handle)
+                ratio_authors = ratio_disk_data.get("authors", {}) if isinstance(ratio_disk_data, dict) else {}
+                ratio_author_had_state = (
+                    isinstance(ratio_authors, dict)
+                    and str(author_value).strip() in ratio_authors
+                )
+            except Exception:
+                # The authoritative loader below will report a useful error.
+                ratio_author_had_state = False
+        ratio_state_path, ratio_state_data, ratio_author_state = (
+            _load_nanobanana_ratio_state(jpgs_root, author_value, ai_info_washed_folder)
+        )
+
+        # Build the queue using URL pairs, not folder contents or file movement.
+        # A valid output record is a completed job and will never be sent again.
+        pending_jobs = []
+        completed_count = 0
+        for ref_entry in reference_entries:
+            reference_url = ref_entry["url"]
+            reference_filename = ref_entry["filename"]
+            reference_path = os.path.join(references_folder, reference_filename)
+            if not _is_valid_image_file(reference_path):
+                raise _WorkflowRestart(
+                    f"Tracked reference image is missing/invalid: {reference_filename}"
+                )
+            job_id = _processed_job_identity(
+                image_generation_type,
+                reference_url,
+                unique_url,
+                prompt_sha256,
+            )
+            existing_record = _find_processed_pair_record(
+                processed_records,
+                job_id,
+                reference_url,
+                unique_url,
+                prompt_sha256,
+            )
+            existing_output = _processed_output_path(
+                existing_record, author_folder, ai_info_washed_folder
+            ) if existing_record else None
+            if existing_record and _is_valid_image_file(existing_output):
+                completed_count += 1
+                # Restore exactly-once Nano Banana bookkeeping if the program
+                # stopped after saving output metadata but before ratio update.
+                if not existing_record.get("ratio_recorded", False):
+                    if ratio_author_had_state:
+                        ratio_changed = _record_image_and_advance_nanobanana_ratio(
+                            ratio_state_path,
+                            ratio_state_data,
+                            ratio_author_state,
+                            reference_filename,
+                            existing_output,
+                            source_job_id=existing_record.get("ratio_job_id") or job_id,
+                        )
+                        if ratio_changed:
+                            print(
+                                "ℹ️ [NANOBANANA] Ratio block completion recovered from a saved "
+                                "processed-image record; it will be applied before the next job."
+                            )
+                    else:
+                        # The ratio tracker was just initialized from the current
+                        # AI-washed image count, which already includes this output.
+                        print(
+                            "ℹ️ [NANOBANANA] Existing output was included in first-time "
+                            "ratio-state initialization; it will not be counted twice."
+                        )
+                    existing_record["ratio_recorded"] = True
+                    existing_record["ratio_job_id"] = existing_record.get("ratio_job_id") or job_id
+                    _save_processed_image_records()
+                print(
+                    f"♻️ [IMAGE-GENERATION] Skipping completed URL pair: "
+                    f"{reference_filename} -> {os.path.basename(existing_output)}"
+                )
+                continue
+
+            pending_jobs.append({
+                "job_id": job_id,
+                "reference_url": reference_url,
+                "reference_filename": reference_filename,
+                "reference_path": reference_path,
+                "unique_url": unique_url,
+                "unique_filename": unique_filename,
+            })
+
+        print(
+            f"📊 [IMAGE-GENERATION] Resume check: {completed_count} completed; "
+            f"{len(pending_jobs)} remaining reference job(s)."
+        )
+
+        if not pending_jobs:
+            _set_author_final_status(
+                "completed",
+                f"All {len(reference_entries)} configured {image_generation_type} URL pair(s) "
+                f"already have verified outputs in {ai_info_washed_folder}. "
+                "Downloaded source images and URL records were preserved.",
+            )
+            try:
+                hud.print("All configured image-generation jobs are already complete.", "success")
+            except Exception:
+                pass
+            return "completed"
 
         if not os.path.isdir(GUI_IMAGES):
             abort_operation(f"GUI_IMAGES path not found: {GUI_IMAGES}")
 
         _set_author_final_status(
             "pending",
-            f"Starting {image_generation_type} image generation: "
-            f"{len(reference_files)} reference image(s) found",
+            f"Starting {image_generation_type} generation: {len(pending_jobs)} pending; "
+            f"{completed_count} already complete",
         )
-
-        # Preserve the existing per-author Nano Banana ratio rotation.
-        ratio_state_path, ratio_state_data, ratio_author_state = (
-            _load_nanobanana_ratio_state(jpgs_root, author_value, ai_info_washed_folder)
-        )
-
         hwnd = ensure_window_ready_and_focused()
         if force_url_restart:
-            print("🌐 [IMAGE-GENERATION] Ctrl+Shift+F12 requested a hard restart; opening GOOGLE_FLOW_URL before checking the page.")
+            print(
+                "🌐 [IMAGE-GENERATION] Ctrl+Shift+F12 requested a hard restart; "
+                "opening GOOGLE_FLOW_URL before checking the page."
+            )
             try:
                 hud.print("Restarting image generation from Google Flow URL...", "navigating")
             except Exception:
@@ -20143,9 +20718,7 @@ def serenum_google_flow_images_generation_engine():
             fast_paste_url(hwnd, GOOGLE_FLOW_URL)
             _sleep(2)
             hwnd = ensure_window_ready_and_focused()
-            _ensure_image_generation_workspace(hwnd)
-        else:
-            _ensure_image_generation_workspace(hwnd)
+        _ensure_image_generation_workspace(hwnd)
 
         _configure_nanobanana_ratio(
             hwnd,
@@ -20156,55 +20729,71 @@ def serenum_google_flow_images_generation_engine():
         )
         try:
             hud.print(
-                f"Starting {len(reference_files)} {image_generation_type} image job(s)...",
+                f"Starting {len(pending_jobs)} remaining {image_generation_type} image job(s)...",
                 "success",
             )
         except Exception:
             pass
 
         processed_this_run = 0
-        for index, filename in enumerate(reference_files, start=1):
+        for index, job in enumerate(pending_jobs, start=1):
             check_for_termination()
-            source_path = os.path.join(references_folder, filename)
-            if not os.path.isfile(source_path):
-                print(
-                    "⏭️ [IMAGE-GENERATION] Reference file is no longer present; "
-                    f"skipping: {filename}"
-                )
-                continue
-
             update_operation_status(
-                f"Processing {image_generation_type} image {index}/{len(reference_files)}: {filename}"
+                f"Processing {image_generation_type} image {index}/{len(pending_jobs)}: "
+                f"{job['reference_filename']}"
             )
             generated_output_path = _process_one_reference_image(
                 hwnd,
-                source_path,
+                job["reference_path"],
                 prompt_text,
                 ai_info_washed_folder,
                 processed_folder,
                 image_generation_type=image_generation_type,
                 unique_image_path=unique_image_path,
+                reference_url=job["reference_url"],
+                unique_url=job["unique_url"],
+                unique_filename=job["unique_filename"],
+                prompt_sha256=prompt_sha256,
+                processed_records_path=processed_records_path,
+                processed_job_id=job["job_id"],
             )
-            processed_this_run += 1
 
-            # Handle any browser download confirmation after the output has been
-            # verified and the reference has been moved to processed/.
-            try:
-                handle_webdownloadconfirmationmodal()
-            except Exception as modal_error:
-                print(
-                    "⚠️ [IMAGE-GENERATION] Modal check after download failed safely: "
-                    f"{modal_error}"
+            # _process_one_reference_image has already committed the URL pair to
+            # AI info washed immediately after the final resized image was saved.
+            processed_records = processed_records_state["data"]
+            output_record = _find_processed_pair_record(
+                processed_records,
+                job["job_id"],
+                job["reference_url"],
+                job["unique_url"],
+                prompt_sha256,
+            )
+            if not output_record:
+                raise _WorkflowRestart(
+                    "Generated output exists but its URL-pair record was not committed; "
+                    "recovery will inspect the processed-image ledger."
                 )
 
-            # Count only verified generated outputs, preserving the existing ratio cycle.
             ratio_changed = _record_image_and_advance_nanobanana_ratio(
                 ratio_state_path,
                 ratio_state_data,
                 ratio_author_state,
-                filename,
+                job["reference_filename"],
                 generated_output_path,
+                source_job_id=job["job_id"],
             )
+            output_record["ratio_recorded"] = True
+            output_record["ratio_job_id"] = job["job_id"]
+            _save_processed_image_records()
+            processed_this_run += 1
+
+            try:
+                handle_webdownloadconfirmationmodal()
+            except Exception as modal_error:
+                print(
+                    "⚠️ [IMAGE-GENERATION] Download confirmation check failed safely: "
+                    f"{modal_error}"
+                )
 
             if ratio_changed:
                 _configure_nanobanana_ratio(
@@ -20218,28 +20807,43 @@ def serenum_google_flow_images_generation_engine():
                     ),
                 )
 
-        remaining_files = [
-            name for name in os.listdir(references_folder)
-            if os.path.isfile(os.path.join(references_folder, name))
-            and os.path.splitext(name)[1].lower() in IMAGE_FILE_EXTENSIONS
-        ]
-        if remaining_files:
+        # Final validation is based on the output ledger. Sources are deliberately
+        # retained; no reference/unique source file is moved or deleted if tracked.
+        incomplete = []
+        for ref_entry in reference_entries:
+            job_id = _processed_job_identity(
+                image_generation_type,
+                ref_entry["url"],
+                unique_url,
+                prompt_sha256,
+            )
+            output_record = _find_processed_pair_record(
+                processed_records_state["data"],
+                job_id,
+                ref_entry["url"],
+                unique_url,
+                prompt_sha256,
+            )
+            output_path = _processed_output_path(
+                output_record, author_folder, ai_info_washed_folder
+            ) if output_record else None
+            if not output_record or not _is_valid_image_file(output_path):
+                incomplete.append(ref_entry["filename"])
+
+        if incomplete:
             _set_author_final_status(
                 "error",
-                f"Processed {processed_this_run} image(s), but "
-                f"{len(remaining_files)} reference image(s) remain in {references_folder}",
+                "Some URL pairs remain incomplete: " + ", ".join(incomplete),
             )
             return "failed"
 
-        unique_message = (
-            f" Permanent Unique image retained at {unique_image_path}."
-            if unique_image_path else ""
-        )
         _set_author_final_status(
             "completed",
-            f"{image_generation_type} image generation completed: {processed_this_run} "
-            f"image(s) resized and saved to {ai_info_washed_folder}; reference images "
-            f"moved to {processed_folder}.{unique_message}",
+            f"{image_generation_type} image generation completed: "
+            f"{len(reference_entries)} reference URL(s) have verified resized outputs "
+            f"in {ai_info_washed_folder}. Unique/reference source files and their "
+            f"download JSON records were preserved. Processed URL pairs are recorded in "
+            f"{processed_records_path}.",
         )
         try:
             hud.print(
