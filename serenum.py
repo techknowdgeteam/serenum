@@ -15127,14 +15127,17 @@ def sequence():
 def serenum_google_flow_images_generation_engine():
     """
     Generates images using Google Flow via GUI automation with pyautogui image recognition.
-    Also supports AUTHOR_PATH dynamic_values.engine="image_generation" with
-    dynamic_values.image_generation_type="Reference" or "Unique" (case-insensitive).
-    Source images are read from JPGSFOLDER/<author>/references/. In Unique mode,
-    one random permanent image is selected from JPGSFOLDER/<author>/unique/ and
-    uploaded before each reference image; that selected unique image is reused for
-    every reference in the operation and is never moved. In Reference mode, only
-    each reference image is uploaded. Successfully processed reference images are
-    moved to JPGSFOLDER/<author>/processed/ after the generated result is verified.
+    Also supports AUTHOR_PATH dynamic_values.engine values such as "image_generation",
+    "image generation", and "image-generation" (case-insensitive and punctuation-agnostic).
+    Every image_generation run downloads its source images from the configured URL lists:
+    reference_image_url_source is refreshed into JPGSFOLDER/<author>/references/;
+    Unique mode also refreshes unique_image_url_source into JPGSFOLDER/<author>/unique/.
+    Existing source images in the relevant folders are removed before these downloads.
+    In Unique mode, one random downloaded unique image is selected and uploaded before
+    each reference image; that selected unique image is reused for the operation and never
+    moved. In Reference mode, only each reference image is uploaded. Successfully processed
+    reference images are moved to JPGSFOLDER/<author>/processed/ after verification.
+    The prompt is read from dynamic_values.image_generation_prompt (legacy prompt is a fallback).
     Each downloaded result is resized to 25/32 of its original dimensions and saved
     as exactly one image in the author's "AI info washed" folder. No original-copy,
     metadata-removal variant, or image-validation JSON sidecar is created.
@@ -15410,6 +15413,11 @@ def serenum_google_flow_images_generation_engine():
     # ------------------------------------------------------------------
     def _normalise_key(key):
         return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+    def _is_image_generation_engine(value):
+        """Accept case/punctuation variants, including comma-separated aliases."""
+        candidates = re.split(r"[,;|]", str(value or ""))
+        return any(_normalise_key(candidate) == "imagegeneration" for candidate in candidates)
 
     def _walk_json(node, path=()):
         """Yield every JSON node with its path, regardless of wrapper/key names."""
@@ -15845,7 +15853,7 @@ def serenum_google_flow_images_generation_engine():
                 or ""
             ).strip()
 
-            if author_engine_value.lower() == "image_generation":
+            if _is_image_generation_engine(author_engine_value):
                 image_generation_mode = True
                 author_status = author_initial_record.get("status", "pending")
                 dynamic_status = author_initial_dynamic.get("status")
@@ -19243,9 +19251,9 @@ def serenum_google_flow_images_generation_engine():
         return True
 
     def _paste_image_prompt_and_send(hwnd, prompt_text, job_name):
-        """Paste the configured dynamic_values.prompt and explicitly click Send."""
+        """Paste dynamic_values.image_generation_prompt and explicitly click Send."""
         if not isinstance(prompt_text, str) or not prompt_text.strip():
-            abort_operation("dynamic_values.prompt is missing or empty")
+            abort_operation("dynamic_values.image_generation_prompt is missing or empty")
 
         input_location = find_whatdoyouwantocreate_with_fallbacks(
             hwnd, timeout_seconds=STAGE_TIMEOUT_SECONDS
@@ -19741,11 +19749,248 @@ def serenum_google_flow_images_generation_engine():
         )
         return selected_path
 
+    # The URL source download is a one-time setup per in-memory workflow run.
+    # Automatic/manual retries retain the downloaded source files and therefore do
+    # not erase images that are already queued or resume from the middle of a batch.
+    source_download_state = {"signature": None, "complete": False}
+
+    def _read_image_url_list(dynamic, record, field_name):
+        """Read a URL field as a clean list, accepting either a string or string list."""
+        value = _find_field(dynamic, (field_name,))
+        if value in (None, "", [], {}):
+            value = _find_field(record, (field_name,))
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple)):
+            values = list(value)
+        elif value is None:
+            values = []
+        else:
+            raise ValueError(f"{field_name} must be a URL string or a list of URL strings")
+
+        urls = []
+        for index, item in enumerate(values, start=1):
+            if not isinstance(item, str) or not item.strip():
+                continue
+            url = item.strip()
+            if not url.casefold().startswith(("https://", "http://")):
+                raise ValueError(
+                    f"{field_name}[{index}] must start with http:// or https://; received: {url!r}"
+                )
+            urls.append(url)
+        return urls
+
+    def _clear_source_image_folder(folder):
+        """Delete existing image files and stale partial downloads, preserving other files."""
+        os.makedirs(folder, exist_ok=True)
+        removed = 0
+        for filename in os.listdir(folder):
+            full_path = os.path.join(folder, filename)
+            if not os.path.isfile(full_path):
+                continue
+            is_image = os.path.splitext(filename)[1].casefold() in IMAGE_FILE_EXTENSIONS
+            is_partial = filename.casefold().endswith(".part")
+            if is_image or is_partial:
+                try:
+                    os.remove(full_path)
+                    removed += 1
+                except OSError as exc:
+                    raise OSError(f"Could not remove old source file {full_path}: {exc}") from exc
+        print(f"🧹 [IMAGE-GENERATION] Cleared {removed} existing image/partial file(s) from {folder}")
+
+    def _download_one_source_image(url, destination_folder, label, index):
+        """Download and verify one HTTP(S) image, using its real image format for extension."""
+        import urllib.request
+        import urllib.parse
+
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError("Pillow is required to verify downloaded source images") from exc
+
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            },
+        )
+        parsed = urllib.parse.urlsplit(url)
+        raw_name = urllib.parse.unquote(os.path.basename(parsed.path or ""))
+        raw_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name).strip(" ._")
+        if not raw_name:
+            raw_name = f"{label}_{index:03d}"
+        raw_stem = os.path.splitext(raw_name)[0] or f"{label}_{index:03d}"
+        temp_path = os.path.join(destination_folder, f".{label}_{index:03d}_{int(time.time() * 1000)}.part")
+        last_error = None
+
+        for attempt in range(1, 4):
+            try:
+                check_for_termination()
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                total_bytes = 0
+                with urllib.request.urlopen(request, timeout=35) as response:
+                    status_code = getattr(response, "status", 200)
+                    if status_code < 200 or status_code >= 300:
+                        raise RuntimeError(f"HTTP status {status_code}")
+                    with open(temp_path, "wb") as output_handle:
+                        while True:
+                            check_for_termination()
+                            chunk = response.read(256 * 1024)
+                            if not chunk:
+                                break
+                            output_handle.write(chunk)
+                            total_bytes += len(chunk)
+                        output_handle.flush()
+                        os.fsync(output_handle.fileno())
+
+                if total_bytes <= 0 or not os.path.isfile(temp_path):
+                    raise IOError("The URL returned an empty image file")
+
+                with Image.open(temp_path) as downloaded_image:
+                    actual_format = str(downloaded_image.format or "").upper()
+                    downloaded_image.verify()
+
+                format_extensions = {
+                    "JPEG": ".jpg",
+                    "JPG": ".jpg",
+                    "PNG": ".png",
+                    "WEBP": ".webp",
+                    "BMP": ".bmp",
+                    "GIF": ".gif",
+                    "TIFF": ".tiff",
+                }
+                extension = format_extensions.get(actual_format)
+                if not extension:
+                    raise ValueError(
+                        f"Unsupported downloaded image format '{actual_format}' from {url}"
+                    )
+
+                destination_name = f"{raw_stem}{extension}"
+                destination_path = os.path.join(destination_folder, destination_name)
+                suffix = 2
+                while os.path.exists(destination_path):
+                    destination_name = f"{raw_stem}_{suffix}{extension}"
+                    destination_path = os.path.join(destination_folder, destination_name)
+                    suffix += 1
+
+                os.replace(temp_path, destination_path)
+                if not os.path.isfile(destination_path) or os.path.getsize(destination_path) <= 0:
+                    raise IOError(f"Downloaded image could not be verified at {destination_path}")
+
+                print(
+                    f"✅ [IMAGE-GENERATION] Downloaded {label} image {index}: "
+                    f"{destination_name} ({total_bytes:,} bytes)"
+                )
+                return destination_path
+
+            except (_WorkflowRestart, _ManualStop):
+                raise
+            except Exception as exc:
+                last_error = exc
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except OSError:
+                    pass
+                print(
+                    f"⚠️ [IMAGE-GENERATION] Download attempt {attempt}/3 failed for "
+                    f"{url}: {exc}"
+                )
+                if attempt < 3:
+                    _sleep(1.0)
+
+        raise RuntimeError(f"Could not download image URL {url}: {last_error}")
+
+    def _download_author_source_images(
+        author_folder,
+        references_folder,
+        unique_folder,
+        mode,
+        reference_urls,
+        unique_urls,
+        author_value,
+    ):
+        """Refresh source folders from URL configuration before any Google Flow work."""
+        mode_key = str(mode).strip().casefold()
+        signature_payload = {
+            "author": str(author_value),
+            "mode": mode_key,
+            "references": list(reference_urls),
+            "unique": list(unique_urls) if mode_key == "unique" else [],
+        }
+        signature = json.dumps(signature_payload, sort_keys=True, ensure_ascii=False)
+
+        if source_download_state.get("complete") and source_download_state.get("signature") == signature:
+            print(
+                "♻️ [IMAGE-GENERATION] Source URL downloads already completed for this "
+                "workflow; preserving remaining files for retry/resume."
+            )
+            return
+
+        os.makedirs(author_folder, exist_ok=True)
+        _clear_source_image_folder(references_folder)
+        if mode_key == "unique":
+            _clear_source_image_folder(unique_folder)
+
+        # Unique sources are downloaded first, exactly as the Unique upload sequence
+        # expects; all reference URLs are downloaded immediately afterwards.
+        if mode_key == "unique":
+            if not unique_urls:
+                raise ValueError(
+                    "Unique mode requires at least one URL in dynamic_values.unique_image_url_source"
+                )
+            print(
+                f"🌐 [IMAGE-GENERATION] Downloading {len(unique_urls)} unique source image(s) "
+                f"into {unique_folder}..."
+            )
+            for index, url in enumerate(unique_urls, start=1):
+                _download_one_source_image(url, unique_folder, "unique", index)
+
+        if not reference_urls:
+            raise ValueError(
+                "At least one URL is required in dynamic_values.reference_image_url_source"
+            )
+        print(
+            f"🌐 [IMAGE-GENERATION] Downloading {len(reference_urls)} reference source image(s) "
+            f"into {references_folder}..."
+        )
+        for index, url in enumerate(reference_urls, start=1):
+            _download_one_source_image(url, references_folder, "reference", index)
+
+        downloaded_references = [
+            name for name in os.listdir(references_folder)
+            if os.path.isfile(os.path.join(references_folder, name))
+            and os.path.splitext(name)[1].casefold() in IMAGE_FILE_EXTENSIONS
+        ]
+        if len(downloaded_references) != len(reference_urls):
+            raise RuntimeError(
+                f"Downloaded {len(downloaded_references)} of {len(reference_urls)} reference images"
+            )
+
+        if mode_key == "unique":
+            downloaded_unique = [
+                name for name in os.listdir(unique_folder)
+                if os.path.isfile(os.path.join(unique_folder, name))
+                and os.path.splitext(name)[1].casefold() in IMAGE_FILE_EXTENSIONS
+            ]
+            if len(downloaded_unique) != len(unique_urls):
+                raise RuntimeError(
+                    f"Downloaded {len(downloaded_unique)} of {len(unique_urls)} unique images"
+                )
+
+        source_download_state.update({"signature": signature, "complete": True})
+        print(
+            "✅ [IMAGE-GENERATION] All source URL images downloaded and verified before "
+            "starting Google Flow generation."
+        )
+
     def _run_image_generation_batch(force_url_restart=False):
-        """Process every supported reference image using Reference or Unique mode."""
+        """Download fresh source images, then process them using Reference or Unique mode."""
         data, record, dynamic, _, _ = _load_author_configuration()
         engine_value = str(dynamic.get("engine") or record.get("engine") or "").strip()
-        if engine_value.casefold() != "image_generation":
+        if not _is_image_generation_engine(engine_value):
             print(f"ℹ️ [IMAGE-GENERATION] Engine changed to '{engine_value}'; stopping this worker.")
             return "engine_changed"
 
@@ -19779,9 +20024,17 @@ def serenum_google_flow_images_generation_engine():
             _set_author_final_status("error", "dynamic_values.author is missing or empty")
             return "failed"
 
-        prompt_text = dynamic.get("prompt") or record.get("prompt") or ""
+        prompt_text = (
+            _find_field(dynamic, ("image_generation_prompt",))
+            or _find_field(record, ("image_generation_prompt",))
+            or _find_field(dynamic, ("prompt",))
+            or _find_field(record, ("prompt",))
+            or ""
+        )
         if not isinstance(prompt_text, str) or not prompt_text.strip():
-            _set_author_final_status("error", "dynamic_values.prompt is missing or empty")
+            _set_author_final_status(
+                "error", "dynamic_values.image_generation_prompt is missing or empty"
+            )
             return "failed"
 
         jpgs_root = globals().get("JPGSFOLDER")
@@ -19795,19 +20048,41 @@ def serenum_google_flow_images_generation_engine():
         ai_info_washed_folder = os.path.join(author_folder, "AI info washed")
         processed_folder = os.path.join(author_folder, "processed")
 
-        if not os.path.isdir(author_folder):
-            _set_author_final_status(
-                "error", f"Author folder does not exist: {author_folder}"
-            )
-            return "failed"
-        if not os.path.isdir(references_folder):
-            _set_author_final_status(
-                "error", f"Reference image folder does not exist: {references_folder}"
-            )
-            return "failed"
-
+        # URLs are now the sole source of input images; do not depend on a pre-filled
+        # references/unique directory. Create the author's folders as needed.
+        os.makedirs(author_folder, exist_ok=True)
+        os.makedirs(references_folder, exist_ok=True)
+        if image_generation_type == "Unique":
+            os.makedirs(unique_folder, exist_ok=True)
         os.makedirs(ai_info_washed_folder, exist_ok=True)
         os.makedirs(processed_folder, exist_ok=True)
+
+        try:
+            reference_urls = _read_image_url_list(
+                dynamic, record, "reference_image_url_source"
+            )
+            unique_urls = (
+                _read_image_url_list(dynamic, record, "unique_image_url_source")
+                if image_generation_type == "Unique" else []
+            )
+            _download_author_source_images(
+                author_folder,
+                references_folder,
+                unique_folder,
+                image_generation_type,
+                reference_urls,
+                unique_urls,
+                author_value,
+            )
+        except (_WorkflowRestart, _ManualStop):
+            raise
+        except Exception as download_error:
+            _set_author_final_status(
+                "error", f"Source image URL download failed: {download_error}"
+            )
+            print(f"❌ [IMAGE-GENERATION] Source image download failed: {download_error}")
+            traceback.print_exc()
+            return "failed"
 
         reference_files = sorted(
             [
@@ -19836,8 +20111,8 @@ def serenum_google_flow_images_generation_engine():
 
         unique_image_path = None
         if image_generation_type == "Unique":
-            # A single random image is selected once and reused for every reference
-            # in this operation. It remains permanently in the unique/ folder.
+            # Select one random image from the freshly downloaded unique/ set.
+            # It is reused for every reference in this operation and never moved.
             unique_image_path = _select_permanent_unique_image(
                 unique_folder, author_value
             )
@@ -20255,190 +20530,192 @@ def serenum_google_flow_images_generation_engine():
             print("🛑 [SUPERVISOR] Google Flow function stopped by the user.")
 
 def execute_engine():
-    """Execute the appropriate engine based on the engine value.
-    Executes regardless of status - NO STATUS CHECKS OR UPDATES."""
-    
+    """Execute the configured engine using case-insensitive engine matching.
+
+    Supports image-generation engine spellings such as:
+      - image_generation
+      - IMAGE GENERATION
+      - image-generation
+      - image_generation, image-generation
+
+    The function intentionally performs NO status checks or status updates.
+    """
+    import os
+    import json
+    import re
+
     def load_json_file(file_path, default=None):
-        """Load JSON file with error handling"""
+        """Load JSON file with error handling."""
         try:
             if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                return default if default is not None else {}
-        except json.JSONDecodeError:
-            return default if default is not None else {}
-        except Exception:
-            return default if default is not None else {}
-    
+                with open(file_path, "r", encoding="utf-8") as handle:
+                    return json.load(handle)
+        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+            print(f"execute_engine: WARNING - Could not load {file_path}: {exc}")
+        except Exception as exc:
+            print(f"execute_engine: WARNING - Unexpected JSON read error for {file_path}: {exc}")
+        return default if default is not None else {}
+
+    def normalize_engine_token(value):
+        """Remove spaces/punctuation and case-fold a single engine token."""
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+    def engine_matches(value, *aliases):
+        """Match any comma/semicolon/pipe-separated alias, case-insensitively."""
+        tokens = re.split(r"[,;|]", str(value or ""))
+        normalized_tokens = {normalize_engine_token(token) for token in tokens}
+        normalized_aliases = {normalize_engine_token(alias) for alias in aliases}
+        return bool(normalized_tokens.intersection(normalized_aliases))
+
     # ============================================================
-    # STEP 1: LOAD CONFIG - No status anything
+    # STEP 1: LOAD CONFIG - No status checks or updates
     # ============================================================
-    #fetch_settings()
     try:
-        config_data = load_json_file(AUTHOR_PATH, {})
-        
-        if isinstance(config_data, list) and len(config_data) > 0:
+        author_path = globals().get("AUTHOR_PATH")
+        if not author_path:
+            print("execute_engine: ERROR - AUTHOR_PATH is not configured.")
+            return
+
+        config_data = load_json_file(author_path, {})
+        if isinstance(config_data, list) and config_data:
             config = config_data[-1]
         elif isinstance(config_data, dict):
             config = config_data
         else:
-            error_msg = "execute_engine: ERROR - Invalid config format in AUTHOR_PATH."
-            print(error_msg)
+            print("execute_engine: ERROR - Invalid config format in AUTHOR_PATH.")
             return
-        
-        print(f"execute_engine: Config loaded successfully")
-        
-    except Exception as e:
-        error_msg = f"execute_engine: ERROR - Failed to load config from {AUTHOR_PATH}: {e}"
-        print(error_msg)
+
+        if not isinstance(config, dict):
+            print("execute_engine: ERROR - The selected AUTHOR_PATH config record is not an object.")
+            return
+
+        dynamic = config.get("dynamic_values")
+        if not isinstance(dynamic, dict):
+            dynamic = {}
+
+        print("execute_engine: Config loaded successfully")
+    except Exception as exc:
+        print(f"execute_engine: ERROR - Failed to load config from AUTHOR_PATH: {exc}")
         return
 
     # ============================================================
     # STEP 2: GET ENGINE VALUE
+    # dynamic_values.engine takes precedence; top-level engine is fallback.
     # ============================================================
-    engine_value = config.get("engine", "").strip().lower()
-    
+    engine_raw = dynamic.get("engine") or config.get("engine") or ""
+    engine_value = str(engine_raw).strip()
     if not engine_value:
-        error_msg = "execute_engine: ERROR - 'engine' field is missing or empty in config."
-        print(error_msg)
+        print("execute_engine: ERROR - 'engine' field is missing or empty in config.")
         return
-    
+
     print(f"execute_engine: Engine value: '{engine_value}'")
-    
-    # Get author info for logging
-    author = config.get('author', 'Unknown')
-    time_order = config.get('time_order', 'Unknown')
+    author = config.get("author", dynamic.get("author", "Unknown"))
+    time_order = config.get("time_order", dynamic.get("time_order", "Unknown"))
 
     # ============================================================
     # STEP 3: EXECUTE BASED ON ENGINE TYPE
     # ============================================================
-    
-    if engine_value == "driver":
-        # ===== DRIVER ENGINE =====
-        print(f"\n{'='*80}")
-        print(f"EXECUTING DRIVER ENGINE")
-        print(f"{'='*80}")
+    if engine_matches(engine_value, "driver"):
+        print(f"\n{'=' * 80}")
+        print("EXECUTING DRIVER ENGINE")
+        print(f"{'=' * 80}")
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
-        print(f"{'='*80}\n")
-        
+        print(f"{'=' * 80}\n")
+
         try:
             download_scheduled_images()
-            # Initialize WebDriver
             print("execute_engine: Initializing WebDriver...")
             driver, wait = initialize_driver(mode="headed")
-            
             if driver is None or wait is None:
-                error_msg = f"execute_engine: DRIVER engine failed - WebDriver initialization returned None"
-                print(f"❌ {error_msg}")
+                print("❌ execute_engine: DRIVER engine failed - WebDriver initialization returned None")
                 return
-            
+
             print("execute_engine: WebDriver initialized successfully")
-            
-            # Call update_calendar before launch_profile
             print("execute_engine: Calling update_calendar before launch_profile...")
             try:
                 update_calendar()
                 print("execute_engine: update_calendar completed")
-            except Exception as e:
-                error_msg = f"execute_engine: update_calendar failed: {str(e)}"
-                print(f"⚠️ {error_msg}")
-                # Continue anyway - don't abort
-            
-            # Execute launch_profile
+            except Exception as exc:
+                print(f"⚠️ execute_engine: update_calendar failed: {exc}; continuing anyway")
+
             print("execute_engine: Calling launch_profile...")
             try:
-                
                 launch_profile()
                 move_downloaded_urls_to_uploadedjpgsurl()
                 print("execute_engine: launch_profile completed")
-            except Exception as e:
-                error_msg = f"execute_engine: launch_profile failed: {str(e)}"
-                print(f"❌ {error_msg}")
+            except Exception as exc:
+                print(f"❌ execute_engine: launch_profile failed: {exc}")
                 return
-            
-            # Update settings
+
             print("execute_engine: Calling update_settings...")
             try:
                 update_settings()
                 print("execute_engine: update_settings completed")
-            except Exception as e:
-                error_msg = f"execute_engine: update_settings failed: {str(e)}"
-                print(f"⚠️ {error_msg}")
-                # Don't abort - settings update is not critical
-            
+            except Exception as exc:
+                print(f"⚠️ execute_engine: update_settings failed: {exc}; continuing anyway")
+
             print(f"\n✅ execute_engine: DRIVER engine completed successfully for author '{author}'")
             return
-         
-        except Exception as e:
-            error_msg = f"execute_engine: DRIVER engine failed: {str(e)}"
-            print(f"\n❌ {error_msg}")
+        except Exception as exc:
+            print(f"\n❌ execute_engine: DRIVER engine failed: {exc}")
             return
-            
-    elif engine_value == "csv":
-        # ===== CSV ENGINE =====
-        print(f"\n{'='*80}")
-        print(f"EXECUTING CSV ENGINE")
-        print(f"{'='*80}")
+
+    elif engine_matches(engine_value, "csv"):
+        print(f"\n{'=' * 80}")
+        print("EXECUTING CSV ENGINE")
+        print(f"{'=' * 80}")
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
-        print(f"{'='*80}\n")
-        
+        print(f"{'=' * 80}\n")
+
         try:
-            # Call csv_engine which handles the CSV pipeline
             print("execute_engine: Calling csv_engine...")
             csv_engine()
             print("execute_engine: csv_engine completed")
-            
-            # Update settings
             print("execute_engine: Calling update_settings...")
             try:
                 update_settings()
                 print("execute_engine: update_settings completed")
-            except Exception as e:
-                error_msg = f"execute_engine: update_settings failed: {str(e)}"
-                print(f"⚠️ {error_msg}")
-                # Don't abort - settings update is not critical
-            
+            except Exception as exc:
+                print(f"⚠️ execute_engine: update_settings failed: {exc}; continuing anyway")
+
             print(f"\n✅ execute_engine: CSV engine completed successfully for author '{author}'")
             return
-         
-        except Exception as e:
-            error_msg = f"execute_engine: CSV engine failed: {str(e)}"
-            print(f"\n❌ {error_msg}")
+        except Exception as exc:
+            print(f"\n❌ execute_engine: CSV engine failed: {exc}")
             return
-   
-    elif engine_value == "image_generation":
-        # ===== CSV ENGINE =====
-        print(f"\n{'='*80}")
-        print(f"EXECUTING IMAGE GENERATION")
-        print(f"{'='*80}")
+
+    elif engine_matches(
+        engine_value,
+        "image_generation",
+        "image generation",
+        "image-generation",
+    ):
+        print(f"\n{'=' * 80}")
+        print("EXECUTING IMAGE GENERATION")
+        print(f"{'=' * 80}")
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
-        print(f"{'='*80}\n")
-        
-        try:
-            # Call csv_engine which handles the CSV pipeline
-            print("execute_engine: Image Generation")
-            serenum_google_flow_images_generation_engine()
-            print("execute_engine: Image generation completed")
-            
+        print(f"{'=' * 80}\n")
 
-            print(f"\n✅ execute_engine: Image generation completed successfully for '{author}'")
+        try:
+            print("execute_engine: Calling serenum_google_flow_images_generation_engine()...")
+            serenum_google_flow_images_generation_engine()
+            print("execute_engine: Image generation function returned")
+            print(f"\n✅ execute_engine: Image generation operation finished for '{author}'")
             return
-         
-        except Exception as e:
-            error_msg = f"execute_engine: CSV engine failed: {str(e)}"
-            print(f"\n❌ {error_msg}")
+        except Exception as exc:
+            print(f"\n❌ execute_engine: Image generation failed: {exc}")
             return
-         
+
     else:
-        # ===== UNKNOWN ENGINE =====
-        error_msg = f"execute_engine: ERROR - Unknown engine: '{engine_value}'. Must be 'driver' or 'csv'."
-        print(f"\n❌ {error_msg}")
+        print(
+            "\n❌ execute_engine: ERROR - Unknown engine: "
+            f"'{engine_value}'. Must be 'driver', 'csv', or an image_generation variation."
+        )
         return
-      
+    
 if __name__ == "__main__":
    execute_engine()
 
