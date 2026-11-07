@@ -20715,9 +20715,17 @@ def execute_engine():
             f"'{engine_value}'. Must be 'driver', 'csv', or an image_generation variation."
         )
         return
-    
+
+
 if __name__ == "__main__":
-   execute_engine()
+    print("🚀 Starting Google Flow image generation...", flush=True)
+
+    try:
+        execute_engine()
+    except Exception as e:
+        import traceback
+        print(f"❌ FATAL ERROR: {e}", flush=True)
+        traceback.print_exc()
 
 
    
