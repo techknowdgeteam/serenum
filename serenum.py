@@ -21133,6 +21133,458 @@ def serenum_google_flow_images_generation_engine():
                 pass
             print("🛑 [SUPERVISOR] Google Flow function stopped by the user.")
 
+def wash_ai_info():
+    """
+    Dynamically reads the active author from AUTHOR_PATH.
+
+    Source:
+        JPGSFOLDER/<author>/
+
+    Destination:
+        JPGSFOLDER/<author>/AI info washed/
+
+    - Reads the author from AUTHOR_PATH JSON.
+    - Supports a JSON object or a JSON list whose last item is the active record.
+    - Checks dynamic_values.author first, then record.author.
+    - Resizes images to 25/32 (78.125%) of their original dimensions.
+    - Compresses images where the format supports it.
+    - Preserves aspect ratio.
+    - Processes files directly inside the author's folder.
+    - Skips subfolders and animated GIFs.
+    - Removes the original only after the processed image is saved
+      and verified successfully.
+    - Avoids overwriting existing destination files.
+
+    Call:
+        wash_ai_info()
+    """
+
+    import os
+    import json
+    from PIL import Image, ImageOps
+
+    # ---------------------------------------------------------
+    # DYNAMIC CONFIGURATION
+    # ---------------------------------------------------------
+
+    author_json_path = globals().get("AUTHOR_PATH")
+    jpgs_root = globals().get("JPGSFOLDER")
+
+    if not author_json_path:
+        raise RuntimeError(
+            "AUTHOR_PATH is not defined. Cannot locate the pageandgroup author JSON."
+        )
+
+    if not os.path.isfile(author_json_path):
+        raise FileNotFoundError(
+            f"Author JSON does not exist: {author_json_path}"
+        )
+
+    if not jpgs_root:
+        raise RuntimeError(
+            "JPGSFOLDER is not defined."
+        )
+
+    # ---------------------------------------------------------
+    # READ THE ACTIVE AUTHOR FROM THE JSON
+    # Uses the same record-selection logic as the main engine.
+    # ---------------------------------------------------------
+
+    with open(author_json_path, "r", encoding="utf-8") as handle:
+        author_data = json.load(handle)
+
+    if isinstance(author_data, list):
+        if not author_data or not isinstance(author_data[-1], dict):
+            raise ValueError(
+                "Author JSON list must end with a configuration object."
+            )
+
+        author_record = author_data[-1]
+
+    elif isinstance(author_data, dict):
+        author_record = author_data
+
+    else:
+        raise ValueError(
+            "Author JSON must contain a JSON object or a list of objects."
+        )
+
+    dynamic_values = author_record.get("dynamic_values")
+
+    if not isinstance(dynamic_values, dict):
+        dynamic_values = {}
+
+    author_value = str(
+        dynamic_values.get("author")
+        or author_record.get("author")
+        or ""
+    ).strip()
+
+    if not author_value:
+        raise ValueError(
+            "The active author is missing from dynamic_values.author "
+            "and the top-level author field."
+        )
+
+    print(f"👤 [IMAGE PROCESSING] Active author detected: {author_value}")
+
+    # ---------------------------------------------------------
+    # AUTHOR DIRECTORIES
+    # ---------------------------------------------------------
+
+    author_folder = os.path.join(
+        str(jpgs_root),
+        author_value
+    )
+
+    if not os.path.isdir(author_folder):
+        raise FileNotFoundError(
+            f"Author image folder does not exist: {author_folder}"
+        )
+
+    destination_folder = os.path.join(
+        author_folder,
+        "AI info washed"
+    )
+
+    os.makedirs(destination_folder, exist_ok=True)
+
+    print(f"📁 [IMAGE PROCESSING] Source: {author_folder}")
+    print(f"📁 [IMAGE PROCESSING] Destination: {destination_folder}")
+
+    # ---------------------------------------------------------
+    # IMAGE SETTINGS
+    # ---------------------------------------------------------
+
+    supported_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".gif"
+    }
+
+    resize_ratio = 25 / 32
+
+    # ---------------------------------------------------------
+    # UNIQUE OUTPUT NAME
+    # ---------------------------------------------------------
+
+    def get_unique_destination(filename):
+        name, extension = os.path.splitext(filename)
+
+        destination = os.path.join(
+            destination_folder,
+            filename
+        )
+
+        counter = 2
+
+        while os.path.exists(destination):
+            destination = os.path.join(
+                destination_folder,
+                f"{name}_{counter}{extension}"
+            )
+            counter += 1
+
+        return destination
+
+    # ---------------------------------------------------------
+    # PROCESSING COUNTERS
+    # ---------------------------------------------------------
+
+    processed = 0
+    failed = 0
+    skipped = 0
+
+    original_bytes_total = 0
+    final_bytes_total = 0
+
+    # ---------------------------------------------------------
+    # PROCESS ONLY IMAGES DIRECTLY INSIDE THE AUTHOR FOLDER
+    # ---------------------------------------------------------
+
+    for filename in os.listdir(author_folder):
+
+        source_path = os.path.join(
+            author_folder,
+            filename
+        )
+
+        if not os.path.isfile(source_path):
+            continue
+
+        extension = os.path.splitext(filename)[1].lower()
+
+        if extension not in supported_extensions:
+            continue
+
+        temporary_path = None
+
+        try:
+            original_bytes = os.path.getsize(source_path)
+
+            if original_bytes <= 0:
+                print(f"⏭️ Skipping empty image: {filename}")
+                skipped += 1
+                continue
+
+            # ---------------------------------------------
+            # OPEN AND RESIZE IMAGE
+            # ---------------------------------------------
+
+            with Image.open(source_path) as source_image:
+
+                if getattr(source_image, "is_animated", False):
+                    print(f"⏭️ Skipping animated image: {filename}")
+                    skipped += 1
+                    continue
+
+                image_format = source_image.format
+
+                image = ImageOps.exif_transpose(source_image)
+                image.load()
+
+                original_width, original_height = image.size
+
+                new_width = max(
+                    1,
+                    round(original_width * resize_ratio)
+                )
+
+                new_height = max(
+                    1,
+                    round(original_height * resize_ratio)
+                )
+
+                resized = image.resize(
+                    (new_width, new_height),
+                    Image.Resampling.LANCZOS
+                )
+
+                # -----------------------------------------
+                # FORMAT-SPECIFIC IMAGE PREPARATION
+                # -----------------------------------------
+
+                if image_format == "JPEG":
+
+                    if (
+                        resized.mode in ("RGBA", "LA")
+                        or (
+                            resized.mode == "P"
+                            and "transparency" in resized.info
+                        )
+                    ):
+                        rgba = resized.convert("RGBA")
+
+                        background = Image.new(
+                            "RGB",
+                            rgba.size,
+                            (255, 255, 255)
+                        )
+
+                        background.paste(
+                            rgba,
+                            mask=rgba.getchannel("A")
+                        )
+
+                        resized = background
+
+                    elif resized.mode not in ("RGB", "L", "CMYK"):
+                        resized = resized.convert("RGB")
+
+                elif image_format == "WEBP":
+
+                    if resized.mode not in ("RGB", "RGBA", "L"):
+                        resized = resized.convert(
+                            "RGBA"
+                            if "A" in resized.getbands()
+                            else "RGB"
+                        )
+
+                elif image_format == "PNG":
+
+                    if resized.mode not in (
+                        "1", "L", "LA", "P", "RGB", "RGBA"
+                    ):
+                        resized = resized.convert("RGBA")
+
+                elif image_format == "BMP":
+
+                    if resized.mode not in (
+                        "1", "L", "P", "RGB", "RGBA"
+                    ):
+                        resized = resized.convert("RGB")
+
+                elif image_format == "GIF":
+
+                    if resized.mode not in ("P", "L"):
+                        resized = resized.convert(
+                            "P",
+                            palette=Image.Palette.ADAPTIVE
+                        )
+
+                if not image_format:
+                    image_format = {
+                        ".jpg": "JPEG",
+                        ".jpeg": "JPEG",
+                        ".png": "PNG",
+                        ".webp": "WEBP",
+                        ".bmp": "BMP",
+                        ".tif": "TIFF",
+                        ".tiff": "TIFF",
+                        ".gif": "GIF"
+                    }.get(extension)
+
+            # ---------------------------------------------
+            # OUTPUT DESTINATION
+            # ---------------------------------------------
+
+            destination_path = get_unique_destination(filename)
+
+            temporary_path = destination_path + ".tmp"
+
+            save_options = {}
+
+            if image_format == "JPEG":
+
+                save_options = {
+                    "quality": 82,
+                    "optimize": True,
+                    "progressive": True
+                }
+
+            elif image_format == "PNG":
+
+                save_options = {
+                    "optimize": True,
+                    "compress_level": 9
+                }
+
+            elif image_format == "WEBP":
+
+                save_options = {
+                    "quality": 82,
+                    "method": 6
+                }
+
+            elif image_format == "TIFF":
+
+                save_options = {
+                    "compression": "tiff_adobe_deflate"
+                }
+
+            # ---------------------------------------------
+            # SAVE PROCESSED IMAGE
+            # ---------------------------------------------
+
+            resized.save(
+                temporary_path,
+                format=image_format,
+                **save_options
+            )
+
+            # Verify the newly saved image before moving it.
+            with Image.open(temporary_path) as verification:
+                verification.verify()
+
+            final_bytes = os.path.getsize(temporary_path)
+
+            if final_bytes <= 0:
+                raise IOError(
+                    "The processed image file is empty."
+                )
+
+            # Atomically place the verified output.
+            os.replace(
+                temporary_path,
+                destination_path
+            )
+
+            temporary_path = None
+
+            # Remove original only after successful output creation.
+            os.remove(source_path)
+
+            # ---------------------------------------------
+            # UPDATE COUNTERS
+            # ---------------------------------------------
+
+            processed += 1
+
+            original_bytes_total += original_bytes
+            final_bytes_total += final_bytes
+
+            reduction = (
+                (original_bytes - final_bytes)
+                / original_bytes
+            ) * 100
+
+            print(
+                f"✅ {filename}: "
+                f"{original_width}x{original_height} → "
+                f"{new_width}x{new_height} | "
+                f"{original_bytes:,} → {final_bytes:,} bytes | "
+                f"{reduction:.2f}% size change"
+            )
+
+        except Exception as exc:
+
+            failed += 1
+
+            print(
+                f"❌ [IMAGE PROCESSING] Failed: "
+                f"{filename} | {exc}"
+            )
+
+        finally:
+
+            if temporary_path and os.path.exists(temporary_path):
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+
+    # ---------------------------------------------------------
+    # FINAL REPORT
+    # ---------------------------------------------------------
+
+    total_reduction = (
+        (
+            (original_bytes_total - final_bytes_total)
+            / original_bytes_total
+        ) * 100
+        if original_bytes_total
+        else 0
+    )
+
+    print("\n========== AUTHOR IMAGE PROCESSING ==========")
+    print(f"Author JSON: {author_json_path}")
+    print(f"Active author: {author_value}")
+    print(f"Processed: {processed}")
+    print(f"Failed: {failed}")
+    print(f"Skipped: {skipped}")
+    print(f"Original bytes: {original_bytes_total:,}")
+    print(f"Final bytes: {final_bytes_total:,}")
+    print(f"Total size reduction: {total_reduction:.2f}%")
+    print(f"Destination: {destination_folder}")
+    print("==============================================")
+
+    return {
+        "author": author_value,
+        "author_json": author_json_path,
+        "processed": processed,
+        "failed": failed,
+        "skipped": skipped,
+        "original_bytes": original_bytes_total,
+        "final_bytes": final_bytes_total,
+        "reduction_percent": round(total_reduction, 2),
+        "destination": destination_folder
+    }
+
 def execute_engine():
     """Execute the configured engine using case-insensitive engine matching.
 
@@ -21147,6 +21599,7 @@ def execute_engine():
     import os
     import json
     import re
+    analyze_and_distribute_configs()
 
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling."""
@@ -21254,7 +21707,6 @@ def execute_engine():
 
             print("execute_engine: Calling update_settings...")
             try:
-                update_settings()
                 print("execute_engine: update_settings completed")
             except Exception as exc:
                 print(f"⚠️ execute_engine: update_settings failed: {exc}; continuing anyway")
@@ -21279,7 +21731,6 @@ def execute_engine():
             print("execute_engine: csv_engine completed")
             print("execute_engine: Calling update_settings...")
             try:
-                update_settings()
                 print("execute_engine: update_settings completed")
             except Exception as exc:
                 print(f"⚠️ execute_engine: update_settings failed: {exc}; continuing anyway")
@@ -21325,7 +21776,7 @@ if __name__ == "__main__":
     print("🚀 Starting Google Flow image generation...", flush=True)
 
     try:
-        execute_engine()
+        wash_ai_info()
     except Exception as e:
         import traceback
         print(f"❌ FATAL ERROR: {e}", flush=True)
