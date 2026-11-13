@@ -56,7 +56,6 @@ import random
 import string
 import psutil
 from datetime import datetime, timezone
-import connectwithinfinitydb as db
 import json
 import os
 from datetime import datetime
@@ -22369,34 +22368,28 @@ class SerenumApp:
         self.show_status_view()
 
     def _prepare_cover_assets(self):
-        """Install the supplied GIF pair; use the custom robot if either is unavailable."""
+        """Load the canonical AI cover GIF; repair it from bundled artwork if absent.
+
+        No ai_cover_assets subfolder is required. First-run setup creates
+        The canonical destination is the AI automation cover folder.
+        """
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        bundled_dir = os.path.join(script_dir, "ai_cover_assets")
         target_dir = r"C:\xampp\htdocs\AI automation\ai cover"
-        gif_names = ("Robot.gif", "Mapping for machine learning.gif")
-        fallback_name = "Serenum_Robot_Fallback.png"
-        failures = []
+        target_path = os.path.join(target_dir, "ai cover.gif")
+        source_names = (
+            "Robot.gif",
+            "Mapping for machine learning.gif",
+            "Serenum_Robot_Fallback.gif",
+        )
 
-        try:
-            os.makedirs(target_dir, exist_ok=True)
-        except Exception as exc:
-            failures.append(f"Could not prepare the cover library: {type(exc).__name__}: {exc}")
-
-        # Try to install both supplied animated covers into the requested folder.
-        for name in gif_names:
-            source = os.path.join(bundled_dir, name)
-            destination = os.path.join(target_dir, name)
-            if os.path.isfile(source):
-                try:
-                    if os.path.abspath(source).lower() != os.path.abspath(destination).lower():
-                        shutil.copy2(source, destination)
-                except Exception as exc:
-                    failures.append(f"Could not install {name}: {type(exc).__name__}: {exc}")
-
-        def is_valid_image(path):
+        def is_valid_gif(path):
             if not os.path.isfile(path):
                 return False
             try:
+                with open(path, "rb") as cover_file:
+                    header = cover_file.read(6)
+                if header not in (b"GIF87a", b"GIF89a"):
+                    return False
                 from PIL import Image
                 with Image.open(path) as image:
                     image.verify()
@@ -22404,42 +22397,53 @@ class SerenumApp:
             except Exception:
                 return False
 
-        installed_gifs = [os.path.join(target_dir, name) for name in gif_names]
-        # Only use the random animated selection when BOTH requested GIFs exist
-        # and can be read from the AI cover folder.
-        if all(is_valid_image(path) for path in installed_gifs):
-            selected = random.choice(installed_gifs)
-            self.log("Both animated cover files are ready in the cover library.", "SUCCESS")
-            self.log(f"Animated cover selected: {os.path.basename(selected)}", "INFO")
-            if failures:
-                self.log("Cover setup notes: " + " | ".join(failures), "WARNING")
-            return selected
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except Exception as exc:
+            self.cover_install_warning = (
+                "Serenum could not prepare the cover location. Check folder permissions and restart."
+            )
+            self.log(f"Cover folder setup failed: {type(exc).__name__}: {exc}", "WARNING")
+            return None
 
-        # If either GIF is absent or unreadable, use the custom robot artwork.
-        fallback_source = os.path.join(bundled_dir, fallback_name)
-        fallback_target = os.path.join(target_dir, fallback_name)
-        if os.path.isfile(fallback_source):
-            try:
-                os.makedirs(target_dir, exist_ok=True)
-                shutil.copy2(fallback_source, fallback_target)
-            except Exception as exc:
-                failures.append(f"Could not install custom robot cover: {type(exc).__name__}: {exc}")
+        # Keep an already-created canonical cover. The setup utility randomly
+        # selects a supplied animation each time it prepares the installation.
+        if is_valid_gif(target_path):
+            return target_path
 
-        for candidate in (fallback_target, fallback_source, os.path.join(script_dir, fallback_name)):
-            if is_valid_image(candidate):
-                self.log("One or both animated covers are missing or invalid. Using the custom Serenum robot cover.", "SUCCESS")
-                self.log(f"Custom robot cover selected: {candidate}", "INFO")
-                if failures:
-                    self.log("Cover setup notes: " + " | ".join(failures), "WARNING")
-                return candidate
-
-        self.cover_install_warning = (
-            "The animated covers and custom robot fallback are unavailable. "
-            "Restore the ai_cover_assets folder and restart Serenum."
+        candidates = []
+        search_dirs = (
+            script_dir,
+            os.path.join(script_dir, "ai_cover_assets"),  # legacy compatibility only
+            target_dir,
         )
-        if failures:
-            self.log("Cover setup details: " + " | ".join(failures), "WARNING")
-        return None
+        for folder in search_dirs:
+            for name in source_names:
+                candidate = os.path.join(folder, name)
+                if os.path.normcase(os.path.abspath(candidate)) == os.path.normcase(os.path.abspath(target_path)):
+                    continue
+                if is_valid_gif(candidate) and candidate not in candidates:
+                    candidates.append(candidate)
+
+        try:
+            if candidates:
+                selected = random.choice(candidates)
+                temporary_path = target_path + ".tmp"
+                shutil.copy2(selected, temporary_path)
+                os.replace(temporary_path, target_path)
+                self.log(f"Cover artwork installed: {os.path.basename(selected)}", "SUCCESS")
+            else:
+                self.cover_install_warning = (
+                    "The Serenum robot cover is unavailable. Run Start_Serenum.vbs to repair the cover automatically."
+                )
+                self.log(self.cover_install_warning, "WARNING")
+                return None
+        except Exception as exc:
+            self.cover_install_warning = "Serenum could not create its robot cover. Check folder permissions and restart."
+            self.log(f"Cover repair failed: {type(exc).__name__}: {exc}", "WARNING")
+            return None
+
+        return target_path if is_valid_gif(target_path) else None
 
     def _install_cover_animation(self):
         """Load the selected animated GIF and advance its frames in Tkinter."""
