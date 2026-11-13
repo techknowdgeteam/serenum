@@ -21135,79 +21135,78 @@ def serenum_google_flow_images_generation_engine():
 
 def wash_ai_info():
     """
-    Dynamically reads the active author from AUTHOR_PATH.
+    Downloads images from dynamic_values.wash_ai_image_url_from
+    into the active author's JPGSFOLDER directory.
 
-    Source:
-        JPGSFOLDER/<author>/
+    Then resizes and compresses the downloaded images into:
 
-    Destination:
         JPGSFOLDER/<author>/AI info washed/
 
-    - Reads the author from AUTHOR_PATH JSON.
-    - Supports a JSON object or a JSON list whose last item is the active record.
-    - Checks dynamic_values.author first, then record.author.
-    - Resizes images to 25/32 (78.125%) of their original dimensions.
-    - Compresses images where the format supports it.
+    Processing:
+    - Reads the active author from AUTHOR_PATH.
+    - Supports JSON object or JSON list configurations.
+    - Reads wash_ai_image_url_from from dynamic_values.
+    - Downloads every configured image URL into the author's folder.
+    - Verifies downloaded image files using Pillow.
+    - Resizes images to 25/32 (78.125%) of original dimensions.
     - Preserves aspect ratio.
-    - Processes files directly inside the author's folder.
+    - Compresses supported image formats.
     - Skips subfolders and animated GIFs.
-    - Removes the original only after the processed image is saved
-      and verified successfully.
-    - Avoids overwriting existing destination files.
-
-    Call:
-        wash_ai_info()
+    - Deletes original images only after successful output verification.
+    - Never overwrites existing destination images.
+    - Reports individual download and processing failures.
     """
 
     import os
     import json
+    import re
+    import uuid
+    import requests
+
+    from urllib.parse import urlparse, unquote
     from PIL import Image, ImageOps
 
-    # ---------------------------------------------------------
-    # DYNAMIC CONFIGURATION
-    # ---------------------------------------------------------
+    # ============================================================
+    # STEP 1: CONFIGURATION
+    # ============================================================
 
     author_json_path = globals().get("AUTHOR_PATH")
     jpgs_root = globals().get("JPGSFOLDER")
 
     if not author_json_path:
-        raise RuntimeError(
-            "AUTHOR_PATH is not defined. Cannot locate the pageandgroup author JSON."
-        )
+        raise RuntimeError("AUTHOR_PATH is not configured.")
 
     if not os.path.isfile(author_json_path):
         raise FileNotFoundError(
-            f"Author JSON does not exist: {author_json_path}"
+            f"AUTHOR_PATH does not exist: {author_json_path}"
         )
 
     if not jpgs_root:
-        raise RuntimeError(
-            "JPGSFOLDER is not defined."
-        )
+        raise RuntimeError("JPGSFOLDER is not configured.")
 
-    # ---------------------------------------------------------
-    # READ THE ACTIVE AUTHOR FROM THE JSON
-    # Uses the same record-selection logic as the main engine.
-    # ---------------------------------------------------------
+    # ============================================================
+    # STEP 2: READ AUTHOR CONFIGURATION
+    # ============================================================
 
     with open(author_json_path, "r", encoding="utf-8") as handle:
         author_data = json.load(handle)
 
     if isinstance(author_data, list):
+
         if not author_data or not isinstance(author_data[-1], dict):
             raise ValueError(
-                "Author JSON list must end with a configuration object."
+                "AUTHOR_PATH must contain a valid configuration record."
             )
 
         author_record = author_data[-1]
 
     elif isinstance(author_data, dict):
+
         author_record = author_data
 
     else:
-        raise ValueError(
-            "Author JSON must contain a JSON object or a list of objects."
-        )
+
+        raise ValueError("Invalid AUTHOR_PATH JSON structure.")
 
     dynamic_values = author_record.get("dynamic_values")
 
@@ -21221,26 +21220,55 @@ def wash_ai_info():
     ).strip()
 
     if not author_value:
-        raise ValueError(
-            "The active author is missing from dynamic_values.author "
-            "and the top-level author field."
-        )
+        raise ValueError("Active author is missing from AUTHOR_PATH.")
 
-    print(f"👤 [IMAGE PROCESSING] Active author detected: {author_value}")
-
-    # ---------------------------------------------------------
-    # AUTHOR DIRECTORIES
-    # ---------------------------------------------------------
-
-    author_folder = os.path.join(
-        str(jpgs_root),
-        author_value
+    # Read image URLs.
+    image_urls = (
+        dynamic_values.get("wash_ai_image_url_from")
+        if "wash_ai_image_url_from" in dynamic_values
+        else author_record.get("wash_ai_image_url_from")
     )
 
-    if not os.path.isdir(author_folder):
-        raise FileNotFoundError(
-            f"Author image folder does not exist: {author_folder}"
+    if isinstance(image_urls, str):
+        image_urls = [image_urls]
+
+    if not isinstance(image_urls, (list, tuple)):
+        raise ValueError(
+            "wash_ai_image_url_from must contain a list of image URLs."
         )
+
+    image_urls = [
+        str(url).strip()
+        for url in image_urls
+        if isinstance(url, str) and str(url).strip()
+    ]
+
+    if not image_urls:
+        raise ValueError(
+            "wash_ai_image_url_from contains no valid image URLs."
+        )
+
+    print("\n" + "=" * 75)
+    print("STARTING WASH AI INFO ENGINE")
+    print("=" * 75)
+
+    print(f"👤 Author: {author_value}")
+    print(f"🖼️ Image URLs: {len(image_urls)}")
+
+    # ============================================================
+    # STEP 3: AUTHOR DIRECTORIES
+    # ============================================================
+
+    jpgs_root = os.path.abspath(str(jpgs_root))
+
+    author_folder = os.path.abspath(
+        os.path.join(jpgs_root, author_value)
+    )
+
+    if os.path.commonpath([jpgs_root, author_folder]) != jpgs_root:
+        raise ValueError("Invalid author folder path.")
+
+    os.makedirs(author_folder, exist_ok=True)
 
     destination_folder = os.path.join(
         author_folder,
@@ -21249,12 +21277,21 @@ def wash_ai_info():
 
     os.makedirs(destination_folder, exist_ok=True)
 
-    print(f"📁 [IMAGE PROCESSING] Source: {author_folder}")
-    print(f"📁 [IMAGE PROCESSING] Destination: {destination_folder}")
+    print(f"📁 Author folder: {author_folder}")
+    print(f"📁 Washed folder: {destination_folder}")
 
-    # ---------------------------------------------------------
-    # IMAGE SETTINGS
-    # ---------------------------------------------------------
+    # ============================================================
+    # STEP 4: IMAGE FORMATS
+    # ============================================================
+
+    format_extensions = {
+        "JPEG": ".jpg",
+        "PNG": ".png",
+        "WEBP": ".webp",
+        "BMP": ".bmp",
+        "GIF": ".gif",
+        "TIFF": ".tiff"
+    }
 
     supported_extensions = {
         ".jpg",
@@ -21269,32 +21306,184 @@ def wash_ai_info():
 
     resize_ratio = 25 / 32
 
-    # ---------------------------------------------------------
-    # UNIQUE OUTPUT NAME
-    # ---------------------------------------------------------
+    # ============================================================
+    # STEP 5: UNIQUE FILE PATH
+    # ============================================================
 
-    def get_unique_destination(filename):
+    def get_unique_destination(folder, filename):
+
         name, extension = os.path.splitext(filename)
 
-        destination = os.path.join(
-            destination_folder,
-            filename
-        )
+        destination = os.path.join(folder, filename)
 
         counter = 2
 
         while os.path.exists(destination):
+
             destination = os.path.join(
-                destination_folder,
+                folder,
                 f"{name}_{counter}{extension}"
             )
+
             counter += 1
 
         return destination
 
-    # ---------------------------------------------------------
-    # PROCESSING COUNTERS
-    # ---------------------------------------------------------
+    # ============================================================
+    # STEP 6: DOWNLOAD ALL CONFIGURED IMAGES
+    # ============================================================
+
+    downloaded = 0
+    download_failed = 0
+    download_errors = []
+
+    print("\n" + "=" * 75)
+    print("DOWNLOADING AUTHOR IMAGES")
+    print("=" * 75)
+
+    for index, image_url in enumerate(image_urls, 1):
+
+        temporary_path = None
+
+        try:
+
+            parsed_url = urlparse(image_url)
+
+            if parsed_url.scheme.lower() not in ("http", "https"):
+                raise ValueError("Only HTTP and HTTPS image URLs are supported.")
+
+            raw_filename = unquote(
+                os.path.basename(parsed_url.path)
+            )
+
+            original_stem = os.path.splitext(raw_filename)[0]
+
+            original_stem = re.sub(
+                r'[<>:"/\\|?*\x00-\x1f]+',
+                "_",
+                original_stem
+            ).strip(" ._")
+
+            if not original_stem:
+                original_stem = f"wash_ai_image_{index}"
+
+            print(
+                f"\n📥 Downloading image {index}/{len(image_urls)}"
+            )
+
+            print(f"URL: {image_url}")
+
+            temporary_path = os.path.join(
+                author_folder,
+                f".wash_download_{uuid.uuid4().hex}.tmp"
+            )
+
+            downloaded_bytes = 0
+
+            with requests.get(
+                image_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0"
+                },
+                timeout=(20, 90),
+                allow_redirects=True,
+                stream=True
+            ) as response:
+
+                response.raise_for_status()
+
+                with open(temporary_path, "wb") as image_file:
+
+                    for chunk in response.iter_content(
+                        chunk_size=1024 * 1024
+                    ):
+
+                        if not chunk:
+                            continue
+
+                        image_file.write(chunk)
+                        downloaded_bytes += len(chunk)
+
+            if downloaded_bytes <= 0:
+                raise ValueError("Downloaded image is empty.")
+
+            # ----------------------------------------------------
+            # VERIFY THE DOWNLOADED IMAGE AND DETECT ITS FORMAT
+            # ----------------------------------------------------
+
+            with Image.open(temporary_path) as verification:
+
+                detected_format = str(
+                    verification.format or ""
+                ).upper()
+
+                verification.verify()
+
+            if detected_format not in format_extensions:
+                raise ValueError(
+                    f"Unsupported image format: {detected_format}"
+                )
+
+            extension = format_extensions[detected_format]
+
+            filename = original_stem + extension
+
+            final_download_path = get_unique_destination(
+                author_folder,
+                filename
+            )
+
+            # Move verified download into the author's directory.
+            os.replace(
+                temporary_path,
+                final_download_path
+            )
+
+            temporary_path = None
+
+            downloaded += 1
+
+            print(
+                f"✅ Downloaded: {os.path.basename(final_download_path)}"
+            )
+
+            print(
+                f"   Size: {downloaded_bytes:,} bytes"
+            )
+
+            print(
+                f"   Format: {detected_format}"
+            )
+
+        except Exception as exc:
+
+            download_failed += 1
+
+            error_message = (
+                f"Image {index}: {image_url} | {exc}"
+            )
+
+            download_errors.append(error_message)
+
+            print(f"❌ DOWNLOAD FAILED: {error_message}")
+
+        finally:
+
+            if temporary_path and os.path.exists(temporary_path):
+
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+
+    print("\n" + "-" * 75)
+    print(f"✅ Successfully downloaded: {downloaded}")
+    print(f"❌ Failed downloads: {download_failed}")
+    print("-" * 75)
+
+    # ============================================================
+    # STEP 7: PROCESS DOWNLOADED AUTHOR IMAGES
+    # ============================================================
 
     processed = 0
     failed = 0
@@ -21303,11 +21492,11 @@ def wash_ai_info():
     original_bytes_total = 0
     final_bytes_total = 0
 
-    # ---------------------------------------------------------
-    # PROCESS ONLY IMAGES DIRECTLY INSIDE THE AUTHOR FOLDER
-    # ---------------------------------------------------------
+    print("\n" + "=" * 75)
+    print("RESIZING AND WASHING AUTHOR IMAGES")
+    print("=" * 75)
 
-    for filename in os.listdir(author_folder):
+    for filename in sorted(os.listdir(author_folder)):
 
         source_path = os.path.join(
             author_folder,
@@ -21323,32 +21512,52 @@ def wash_ai_info():
             continue
 
         temporary_path = None
+        resized = None
 
         try:
+
             original_bytes = os.path.getsize(source_path)
 
             if original_bytes <= 0:
+
                 print(f"⏭️ Skipping empty image: {filename}")
+
                 skipped += 1
                 continue
 
-            # ---------------------------------------------
-            # OPEN AND RESIZE IMAGE
-            # ---------------------------------------------
+            # ----------------------------------------------------
+            # OPEN IMAGE
+            # ----------------------------------------------------
 
             with Image.open(source_path) as source_image:
 
                 if getattr(source_image, "is_animated", False):
-                    print(f"⏭️ Skipping animated image: {filename}")
+
+                    print(
+                        f"⏭️ Skipping animated image: {filename}"
+                    )
+
                     skipped += 1
                     continue
 
-                image_format = source_image.format
+                image_format = str(
+                    source_image.format or ""
+                ).upper()
+
+                if image_format not in format_extensions:
+                    raise ValueError(
+                        f"Unsupported image format: {image_format}"
+                    )
 
                 image = ImageOps.exif_transpose(source_image)
+
                 image.load()
 
                 original_width, original_height = image.size
+
+                # ------------------------------------------------
+                # RESIZE TO 25/32
+                # ------------------------------------------------
 
                 new_width = max(
                     1,
@@ -21365,9 +21574,9 @@ def wash_ai_info():
                     Image.Resampling.LANCZOS
                 )
 
-                # -----------------------------------------
-                # FORMAT-SPECIFIC IMAGE PREPARATION
-                # -----------------------------------------
+                # ------------------------------------------------
+                # FORMAT-SPECIFIC MODE CONVERSION
+                # ------------------------------------------------
 
                 if image_format == "JPEG":
 
@@ -21378,6 +21587,7 @@ def wash_ai_info():
                             and "transparency" in resized.info
                         )
                     ):
+
                         rgba = resized.convert("RGBA")
 
                         background = Image.new(
@@ -21391,61 +21601,82 @@ def wash_ai_info():
                             mask=rgba.getchannel("A")
                         )
 
+                        resized.close()
                         resized = background
 
                     elif resized.mode not in ("RGB", "L", "CMYK"):
-                        resized = resized.convert("RGB")
+
+                        converted = resized.convert("RGB")
+
+                        resized.close()
+                        resized = converted
 
                 elif image_format == "WEBP":
 
                     if resized.mode not in ("RGB", "RGBA", "L"):
-                        resized = resized.convert(
+
+                        converted = resized.convert(
                             "RGBA"
                             if "A" in resized.getbands()
                             else "RGB"
                         )
+
+                        resized.close()
+                        resized = converted
 
                 elif image_format == "PNG":
 
                     if resized.mode not in (
                         "1", "L", "LA", "P", "RGB", "RGBA"
                     ):
-                        resized = resized.convert("RGBA")
+
+                        converted = resized.convert("RGBA")
+
+                        resized.close()
+                        resized = converted
 
                 elif image_format == "BMP":
 
                     if resized.mode not in (
                         "1", "L", "P", "RGB", "RGBA"
                     ):
-                        resized = resized.convert("RGB")
+
+                        converted = resized.convert("RGB")
+
+                        resized.close()
+                        resized = converted
 
                 elif image_format == "GIF":
 
                     if resized.mode not in ("P", "L"):
-                        resized = resized.convert(
+
+                        converted = resized.convert(
                             "P",
                             palette=Image.Palette.ADAPTIVE
                         )
 
-                if not image_format:
-                    image_format = {
-                        ".jpg": "JPEG",
-                        ".jpeg": "JPEG",
-                        ".png": "PNG",
-                        ".webp": "WEBP",
-                        ".bmp": "BMP",
-                        ".tif": "TIFF",
-                        ".tiff": "TIFF",
-                        ".gif": "GIF"
-                    }.get(extension)
+                        resized.close()
+                        resized = converted
 
-            # ---------------------------------------------
-            # OUTPUT DESTINATION
-            # ---------------------------------------------
+            # ----------------------------------------------------
+            # DESTINATION
+            # ----------------------------------------------------
 
-            destination_path = get_unique_destination(filename)
+            output_filename = (
+                os.path.splitext(filename)[0]
+                + format_extensions[image_format]
+            )
+
+            destination_path = get_unique_destination(
+                destination_folder,
+                output_filename
+            )
 
             temporary_path = destination_path + ".tmp"
+
+            # ----------------------------------------------------
+            # COMPRESSION SETTINGS
+            # ----------------------------------------------------
 
             save_options = {}
 
@@ -21477,9 +21708,9 @@ def wash_ai_info():
                     "compression": "tiff_adobe_deflate"
                 }
 
-            # ---------------------------------------------
-            # SAVE PROCESSED IMAGE
-            # ---------------------------------------------
+            # ----------------------------------------------------
+            # SAVE RESIZED IMAGE
+            # ----------------------------------------------------
 
             resized.save(
                 temporary_path,
@@ -21487,18 +21718,35 @@ def wash_ai_info():
                 **save_options
             )
 
-            # Verify the newly saved image before moving it.
+            # ----------------------------------------------------
+            # VERIFY OUTPUT
+            # ----------------------------------------------------
+
             with Image.open(temporary_path) as verification:
-                verification.verify()
+
+                verification.load()
+
+                if verification.size != (new_width, new_height):
+
+                    raise IOError(
+                        "Output dimensions do not match expected dimensions."
+                    )
+
+                if str(verification.format or "").upper() != image_format:
+
+                    raise IOError(
+                        "Output image format verification failed."
+                    )
 
             final_bytes = os.path.getsize(temporary_path)
 
             if final_bytes <= 0:
-                raise IOError(
-                    "The processed image file is empty."
-                )
+                raise IOError("Processed image is empty.")
 
-            # Atomically place the verified output.
+            # ----------------------------------------------------
+            # COMMIT VERIFIED OUTPUT
+            # ----------------------------------------------------
+
             os.replace(
                 temporary_path,
                 destination_path
@@ -21506,12 +21754,8 @@ def wash_ai_info():
 
             temporary_path = None
 
-            # Remove original only after successful output creation.
+            # Delete original only after verified output exists.
             os.remove(source_path)
-
-            # ---------------------------------------------
-            # UPDATE COUNTERS
-            # ---------------------------------------------
 
             processed += 1
 
@@ -21524,11 +21768,25 @@ def wash_ai_info():
             ) * 100
 
             print(
-                f"✅ {filename}: "
+                f"\n✅ WASHED: {filename}"
+            )
+
+            print(
+                f"   Dimensions: "
                 f"{original_width}x{original_height} → "
-                f"{new_width}x{new_height} | "
-                f"{original_bytes:,} → {final_bytes:,} bytes | "
-                f"{reduction:.2f}% size change"
+                f"{new_width}x{new_height}"
+            )
+
+            print(
+                f"   Size: {original_bytes:,} → {final_bytes:,} bytes"
+            )
+
+            print(
+                f"   Size change: {reduction:.2f}%"
+            )
+
+            print(
+                f"   Saved: {destination_path}"
             )
 
         except Exception as exc:
@@ -21536,21 +21794,28 @@ def wash_ai_info():
             failed += 1
 
             print(
-                f"❌ [IMAGE PROCESSING] Failed: "
-                f"{filename} | {exc}"
+                f"❌ IMAGE PROCESSING FAILED: {filename} | {exc}"
             )
 
         finally:
 
+            if resized is not None:
+
+                try:
+                    resized.close()
+                except Exception:
+                    pass
+
             if temporary_path and os.path.exists(temporary_path):
+
                 try:
                     os.remove(temporary_path)
                 except OSError:
                     pass
 
-    # ---------------------------------------------------------
-    # FINAL REPORT
-    # ---------------------------------------------------------
+    # ============================================================
+    # STEP 8: FINAL REPORT
+    # ============================================================
 
     total_reduction = (
         (
@@ -21561,185 +21826,467 @@ def wash_ai_info():
         else 0
     )
 
-    print("\n========== AUTHOR IMAGE PROCESSING ==========")
-    print(f"Author JSON: {author_json_path}")
-    print(f"Active author: {author_value}")
-    print(f"Processed: {processed}")
-    print(f"Failed: {failed}")
+    print("\n" + "=" * 75)
+    print("WASH AI INFO ENGINE COMPLETED")
+    print("=" * 75)
+
+    print(f"Author: {author_value}")
+
+    print(f"Image URLs: {len(image_urls)}")
+
+    print(f"Downloaded: {downloaded}")
+
+    print(f"Download failures: {download_failed}")
+
+    print(f"Successfully washed: {processed}")
+
+    print(f"Processing failures: {failed}")
+
     print(f"Skipped: {skipped}")
-    print(f"Original bytes: {original_bytes_total:,}")
-    print(f"Final bytes: {final_bytes_total:,}")
-    print(f"Total size reduction: {total_reduction:.2f}%")
-    print(f"Destination: {destination_folder}")
-    print("==============================================")
+
+    print(f"Original size: {original_bytes_total:,} bytes")
+
+    print(f"Final size: {final_bytes_total:,} bytes")
+
+    print(f"Total size change: {total_reduction:.2f}%")
+
+    print(f"Source folder: {author_folder}")
+
+    print(f"Destination folder: {destination_folder}")
+
+    if download_errors:
+
+        print("\nDOWNLOAD ERRORS:")
+
+        for error in download_errors:
+            print(f" - {error}")
+
+    print("=" * 75)
 
     return {
         "author": author_value,
-        "author_json": author_json_path,
+        "downloaded": downloaded,
+        "download_failed": download_failed,
         "processed": processed,
         "failed": failed,
         "skipped": skipped,
+        "download_errors": download_errors,
         "original_bytes": original_bytes_total,
         "final_bytes": final_bytes_total,
         "reduction_percent": round(total_reduction, 2),
+        "source": author_folder,
         "destination": destination_folder
     }
 
 def execute_engine():
     """Execute the configured engine using case-insensitive engine matching.
 
-    Supports image-generation engine spellings such as:
+    Supported engines:
+      - driver
+      - csv
       - image_generation
       - IMAGE GENERATION
       - image-generation
-      - image_generation, image-generation
+      - wash_ai_info
+      - WASH AI INFO
+      - wash-ai-info
 
-    The function intentionally performs NO status checks or status updates.
+    The function intentionally performs no engine-specific status checks
+    or status updates.
     """
+
     import os
     import json
     import re
+
     analyze_and_distribute_configs()
 
     def load_json_file(file_path, default=None):
         """Load JSON file with error handling."""
+
         try:
+
             if os.path.exists(file_path):
+
                 with open(file_path, "r", encoding="utf-8") as handle:
                     return json.load(handle)
-        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
-            print(f"execute_engine: WARNING - Could not load {file_path}: {exc}")
+
+        except (
+            json.JSONDecodeError,
+            OSError,
+            TypeError,
+            ValueError
+        ) as exc:
+
+            print(
+                f"execute_engine: WARNING - "
+                f"Could not load {file_path}: {exc}"
+            )
+
         except Exception as exc:
-            print(f"execute_engine: WARNING - Unexpected JSON read error for {file_path}: {exc}")
+
+            print(
+                f"execute_engine: WARNING - "
+                f"Unexpected JSON read error: {exc}"
+            )
+
         return default if default is not None else {}
 
     def normalize_engine_token(value):
-        """Remove spaces/punctuation and case-fold a single engine token."""
-        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+        """Remove spaces and punctuation and case-fold an engine token."""
+
+        return re.sub(
+            r"[^a-z0-9]",
+            "",
+            str(value or "").casefold()
+        )
 
     def engine_matches(value, *aliases):
-        """Match any comma/semicolon/pipe-separated alias, case-insensitively."""
-        tokens = re.split(r"[,;|]", str(value or ""))
-        normalized_tokens = {normalize_engine_token(token) for token in tokens}
-        normalized_aliases = {normalize_engine_token(alias) for alias in aliases}
-        return bool(normalized_tokens.intersection(normalized_aliases))
+        """Match comma/semicolon/pipe-separated aliases."""
+
+        tokens = re.split(
+            r"[,;|]",
+            str(value or "")
+        )
+
+        normalized_tokens = {
+            normalize_engine_token(token)
+            for token in tokens
+        }
+
+        normalized_aliases = {
+            normalize_engine_token(alias)
+            for alias in aliases
+        }
+
+        return bool(
+            normalized_tokens.intersection(normalized_aliases)
+        )
 
     # ============================================================
-    # STEP 1: LOAD CONFIG - No status checks or updates
+    # STEP 1: LOAD CONFIGURATION
     # ============================================================
+
     try:
+
         author_path = globals().get("AUTHOR_PATH")
+
         if not author_path:
-            print("execute_engine: ERROR - AUTHOR_PATH is not configured.")
+
+            print(
+                "execute_engine: ERROR - "
+                "AUTHOR_PATH is not configured."
+            )
+
             return
 
         config_data = load_json_file(author_path, {})
+
         if isinstance(config_data, list) and config_data:
+
             config = config_data[-1]
+
         elif isinstance(config_data, dict):
+
             config = config_data
+
         else:
-            print("execute_engine: ERROR - Invalid config format in AUTHOR_PATH.")
+
+            print(
+                "execute_engine: ERROR - "
+                "Invalid config format in AUTHOR_PATH."
+            )
+
             return
 
         if not isinstance(config, dict):
-            print("execute_engine: ERROR - The selected AUTHOR_PATH config record is not an object.")
+
+            print(
+                "execute_engine: ERROR - "
+                "The selected config record is not an object."
+            )
+
             return
 
         dynamic = config.get("dynamic_values")
+
         if not isinstance(dynamic, dict):
             dynamic = {}
 
         print("execute_engine: Config loaded successfully")
+
     except Exception as exc:
-        print(f"execute_engine: ERROR - Failed to load config from AUTHOR_PATH: {exc}")
+
+        print(
+            f"execute_engine: ERROR - "
+            f"Failed to load config: {exc}"
+        )
+
         return
 
     # ============================================================
     # STEP 2: GET ENGINE VALUE
-    # dynamic_values.engine takes precedence; top-level engine is fallback.
     # ============================================================
-    engine_raw = dynamic.get("engine") or config.get("engine") or ""
+
+    engine_raw = (
+        dynamic.get("engine")
+        or config.get("engine")
+        or ""
+    )
+
     engine_value = str(engine_raw).strip()
+
     if not engine_value:
-        print("execute_engine: ERROR - 'engine' field is missing or empty in config.")
+
+        print(
+            "execute_engine: ERROR - "
+            "'engine' field is missing or empty."
+        )
+
         return
 
-    print(f"execute_engine: Engine value: '{engine_value}'")
-    author = config.get("author", dynamic.get("author", "Unknown"))
-    time_order = config.get("time_order", dynamic.get("time_order", "Unknown"))
+    print(
+        f"execute_engine: Engine value: '{engine_value}'"
+    )
+
+    author = (
+        config.get("author")
+        or dynamic.get("author")
+        or "Unknown"
+    )
+
+    time_order = (
+        config.get("time_order")
+        or dynamic.get("time_order")
+        or "Unknown"
+    )
 
     # ============================================================
     # STEP 3: EXECUTE BASED ON ENGINE TYPE
     # ============================================================
+
     if engine_matches(engine_value, "driver"):
+
         print(f"\n{'=' * 80}")
         print("EXECUTING DRIVER ENGINE")
         print(f"{'=' * 80}")
+
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
+
         print(f"{'=' * 80}\n")
 
         try:
+
             download_scheduled_images()
-            print("execute_engine: Initializing WebDriver...")
+
+            print(
+                "execute_engine: Initializing WebDriver..."
+            )
+
             driver, wait = initialize_driver(mode="headed")
+
             if driver is None or wait is None:
-                print("❌ execute_engine: DRIVER engine failed - WebDriver initialization returned None")
+
+                print(
+                    "❌ execute_engine: DRIVER engine failed - "
+                    "WebDriver initialization returned None"
+                )
+
                 return
 
-            print("execute_engine: WebDriver initialized successfully")
-            print("execute_engine: Calling update_calendar before launch_profile...")
+            print(
+                "execute_engine: WebDriver initialized successfully"
+            )
+
+            print(
+                "execute_engine: Calling update_calendar..."
+            )
+
             try:
+
                 update_calendar()
-                print("execute_engine: update_calendar completed")
-            except Exception as exc:
-                print(f"⚠️ execute_engine: update_calendar failed: {exc}; continuing anyway")
 
-            print("execute_engine: Calling launch_profile...")
-            try:
-                launch_profile()
-                move_downloaded_urls_to_uploadedjpgsurl()
-                print("execute_engine: launch_profile completed")
+                print(
+                    "execute_engine: update_calendar completed"
+                )
+
             except Exception as exc:
-                print(f"❌ execute_engine: launch_profile failed: {exc}")
+
+                print(
+                    f"⚠️ execute_engine: update_calendar failed: {exc}; "
+                    "continuing anyway"
+                )
+
+            print(
+                "execute_engine: Calling launch_profile..."
+            )
+
+            try:
+
+                launch_profile()
+
+                move_downloaded_urls_to_uploadedjpgsurl()
+
+                print(
+                    "execute_engine: launch_profile completed"
+                )
+
+            except Exception as exc:
+
+                print(
+                    f"❌ execute_engine: launch_profile failed: {exc}"
+                )
+
                 return
 
-            print("execute_engine: Calling update_settings...")
-            try:
-                print("execute_engine: update_settings completed")
-            except Exception as exc:
-                print(f"⚠️ execute_engine: update_settings failed: {exc}; continuing anyway")
+            print(
+                "execute_engine: update_settings completed"
+            )
 
-            print(f"\n✅ execute_engine: DRIVER engine completed successfully for author '{author}'")
+            print(
+                f"\n✅ DRIVER engine completed successfully for '{author}'"
+            )
+
             return
+
         except Exception as exc:
-            print(f"\n❌ execute_engine: DRIVER engine failed: {exc}")
+
+            print(
+                f"\n❌ execute_engine: DRIVER engine failed: {exc}"
+            )
+
             return
 
     elif engine_matches(engine_value, "csv"):
+
         print(f"\n{'=' * 80}")
         print("EXECUTING CSV ENGINE")
         print(f"{'=' * 80}")
+
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
+
         print(f"{'=' * 80}\n")
 
         try:
-            print("execute_engine: Calling csv_engine...")
-            csv_engine()
-            print("execute_engine: csv_engine completed")
-            print("execute_engine: Calling update_settings...")
-            try:
-                print("execute_engine: update_settings completed")
-            except Exception as exc:
-                print(f"⚠️ execute_engine: update_settings failed: {exc}; continuing anyway")
 
-            print(f"\n✅ execute_engine: CSV engine completed successfully for author '{author}'")
+            print(
+                "execute_engine: Calling csv_engine..."
+            )
+
+            csv_engine()
+
+            print(
+                "execute_engine: csv_engine completed"
+            )
+
+            print(
+                "execute_engine: update_settings completed"
+            )
+
+            print(
+                f"\n✅ CSV engine completed successfully for '{author}'"
+            )
+
             return
+
         except Exception as exc:
-            print(f"\n❌ execute_engine: CSV engine failed: {exc}")
+
+            print(
+                f"\n❌ execute_engine: CSV engine failed: {exc}"
+            )
+
             return
+
+    # ============================================================
+    # NEW ENGINE: WASH AI INFO
+    # ============================================================
+
+    elif engine_matches(
+        engine_value,
+        "wash_ai_info",
+        "wash ai info",
+        "wash-ai-info"
+    ):
+
+        print(f"\n{'=' * 80}")
+        print("EXECUTING WASH AI INFO ENGINE")
+        print(f"{'=' * 80}")
+
+        print(f"Author: {author}")
+
+        print("Operation:")
+        print("1. Download configured image URLs.")
+        print("2. Save images into the author's folder.")
+        print("3. Resize and compress the images.")
+        print("4. Save processed images into AI info washed.")
+
+        print(f"{'=' * 80}\n")
+
+        try:
+
+            print(
+                "execute_engine: Calling wash_ai_info()..."
+            )
+
+            result = wash_ai_info()
+
+            print(
+                "\nexecute_engine: wash_ai_info() returned."
+            )
+
+            if isinstance(result, dict):
+
+                downloaded = result.get("downloaded", 0)
+                download_failed = result.get("download_failed", 0)
+                processed = result.get("processed", 0)
+                failed = result.get("failed", 0)
+                skipped = result.get("skipped", 0)
+
+                print("\nWASH AI INFO SUMMARY")
+
+                print(f"Downloaded: {downloaded}")
+                print(f"Download failures: {download_failed}")
+                print(f"Successfully washed: {processed}")
+                print(f"Processing failures: {failed}")
+                print(f"Skipped: {skipped}")
+
+                if download_failed or failed:
+
+                    print(
+                        "\n⚠️ WASH AI INFO completed with "
+                        "some download or processing failures."
+                    )
+
+                else:
+
+                    print(
+                        "\n✅ WASH AI INFO completed successfully."
+                    )
+
+                print(
+                    f"Destination: {result.get('destination', 'Unknown')}"
+                )
+
+            print(
+                f"\n✅ execute_engine: WASH AI INFO operation "
+                f"finished for '{author}'"
+            )
+
+            return result
+
+        except Exception as exc:
+
+            print(
+                f"\n❌ execute_engine: WASH AI INFO failed: {exc}"
+            )
+
+            return
+
+    # ============================================================
+    # IMAGE GENERATION ENGINE
+    # ============================================================
 
     elif engine_matches(
         engine_value,
@@ -21747,28 +22294,56 @@ def execute_engine():
         "image generation",
         "image-generation",
     ):
+
         print(f"\n{'=' * 80}")
         print("EXECUTING IMAGE GENERATION")
         print(f"{'=' * 80}")
+
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
+
         print(f"{'=' * 80}\n")
 
         try:
-            print("execute_engine: Calling serenum_google_flow_images_generation_engine()...")
+
+            print(
+                "execute_engine: Calling "
+                "serenum_google_flow_images_generation_engine()..."
+            )
+
             serenum_google_flow_images_generation_engine()
-            print("execute_engine: Image generation function returned")
-            print(f"\n✅ execute_engine: Image generation operation finished for '{author}'")
-            return
-        except Exception as exc:
-            print(f"\n❌ execute_engine: Image generation failed: {exc}")
+
+            print(
+                "execute_engine: Image generation function returned"
+            )
+
+            print(
+                f"\n✅ Image generation operation finished for '{author}'"
+            )
+
             return
 
+        except Exception as exc:
+
+            print(
+                f"\n❌ execute_engine: Image generation failed: {exc}"
+            )
+
+            return
+
+    # ============================================================
+    # UNKNOWN ENGINE
+    # ============================================================
+
     else:
+
         print(
             "\n❌ execute_engine: ERROR - Unknown engine: "
-            f"'{engine_value}'. Must be 'driver', 'csv', or an image_generation variation."
+            f"'{engine_value}'. "
+            "Supported engines: driver, csv, image_generation, "
+            "and wash_ai_info."
         )
+
         return
 
 
