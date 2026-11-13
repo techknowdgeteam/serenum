@@ -1,0 +1,16 @@
+# Exact third-party distributions required by imports in serenum.py
+Pillow
+pytz
+psutil
+PyAutoGUI
+pyperclip
+opencv-python
+pytesseract
+numpy
+requests
+selenium
+webdriver-manager
+keyboard
+pywin32
+moviepy
+chrome-lens-py

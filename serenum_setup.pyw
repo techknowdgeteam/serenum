@@ -29,8 +29,17 @@ from tkinter import ttk, messagebox
 APP_NAME = "Serenum"
 INSTALL_DIR = Path(r"C:\xampp\htdocs\AI automation\serenum")
 AI_COVER_DIR = Path(r"C:\xampp\htdocs\AI automation\ai cover")
-SOURCE_DIR = Path(__file__).resolve().parent
-SOURCE_SCRIPT = SOURCE_DIR / "serenum.py"
+
+# The updater sets SERENUM_SOURCE_SCRIPT to the newest validated Downloads copy.
+# A normal launch/install uses the script next to this setup program.
+_SOURCE_OVERRIDE = os.environ.get("SERENUM_SOURCE_SCRIPT", "").strip()
+if _SOURCE_OVERRIDE:
+    SOURCE_SCRIPT = Path(_SOURCE_OVERRIDE).expanduser().resolve()
+    SOURCE_DIR = SOURCE_SCRIPT.parent
+else:
+    SOURCE_DIR = Path(__file__).resolve().parent
+    SOURCE_SCRIPT = SOURCE_DIR / "serenum.py"
+
 SETUP_SCRIPT_NAME = "serenum_setup.pyw"
 LAUNCHER_NAME = "Start_Serenum.vbs"
 
@@ -2170,54 +2179,66 @@ class SerenumSetup:
         return code, captured
 
     def _install_layout(self):
-        """Install Serenum and always create the exact AI cover GIF destination.
-
-        The package deliberately does not require an ai_cover_assets folder.
-        Supplied GIFs are read from the package root (or legacy locations), and
-        an embedded robot GIF is written if all optional artwork is absent.
-        """
+        """Safely replace application files, preserve user data, and prepare the cover."""
         destination_script = INSTALL_DIR / "serenum.py"
         if not SOURCE_SCRIPT.is_file() and not destination_script.is_file():
             raise SetupFailure(
-                "The Serenum application script is missing from both the setup package and installation folder. "
-                "Extract the complete Serenum package again, then retry."
+                "No valid Serenum application script was found. Extract the installer package or place an updated serenum.py in Downloads, then retry."
             )
 
         INSTALL_DIR.mkdir(parents=True, exist_ok=True)
         for folder in REQUIRED_DIRECTORIES:
             folder.mkdir(parents=True, exist_ok=True)
 
-        same_directory = os.path.normcase(os.path.abspath(SOURCE_DIR)) == os.path.normcase(os.path.abspath(INSTALL_DIR))
-        if SOURCE_SCRIPT.is_file() and not same_directory:
-            self._copy_file(SOURCE_SCRIPT, destination_script)
+        # Replace the old application script atomically. Keep a dated rollback copy
+        # rather than deleting the previous installation or any user data.
+        if SOURCE_SCRIPT.is_file() and os.path.normcase(str(SOURCE_SCRIPT)) != os.path.normcase(str(destination_script)):
+            source_text = SOURCE_SCRIPT.read_text(encoding="utf-8")
+            compile(source_text, str(SOURCE_SCRIPT), "exec")
+            if destination_script.is_file():
+                backup_dir = INSTALL_DIR / "_update_backups"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                backup_path = backup_dir / f"serenum_{stamp}.py"
+                shutil.copy2(destination_script, backup_path)
+                self._write_log(f"Previous application version backed up as {backup_path.name}.")
+            staged_script = destination_script.with_name("serenum.py.installing")
+            shutil.copy2(SOURCE_SCRIPT, staged_script)
+            # Re-validate the exact staged bytes before replacing the installed app.
+            compile(staged_script.read_text(encoding="utf-8"), str(staged_script), "exec")
+            os.replace(staged_script, destination_script)
+            self._write_log("Latest Serenum application script installed successfully.")
 
-        # Move the setup utility and launcher beside the installed application
-        # so future starts can repair the installation from the same location.
-        if not same_directory:
-            for file_name in (SETUP_SCRIPT_NAME, LAUNCHER_NAME, "requirements-serenum.txt", "README_Serenum_Auto_Setup.txt"):
-                source = SOURCE_DIR / file_name
-                if source.is_file():
-                    self._copy_file(source, INSTALL_DIR / file_name)
+        # Refresh the desktop application/updater components when the source package
+        # includes them. A script-only update leaves these installed support files intact.
+        support_files = (
+            "serenum_setup.pyw",
+            "serenum_updater.pyw",
+            "Start_Serenum.vbs",
+            "Update_Serenum.vbs",
+            "Install_Serenum.vbs",
+            "requirements-serenum.txt",
+            "README_Serenum_Desktop_Installer.txt",
+            "Serenum.ico",
+        )
+        for file_name in support_files:
+            source = SOURCE_DIR / file_name
+            target = INSTALL_DIR / file_name
+            if source.is_file() and os.path.normcase(str(source)) != os.path.normcase(str(target)):
+                self._copy_file(source, target)
+                self._write_log(f"Application component refreshed: {file_name}")
 
-        # Copy optional artwork files from the flat package root or legacy
-        # ai_cover_assets folder. The folder itself is never required.
+        # Copy available cover art into the app folder so subsequent repairs can use it.
         for file_name in COVER_SOURCE_NAMES:
-            possible_sources = (
-                SOURCE_DIR / file_name,
-                SOURCE_DIR / "ai_cover_assets" / file_name,
-                INSTALL_DIR / file_name,
-                INSTALL_DIR / "ai_cover_assets" / file_name,
-            )
-            for source in possible_sources:
+            for source in (SOURCE_DIR / file_name, INSTALL_DIR / file_name, SOURCE_DIR / "ai_cover_assets" / file_name):
                 if source.is_file():
                     target = INSTALL_DIR / file_name
-                    if os.path.normcase(os.path.abspath(source)) != os.path.normcase(os.path.abspath(target)):
+                    if os.path.normcase(str(source)) != os.path.normcase(str(target)):
                         self._copy_file(source, target)
                     break
 
-        # Create the user's required canonical cover file. Choose randomly from
-        # valid available GIFs. If no supplied GIF exists, materialize the
-        # embedded custom robot cover instead of failing setup.
+        # Always create the canonical cover destination. It is independent of any
+        # optional cover-assets folder and falls back to the embedded robot GIF.
         AI_COVER_DIR.mkdir(parents=True, exist_ok=True)
         cover_target = AI_COVER_DIR / COVER_OUTPUT_NAME
         candidates = []
@@ -2246,28 +2267,28 @@ class SerenumSetup:
             self._write_log(f"Selected cover artwork: {selected_cover.name}")
         else:
             try:
-                existing_valid = False
+                valid = False
                 if cover_target.is_file():
                     with cover_target.open("rb") as image_file:
-                        existing_valid = image_file.read(6) in (b"GIF87a", b"GIF89a")
-                if not existing_valid:
+                        valid = image_file.read(6) in (b"GIF87a", b"GIF89a")
+                if not valid:
                     fallback_bytes = base64.b64decode(EMBEDDED_ROBOT_FALLBACK_GIF)
                     if not fallback_bytes.startswith((b"GIF87a", b"GIF89a")):
                         raise SetupFailure("The built-in Serenum robot cover data is invalid.")
                     temp_cover = cover_target.with_name(cover_target.name + ".tmp")
                     temp_cover.write_bytes(fallback_bytes)
                     os.replace(temp_cover, cover_target)
-                self._write_log("No optional cover GIF was available. Created the built-in Serenum robot cover.")
+                self._write_log("Created or verified the built-in Serenum robot cover.")
             except Exception as exc:
                 raise SetupFailure(
-                    "Serenum could not create its required robot cover image. "
-                    f"Check write permission for the AI cover folder. Details: {type(exc).__name__}: {exc}"
+                    "Serenum could not create its robot cover. Check write access to the AI cover folder. "
+                    f"Details: {type(exc).__name__}: {exc}"
                 ) from exc
 
         if not cover_target.is_file() or cover_target.stat().st_size < 256:
             raise SetupFailure("The required AI cover GIF could not be verified after creation.")
 
-        # Preserve any existing author configuration. Never replace user data.
+        # User-owned configuration and working data are deliberately retained.
         config_file = INSTALL_DIR / "pageandgroupauthors.json"
         if config_file.exists():
             try:
@@ -2277,6 +2298,60 @@ class SerenumSetup:
 
         if not destination_script.is_file():
             raise SetupFailure("The Serenum application script could not be installed.")
+
+    def _create_desktop_shortcuts(self):
+        """Create/refresh the Serenum and Update Serenum desktop shortcuts quietly."""
+        start_vbs = INSTALL_DIR / "Start_Serenum.vbs"
+        update_vbs = INSTALL_DIR / "Update_Serenum.vbs"
+        if not start_vbs.is_file() or not update_vbs.is_file():
+            self._write_log("Desktop shortcuts were not refreshed because a launcher file is missing.")
+            return
+
+        def vb(value: str) -> str:
+            return '"' + str(value).replace('"', '""') + '"'
+
+        icon = INSTALL_DIR / "Serenum.ico"
+        icon_location = f"{icon},0" if icon.is_file() else "%SystemRoot%\\System32\\shell32.dll,21"
+        script = "\r\n".join([
+            'Option Explicit',
+            'Dim sh, desktop, link',
+            'Set sh = CreateObject("WScript.Shell")',
+            'desktop = sh.SpecialFolders("Desktop")',
+            'Set link = sh.CreateShortcut(desktop & "\\Serenum.lnk")',
+            f'link.TargetPath = {vb(start_vbs)}',
+            f'link.WorkingDirectory = {vb(INSTALL_DIR)}',
+            f'link.IconLocation = {vb(icon_location)}',
+            'link.Description = "Open Serenum Automation Control Center"',
+            'link.Save',
+            'Set link = sh.CreateShortcut(desktop & "\\Update Serenum.lnk")',
+            f'link.TargetPath = {vb(update_vbs)}',
+            f'link.WorkingDirectory = {vb(INSTALL_DIR)}',
+            f'link.IconLocation = {vb(icon_location)}',
+            'link.Description = "Find and install the newest Serenum version from Downloads"',
+            'link.Save',
+            'Set link = Nothing',
+            'Set sh = Nothing',
+        ])
+        helper = INSTALL_DIR / "_create_serenum_shortcuts.vbs"
+        helper.write_text(script, encoding="utf-8")
+        wscript = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "wscript.exe"
+        if not wscript.is_file():
+            self._write_log("Windows Script Host was not found; desktop shortcuts could not be created.")
+            return
+        try:
+            result = subprocess.run(
+                [str(wscript), str(helper)], cwd=str(INSTALL_DIR),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW,
+                timeout=20, check=False,
+            )
+            if result.returncode == 0:
+                self._write_log("Desktop shortcuts created: Serenum and Update Serenum.")
+            else:
+                self._write_log(f"Desktop shortcut creation returned code {result.returncode}.")
+        except Exception as exc:
+            self._write_log(f"Desktop shortcut creation failed: {type(exc).__name__}: {exc}")
+
     @staticmethod
     def _copy_file(source: Path, destination: Path):
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2496,6 +2571,8 @@ class SerenumSetup:
             compile(source, str(INSTALL_DIR / "serenum.py"), "exec")
             self._set_progress(98, "FINALISING SERENUM", "All application imports and script checks passed.")
             self._write_log("All Python imports were verified successfully.")
+            self._set_progress(97, "CREATING DESKTOP SHORTCUTS", "Preparing Serenum and Update Serenum on your desktop.")
+            self._create_desktop_shortcuts()
             self._write_log("Serenum setup completed successfully.")
             self._emit("complete", message="All checks passed. Serenum is ready to open.")
         except BaseException as exc:
