@@ -2300,57 +2300,125 @@ class SerenumSetup:
             raise SetupFailure("The Serenum application script could not be installed.")
 
     def _create_desktop_shortcuts(self):
-        """Create/refresh the Serenum and Update Serenum desktop shortcuts quietly."""
+        """Create and verify both Desktop and Start Menu shortcuts."""
         start_vbs = INSTALL_DIR / "Start_Serenum.vbs"
         update_vbs = INSTALL_DIR / "Update_Serenum.vbs"
         if not start_vbs.is_file() or not update_vbs.is_file():
-            self._write_log("Desktop shortcuts were not refreshed because a launcher file is missing.")
-            return
+            raise SetupFailure(
+                "The Serenum launch shortcuts could not be created because a required launcher is missing. "
+                "Re-extract the complete installer package and run Install_Serenum.vbs again."
+            )
 
         def vb(value: str) -> str:
             return '"' + str(value).replace('"', '""') + '"'
 
         icon = INSTALL_DIR / "Serenum.ico"
         icon_location = f"{icon},0" if icon.is_file() else "%SystemRoot%\\System32\\shell32.dll,21"
-        script = "\r\n".join([
-            'Option Explicit',
-            'Dim sh, desktop, link',
-            'Set sh = CreateObject("WScript.Shell")',
-            'desktop = sh.SpecialFolders("Desktop")',
-            'Set link = sh.CreateShortcut(desktop & "\\Serenum.lnk")',
-            f'link.TargetPath = {vb(start_vbs)}',
-            f'link.WorkingDirectory = {vb(INSTALL_DIR)}',
-            f'link.IconLocation = {vb(icon_location)}',
-            'link.Description = "Open Serenum Automation Control Center"',
-            'link.Save',
-            'Set link = sh.CreateShortcut(desktop & "\\Update Serenum.lnk")',
-            f'link.TargetPath = {vb(update_vbs)}',
-            f'link.WorkingDirectory = {vb(INSTALL_DIR)}',
-            f'link.IconLocation = {vb(icon_location)}',
-            'link.Description = "Find and install the newest Serenum version from Downloads"',
-            'link.Save',
-            'Set link = Nothing',
-            'Set sh = Nothing',
-        ])
+        marker = INSTALL_DIR / ".serenum_shortcut_locations.txt"
         helper = INSTALL_DIR / "_create_serenum_shortcuts.vbs"
+        script = "\r\n".join([
+            "Option Explicit",
+            "Dim sh, fso, desktop, programs, appMenu, link, outFile",
+            "Set sh = CreateObject(\"WScript.Shell\")",
+            "Set fso = CreateObject(\"Scripting.FileSystemObject\")",
+            "desktop = sh.SpecialFolders(\"Desktop\")",
+            "programs = sh.SpecialFolders(\"Programs\")",
+            "appMenu = programs & \"\\Serenum\"",
+            "If Not fso.FolderExists(appMenu) Then fso.CreateFolder(appMenu)",
+            # Desktop main application shortcut
+            "Set link = sh.CreateShortcut(desktop & \"\\Serenum.lnk\")",
+            f"link.TargetPath = {vb(start_vbs)}",
+            f"link.WorkingDirectory = {vb(INSTALL_DIR)}",
+            f"link.IconLocation = {vb(icon_location)}",
+            "link.Description = \"Open Serenum Automation Control Center\"",
+            "link.Save",
+            # Desktop updater shortcut
+            "Set link = sh.CreateShortcut(desktop & \"\\Update Serenum.lnk\")",
+            f"link.TargetPath = {vb(update_vbs)}",
+            f"link.WorkingDirectory = {vb(INSTALL_DIR)}",
+            f"link.IconLocation = {vb(icon_location)}",
+            "link.Description = \"Find and install the newest Serenum version from Downloads\"",
+            "link.Save",
+            # Start Menu application shortcut (this makes Serenum discoverable in Windows Search)
+            "Set link = sh.CreateShortcut(appMenu & \"\\Serenum.lnk\")",
+            f"link.TargetPath = {vb(start_vbs)}",
+            f"link.WorkingDirectory = {vb(INSTALL_DIR)}",
+            f"link.IconLocation = {vb(icon_location)}",
+            "link.Description = \"Open Serenum Automation Control Center\"",
+            "link.Save",
+            # Start Menu updater shortcut
+            "Set link = sh.CreateShortcut(appMenu & \"\\Update Serenum.lnk\")",
+            f"link.TargetPath = {vb(update_vbs)}",
+            f"link.WorkingDirectory = {vb(INSTALL_DIR)}",
+            f"link.IconLocation = {vb(icon_location)}",
+            "link.Description = \"Update Serenum from the newest extracted Downloads version\"",
+            "link.Save",
+            # Write the resolved known-folder locations for post-creation verification.
+            f"Set outFile = fso.CreateTextFile({vb(marker)}, True, True)",
+            "outFile.WriteLine desktop",
+            "outFile.WriteLine appMenu",
+            "outFile.Close",
+            "Set link = Nothing",
+            "Set outFile = Nothing",
+            "Set fso = Nothing",
+            "Set sh = Nothing",
+        ])
         helper.write_text(script, encoding="utf-8")
+        try:
+            marker.unlink(missing_ok=True)
+        except Exception:
+            pass
+
         wscript = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "wscript.exe"
         if not wscript.is_file():
-            self._write_log("Windows Script Host was not found; desktop shortcuts could not be created.")
-            return
+            raise SetupFailure("Windows Script Host is unavailable, so Serenum shortcuts could not be created.")
+
         try:
             result = subprocess.run(
                 [str(wscript), str(helper)], cwd=str(INSTALL_DIR),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW,
-                timeout=20, check=False,
+                timeout=25, check=False,
             )
-            if result.returncode == 0:
-                self._write_log("Desktop shortcuts created: Serenum and Update Serenum.")
-            else:
-                self._write_log(f"Desktop shortcut creation returned code {result.returncode}.")
         except Exception as exc:
-            self._write_log(f"Desktop shortcut creation failed: {type(exc).__name__}: {exc}")
+            raise SetupFailure(f"Windows could not create the Serenum desktop shortcuts: {type(exc).__name__}: {exc}") from exc
+
+        if result.returncode != 0 or not marker.is_file():
+            raise SetupFailure(
+                "Windows did not confirm creation of the Serenum shortcuts. "
+                "Check that Desktop and Start Menu folders are writable, then run the installer again."
+            )
+
+        try:
+            locations = marker.read_text(encoding="utf-16").splitlines()
+            desktop = Path(locations[0])
+            app_menu = Path(locations[1])
+        except Exception as exc:
+            raise SetupFailure(f"The Serenum shortcut locations could not be verified: {exc}") from exc
+
+        expected = [
+            desktop / "Serenum.lnk",
+            desktop / "Update Serenum.lnk",
+            app_menu / "Serenum.lnk",
+            app_menu / "Update Serenum.lnk",
+        ]
+        missing = [str(path) for path in expected if not path.is_file()]
+        if missing:
+            raise SetupFailure(
+                "Serenum setup could not verify all four shortcuts. Missing: " + "; ".join(missing)
+            )
+
+        self.shortcut_summary = (
+            "Desktop shortcuts: Serenum and Update Serenum.\n"
+            "Start Menu: Programs > Serenum (Serenum and Update Serenum).\n"
+            "You can now search Windows for Serenum or double-click the desktop icon."
+        )
+        self._write_log("Verified all four shortcuts: two on Desktop and two in Start Menu > Programs > Serenum.")
+        try:
+            marker.unlink(missing_ok=True)
+            helper.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     @staticmethod
     def _copy_file(source: Path, destination: Path):
@@ -2642,12 +2710,25 @@ class SerenumSetup:
         self.status_label.configure(text="SETUP COMPLETE", fg=self.GREEN)
         self.heading.configure(text="Serenum is ready")
         self.subheading.configure(text=message + " Opening the main control center shortly.")
-        self._append_log("SUCCESS — Environment confirmed. Opening Serenum…")
+        self._append_log("SUCCESS — Environment confirmed. Desktop and Start Menu shortcuts have been verified.")
+        details = getattr(self, "shortcut_summary", "Serenum shortcuts have been created.")
+        self.subheading.configure(text=message + "\n\n" + details + "\n\nOpening the main control center shortly.")
+        try:
+            messagebox.showinfo(
+                "Serenum installation complete",
+                "Serenum has been installed successfully.\n\n"
+                "You can now find it on your Desktop as 'Serenum' or in Windows Search / Start Menu.\n"
+                "The updater is available as 'Update Serenum'.\n\n"
+                "The main Serenum window will open automatically.",
+                parent=self.root,
+            )
+        except Exception:
+            pass
         self.action_button.configure(
             text="OPEN SERENUM NOW", command=self.open_serenum,
             bg="#0B704A", fg="#FFFFFF", state="normal",
         )
-        self.root.after(1800, self.open_serenum)
+        self.root.after(700, self.open_serenum)
 
     def _show_failure(self, payload: dict):
         self.failed = True

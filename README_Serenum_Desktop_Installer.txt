@@ -16,15 +16,27 @@ FIRST INSTALLATION
 3. A Serenum setup window opens. It creates the required application folders, prepares the
    cover at C:\xampp\htdocs\AI automation\ai cover\ai cover.gif, checks Python imports,
    installs missing third-party packages in the background, and validates the script.
-4. When setup succeeds, Serenum opens and two shortcuts are created on the Windows Desktop:
-   - Serenum
-   - Update Serenum
+4. When setup succeeds, a confirmation window tells you exactly where the shortcuts were created.
+   Four shortcuts are created and verified:
+   - Windows Desktop: Serenum
+   - Windows Desktop: Update Serenum
+   - Start Menu > Programs > Serenum: Serenum
+   - Start Menu > Programs > Serenum: Update Serenum
+5. Serenum then opens automatically. You can later launch it from the desktop icon or by
+   pressing the Windows key and searching for `Serenum`.
 
 DAILY LAUNCH
 ------------
-Double-click the Serenum desktop shortcut. It performs the quick dependency/import verification
-in a green progress window and opens the main Serenum interface when checks pass. No Command
-Prompt window is opened.
+Double-click the Serenum desktop shortcut, or search for `Serenum` from the Windows Start menu.
+It performs the quick dependency/import verification in a green progress window and opens the
+main Serenum interface when checks pass. No Command Prompt window is opened.
+
+SHORTCUT VERIFICATION
+---------------------
+The installer verifies each .lnk shortcut after Windows creates it. Installation is not reported
+as complete unless both Desktop shortcuts and both Start Menu shortcuts exist. The success
+confirmation identifies the Desktop and Start Menu locations. If Windows cannot create or verify
+the links, setup displays an actionable error and does not claim that installation completed.
 
 UPDATING FROM DOWNLOADS
 -----------------------
