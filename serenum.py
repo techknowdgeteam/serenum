@@ -82,6 +82,8 @@ import difflib
 import pyperclip
 import keyboard 
 import tkinter as tk
+import sys
+import queue
 import threading
 import zipfile
 import csv
@@ -229,125 +231,114 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 os.environ["TESSDATA_PREFIX"] = r"C:\xampp\htdocs\AI automation\sceniq\pytesseract\tessdata"
 tessdata_path = r"C:\xampp\htdocs\AI automation\scenIQ\pytesseract\tessdata\eng.traineddata"
 edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+# ============================================================================
+# SERENUM DESKTOP APPLICATION BRIDGE
+# ============================================================================
+# The previous script created a separate, frameless HUD thread during import.
+# Serenum now uses one normal, minimizable/maximizable application window.
+SERENUM_APP = None
+SERENUM_PAUSE_EVENT = threading.Event()
+# Legacy workflow signal retained for its internal Alt+/ shortcut.
+# The desktop STOP button now terminates the isolated worker process directly.
+SERENUM_STOP_EVENT = threading.Event()
+_SERENUM_BASE_SLEEP = time.sleep
+_SERENUM_SLEEP_PATCHED = False
+
+
+def _serenum_wait_if_paused():
+    """Block the engine at a safe checkpoint until Resume is pressed."""
+    while SERENUM_PAUSE_EVENT.is_set():
+        if SERENUM_STOP_EVENT.is_set():
+            raise KeyboardInterrupt("Serenum application exit requested")
+        _SERENUM_BASE_SLEEP(0.10)
+
+    if SERENUM_STOP_EVENT.is_set():
+        raise KeyboardInterrupt("Serenum application exit requested")
+
+
+def _serenum_checkpoint():
+    """Checkpoint used between major stages and inside long-running loops."""
+    _serenum_wait_if_paused()
+
+
+def _serenum_controlled_sleep(seconds):
+    """Legacy checkpoint-aware sleep used by older in-process call paths.
+
+    The desktop Pause/Resume/Stop controls now operate on the isolated worker
+    process instead of relying on these cooperative checkpoints.
+    """
+    try:
+        duration = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        duration = 0.0
+
+    _serenum_checkpoint()
+    deadline = time.monotonic() + duration
+    while True:
+        _serenum_checkpoint()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        _SERENUM_BASE_SLEEP(min(0.10, remaining))
+
+
+def _serenum_install_sleep_controls():
+    """Install interruptible sleep only while an engine run is active."""
+    global _SERENUM_SLEEP_PATCHED
+    if not _SERENUM_SLEEP_PATCHED:
+        time.sleep = _serenum_controlled_sleep
+        _SERENUM_SLEEP_PATCHED = True
+
+
+def _serenum_restore_sleep_controls():
+    """Restore Python's original sleep implementation after the run."""
+    global _SERENUM_SLEEP_PATCHED
+    if _SERENUM_SLEEP_PATCHED and time.sleep is _serenum_controlled_sleep:
+        time.sleep = _SERENUM_BASE_SLEEP
+    _SERENUM_SLEEP_PATCHED = False
+
+
 class AutomationHUD:
+    """Compatibility bridge for existing hud.print() calls in the engine."""
     def __init__(self):
         self.root = None
         self.label_status = None
         self.visible = True
-        self.current_text = "Initializing..."
+        self.current_text = "Serenum is ready"
         self.status_history = []
         self.current_status_type = "initializing"
-        self.thread = threading.Thread(target=self._run_hud, daemon=True)
-        self.thread.start()
-
-    def _run_hud(self):
-        self.root = tk.Tk()
-        self.root.title("Automation HUD")
-        
-        # Frameless, always on top, transparent background
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.attributes("-transparentcolor", "black")
-        self.root.config(bg="black")
-        
-        # Make window larger to display full text
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        w, h = 600, 120  # Increased height for text visibility
-        x = (sw // 2) - (w // 2)
-        y = (sh // 2) - (h // 2) - 100
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
-        
-        # Main container with black background
-        container = tk.Frame(self.root, bg="black")
-        container.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # Status message with large, bold font centered
-        self.label_status = tk.Label(container, text="🚀 Initializing...", 
-                                   font=("Segoe UI", 10, "bold"), 
-                                   fg="#00FFCC", bg="black",
-                                   wraplength=560, justify="center")
-        self.label_status.pack(expand=True, fill="both")
-        
-        # Apply Windows styling hooks for click-through
-        try:
-            hwnd = win32gui.GetParent(self.root.winfo_id())
-            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
-                                 ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
-        except:
-            pass  # Fallback if Windows API fails
-        
-        self.root.mainloop()
 
     def print(self, text, status_type="processing"):
-        """Update status text"""
-        self.current_text = text
+        self.current_text = str(text)
         self.current_status_type = status_type
-        
-        # Store history
-        self.status_history.append((time.time(), text))
-        if len(self.status_history) > 20:
-            self.status_history.pop(0)
-        
-        # Update UI in thread-safe manner
-        if self.root and self.label_status:
-            # Color mapping for different status types
-            color_map = {
-                "searching": "#00CCFF",
-                "scanning": "#00FF88",
-                "processing": "#00FFCC",
-                "success": "#00FF88",
-                "warning": "#FFAA00",
-                "waiting": "#8888FF",
-                "clicking": "#FF66CC",
-                "typing": "#66CCFF",
-                "navigating": "#FF8844",
-                "error": "#FF4466",
-                "initializing": "#00FFCC",
-                "booting": "#00CCFF",
-                "connecting": "#66CCFF",
-                "loading": "#00FF88",
-                "verifying": "#00FFCC",
-                "complete": "#FF66CC"
-            }
-            color = color_map.get(status_type, "white")
-            self.root.after(0, lambda: self.label_status.config(text=text, fg=color))
-        
-        # Log with timestamp
-        timestamp = time.strftime("%H:%M:%S")
-        # Extract emoji from text if present
-        emoji_pattern = re.compile(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002702-\U000027B0\U000024C2-\U0001F251]+', flags=re.UNICODE)
-        emojis = emoji_pattern.findall(text)
-        icon = emojis[0] if emojis else "📊"
-        clean_text = emoji_pattern.sub('', text).strip()
-        print(f"{icon} [HUD @ {timestamp}] {clean_text}")
+        self.status_history.append((time.time(), str(text)))
+        if len(self.status_history) > 100:
+            self.status_history = self.status_history[-100:]
+
+        app = SERENUM_APP
+        if app is not None:
+            app.publish_status(str(text), status_type)
+        else:
+            try:
+                sys.__stdout__.write(f"[SERENUM] {text}\n")
+                sys.__stdout__.flush()
+            except Exception:
+                pass
 
     def hide(self):
-        """Hide the HUD (kept for compatibility but not used)"""
         self.visible = False
 
     def show(self):
-        """Show the HUD (kept for compatibility)"""
         self.visible = True
 
     def show_summary(self, final_status="✅ Operation Complete"):
-        """Display final operation summary with flash effect"""
-        if self.root:
-            self.print(final_status, "complete")
-            # Flash effect for completion
-            for _ in range(3):
-                if self.root:
-                    self.root.attributes("-alpha", 0.7)
-                    time.sleep(0.1)
-                    self.root.attributes("-alpha", 1.0)
-                    time.sleep(0.1)
+        self.print(final_status, "complete")
 
     def cleanup(self):
-        """Clean up resources"""
-        if self.root:
-            self.root.quit()
-            self.root.destroy()
+        # The Serenum main window owns the Tk lifecycle.
+        return None
+
+
 hud = AutomationHUD()
 def ocr():
     """
@@ -1204,6 +1195,7 @@ def fetch_settings():
     def check_for_termination():
         if terminate_automation:
             raise KeyboardInterrupt("User forced exit via shortcut key.")
+        _serenum_checkpoint()
     
     # Helper functions for status updates
     def load_json_file(file_path, default=None):
@@ -2065,7 +2057,7 @@ def updated_config_construction():
     - PER-CONFIG operation_status with detailed messages about what was processed
     - ESCAPES backslashes in JSON strings to ensure valid JSON
     - APPENDS new messages to existing operation_status instead of overwriting
-    - NORMALIZES all slashes (/) and backslashes (\) to underscores (_) in operation_status
+    - NORMALIZES all slashes (/) and backslashes to underscores (_) in operation_status
     - CHECKS dynamic_fields.txt and removes any fields not listed in it from dynamic_values
     
     UPDATES operation_status in AUTHOR_PATH based on processing results.
@@ -3122,6 +3114,7 @@ def update_settings():
     def check_for_termination():
         if terminate_automation:
             raise KeyboardInterrupt("User forced exit via shortcut key.")
+        _serenum_checkpoint()
     
     def ensure_updated_configs_exists():
         """Create default UPDATED_CONFIGS file if it doesn't exist or is invalid."""
@@ -15874,12 +15867,7 @@ def serenum_google_flow_images_generation_engine():
                 )
             else:
                 if not os.path.exists(PANEL_PATH):
-                    print(f"❌ Error: panel.json missing at: {PANEL_PATH}")
-                    try:
-                        hud.print("Configuration file is missing.", "error")
-                    except Exception:
-                        pass
-                    return
+                    raise FileNotFoundError(f"Required panel.json is missing: {PANEL_PATH}")
                 with open(PANEL_PATH, "r", encoding="utf-8") as file:
                     panel_data = json.load(file)
                 image_generation_engine = _find_engine(panel_data)
@@ -15897,12 +15885,7 @@ def serenum_google_flow_images_generation_engine():
                 print("✅ [ENGINE] Image generation engine is 'Google Flow' - proceeding with operation")
         else:
             if not os.path.exists(PANEL_PATH):
-                print(f"❌ Error: panel.json missing at: {PANEL_PATH}")
-                try:
-                    hud.print("Configuration file is missing.", "error")
-                except Exception:
-                    pass
-                return
+                raise FileNotFoundError(f"Required panel.json is missing: {PANEL_PATH}")
             with open(PANEL_PATH, "r", encoding="utf-8") as file:
                 panel_data = json.load(file)
             image_generation_engine = _find_engine(panel_data)
@@ -15919,19 +15902,9 @@ def serenum_google_flow_images_generation_engine():
             print("✅ [ENGINE] Image generation engine is 'Google Flow' - proceeding with operation")
 
     except json.JSONDecodeError as e:
-        print(f"❌ Error: configuration JSON is not valid: {e}")
-        try:
-            hud.print("Configuration file appears to be corrupted.", "error")
-        except Exception:
-            pass
-        return
+        raise RuntimeError(f"Google Flow configuration JSON is invalid: {e}") from e
     except Exception as e:
-        print(f"❌ Error loading engine configuration: {e}")
-        try:
-            hud.print("Could not read the engine configuration.", "error")
-        except Exception:
-            pass
-        return
+        raise RuntimeError(f"Could not load Google Flow engine configuration: {e}") from e
 
     # Claim the legacy panel slot only for the original Google Flow scene engine.
     # image_generation mode records status directly in AUTHOR_PATH instead.
@@ -16118,8 +16091,9 @@ def serenum_google_flow_images_generation_engine():
         nonlocal last_exit_editing_check_at, exit_editing_check_active
         nonlocal download_ui_sequence_active
 
-        if stop_event.is_set() or terminate_automation:
-            raise _ManualStop("Manual stop requested with Alt+/")
+        if stop_event.is_set() or terminate_automation or SERENUM_STOP_EVENT.is_set():
+            raise _ManualStop("Manual stop requested from Alt+/ or application exit")
+        _serenum_checkpoint()
         if restart_from_url_event.is_set():
             restart_from_url_event.clear()
             raise _WorkflowRestart(
@@ -20857,6 +20831,9 @@ def serenum_google_flow_images_generation_engine():
     def _run_image_generation_supervisor():
         nonlocal operation_status_flag, operation_aborted
         restart_number = 0
+        terminal_result = None
+        terminal_unexpected_error = None
+        terminal_stop_reason = None
         force_url_restart_pending = False
         restart_hotkey = None
         url_restart_hotkey = None
@@ -20893,6 +20870,7 @@ def serenum_google_flow_images_generation_engine():
                     force_url_restart_pending = False
                     result = _run_image_generation_batch(force_url_restart=force_this_attempt)
                     if result in ("completed", "not_pending", "engine_changed", "failed"):
+                        terminal_result = result
                         break
                 except _ManualStop:
                     raise
@@ -20920,6 +20898,7 @@ def serenum_google_flow_images_generation_engine():
                         "error",
                         f"Unexpected image_generation error: {unexpected_error}",
                     )
+                    terminal_unexpected_error = unexpected_error
                     break
 
                 if force_url_restart_pending:
@@ -20938,6 +20917,7 @@ def serenum_google_flow_images_generation_engine():
                     continue
                 break
         except _ManualStop as stop_reason:
+            terminal_stop_reason = str(stop_reason)
             print(f"🛑 [IMAGE-GENERATION] {stop_reason}")
             try:
                 _set_author_final_status("pending", "Image generation manually stopped by Alt+/; remaining files are resumable")
@@ -20952,9 +20932,17 @@ def serenum_google_flow_images_generation_engine():
                     except Exception:
                         pass
 
+        if terminal_unexpected_error is not None:
+            raise RuntimeError(f"Image-generation stage aborted: {terminal_unexpected_error}") from terminal_unexpected_error
+        if terminal_stop_reason:
+            raise RuntimeError(f"Image generation was manually stopped: {terminal_stop_reason}")
+        return terminal_result
+
     if image_generation_mode:
         print("🚀 [IMAGE-GENERATION] Running AUTHOR_PATH Reference / Unique image engine.")
-        _run_image_generation_supervisor()
+        supervisor_result = _run_image_generation_supervisor()
+        if supervisor_result == "failed":
+            raise RuntimeError("Image generation returned a failed result. Review the preceding stage error in the execution log.")
         return
 
     # ------------------------------------------------------------------
@@ -20968,6 +20956,7 @@ def serenum_google_flow_images_generation_engine():
     restart_hotkey = None
     url_restart_hotkey = None
     stop_hotkey = None
+    manual_stop_reason = None
 
     try:
         url_restart_hotkey = keyboard.add_hotkey("ctrl+shift+f12", on_restart_shortcut, suppress=True)
@@ -20984,6 +20973,7 @@ def serenum_google_flow_images_generation_engine():
     try:
         while True:
             if stop_event.is_set() or terminate_automation:
+                manual_stop_reason = "Manual stop requested through Alt+/"
                 print("🛑 [SUPERVISOR] Manual stop requested; exiting the function.")
                 break
 
@@ -21067,19 +21057,19 @@ def serenum_google_flow_images_generation_engine():
                     operation_status=f"Automatic restart after: {restart_reason}"
                 )
             except _ManualStop as stop_reason:
+                manual_stop_reason = str(stop_reason)
                 print(f"🛑 [SUPERVISOR] {stop_reason}")
                 stop_event.set()
                 terminate_automation = True
             except Exception as unexpected_error:
                 print(f"❌ [SUPERVISOR] Unexpected supervisor error: {unexpected_error}")
                 traceback.print_exc()
-                operation_status_flag = True
-                operation_aborted = False
                 _set_currently_running(
                     "serenum_google_flow_images_generation_engine()",
-                    status="pending",
-                    operation_status=f"Supervisor caught an error and will retry: {unexpected_error}"
+                    status="error",
+                    operation_status=f"Supervisor aborted after an unexpected error: {unexpected_error}"
                 )
+                raise RuntimeError(f"Google Flow supervisor aborted: {unexpected_error}") from unexpected_error
 
             if stop_event.is_set() or terminate_automation:
                 break
@@ -21132,6 +21122,9 @@ def serenum_google_flow_images_generation_engine():
             except Exception:
                 pass
             print("🛑 [SUPERVISOR] Google Flow function stopped by the user.")
+
+    if manual_stop_reason:
+        raise RuntimeError(f"Google Flow operation was manually stopped: {manual_stop_reason}")
 
 def wash_ai_info():
     """
@@ -21466,6 +21459,10 @@ def wash_ai_info():
             download_errors.append(error_message)
 
             print(f"❌ DOWNLOAD FAILED: {error_message}")
+            raise RuntimeError(
+                f"WASH AI INFO aborted at download {index}/{len(image_urls)}. "
+                f"The image could not be downloaded or verified. URL: {image_url}. Reason: {exc}"
+            ) from exc
 
         finally:
 
@@ -21796,6 +21793,9 @@ def wash_ai_info():
             print(
                 f"❌ IMAGE PROCESSING FAILED: {filename} | {exc}"
             )
+            raise RuntimeError(
+                f"WASH AI INFO aborted while processing '{filename}'. Reason: {exc}"
+            ) from exc
 
         finally:
 
@@ -21878,484 +21878,1668 @@ def wash_ai_info():
         "destination": destination_folder
     }
 
-def execute_engine():
-    """Execute the configured engine using case-insensitive engine matching.
-
-    Supported engines:
-      - driver
-      - csv
-      - image_generation
-      - IMAGE GENERATION
-      - image-generation
-      - wash_ai_info
-      - WASH AI INFO
-      - wash-ai-info
-
-    The function intentionally performs no engine-specific status checks
-    or status updates.
-    """
-
+def execute_engine(run_config_analysis=True):
+    """Run exactly one selected engine and propagate every abort to the GUI."""
     import os
     import json
     import re
 
-    analyze_and_distribute_configs()
+    _serenum_checkpoint()
 
-    def load_json_file(file_path, default=None):
-        """Load JSON file with error handling."""
+    if run_config_analysis:
+        print("execute_engine: Running the legacy configuration analyzer...")
+        analyze_and_distribute_configs()
+    else:
+        print("execute_engine: Using the selected AUTHOR_PATH configuration without changing it.")
 
-        try:
-
-            if os.path.exists(file_path):
-
-                with open(file_path, "r", encoding="utf-8") as handle:
-                    return json.load(handle)
-
-        except (
-            json.JSONDecodeError,
-            OSError,
-            TypeError,
-            ValueError
-        ) as exc:
-
-            print(
-                f"execute_engine: WARNING - "
-                f"Could not load {file_path}: {exc}"
-            )
-
-        except Exception as exc:
-
-            print(
-                f"execute_engine: WARNING - "
-                f"Unexpected JSON read error: {exc}"
-            )
-
-        return default if default is not None else {}
-
-    def normalize_engine_token(value):
-        """Remove spaces and punctuation and case-fold an engine token."""
-
-        return re.sub(
-            r"[^a-z0-9]",
-            "",
-            str(value or "").casefold()
-        )
-
-    def engine_matches(value, *aliases):
-        """Match comma/semicolon/pipe-separated aliases."""
-
-        tokens = re.split(
-            r"[,;|]",
-            str(value or "")
-        )
-
-        normalized_tokens = {
-            normalize_engine_token(token)
-            for token in tokens
-        }
-
-        normalized_aliases = {
-            normalize_engine_token(alias)
-            for alias in aliases
-        }
-
-        return bool(
-            normalized_tokens.intersection(normalized_aliases)
-        )
-
-    # ============================================================
-    # STEP 1: LOAD CONFIGURATION
-    # ============================================================
+    author_path = globals().get("AUTHOR_PATH")
+    if not author_path:
+        raise RuntimeError("AUTHOR_PATH is not configured.")
+    if not os.path.isfile(author_path):
+        raise FileNotFoundError(f"AUTHOR_PATH does not exist: {author_path}")
 
     try:
-
-        author_path = globals().get("AUTHOR_PATH")
-
-        if not author_path:
-
-            print(
-                "execute_engine: ERROR - "
-                "AUTHOR_PATH is not configured."
-            )
-
-            return
-
-        config_data = load_json_file(author_path, {})
-
-        if isinstance(config_data, list) and config_data:
-
-            config = config_data[-1]
-
-        elif isinstance(config_data, dict):
-
-            config = config_data
-
-        else:
-
-            print(
-                "execute_engine: ERROR - "
-                "Invalid config format in AUTHOR_PATH."
-            )
-
-            return
-
-        if not isinstance(config, dict):
-
-            print(
-                "execute_engine: ERROR - "
-                "The selected config record is not an object."
-            )
-
-            return
-
-        dynamic = config.get("dynamic_values")
-
-        if not isinstance(dynamic, dict):
-            dynamic = {}
-
-        print("execute_engine: Config loaded successfully")
-
+        with open(author_path, "r", encoding="utf-8") as handle:
+            config_data = json.load(handle)
     except Exception as exc:
+        raise RuntimeError(f"Could not read the author configuration at {author_path}: {exc}") from exc
 
-        print(
-            f"execute_engine: ERROR - "
-            f"Failed to load config: {exc}"
-        )
+    if isinstance(config_data, list):
+        if not config_data or not isinstance(config_data[-1], dict):
+            raise ValueError("AUTHOR_PATH must contain a non-empty list whose final item is a configuration object.")
+        config = config_data[-1]
+    elif isinstance(config_data, dict):
+        config = config_data
+    else:
+        raise ValueError("Invalid AUTHOR_PATH JSON structure. Expected an object or a list ending with an object.")
 
-        return
+    dynamic = config.get("dynamic_values")
+    if not isinstance(dynamic, dict):
+        dynamic = {}
 
-    # ============================================================
-    # STEP 2: GET ENGINE VALUE
-    # ============================================================
+    print("execute_engine: Config loaded successfully")
 
-    engine_raw = (
-        dynamic.get("engine")
-        or config.get("engine")
-        or ""
-    )
+    def normalize_engine_token(value):
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
+    def engine_matches(value, *aliases):
+        tokens = {normalize_engine_token(token) for token in re.split(r"[,;|]", str(value or ""))}
+        expected = {normalize_engine_token(alias) for alias in aliases}
+        return bool(tokens.intersection(expected))
+
+    engine_raw = dynamic.get("engine") or config.get("engine") or ""
     engine_value = str(engine_raw).strip()
-
     if not engine_value:
+        raise ValueError("The required 'engine' field is missing or empty in AUTHOR_PATH.")
 
-        print(
-            "execute_engine: ERROR - "
-            "'engine' field is missing or empty."
-        )
-
-        return
-
-    print(
-        f"execute_engine: Engine value: '{engine_value}'"
-    )
-
-    author = (
-        config.get("author")
-        or dynamic.get("author")
-        or "Unknown"
-    )
-
-    time_order = (
-        config.get("time_order")
-        or dynamic.get("time_order")
-        or "Unknown"
-    )
-
-    # ============================================================
-    # STEP 3: EXECUTE BASED ON ENGINE TYPE
-    # ============================================================
+    print(f"execute_engine: Engine value: '{engine_value}'")
+    author = config.get("author") or dynamic.get("author") or "Unknown"
+    time_order = config.get("time_order") or dynamic.get("time_order") or "Unknown"
 
     if engine_matches(engine_value, "driver"):
-
-        print(f"\n{'=' * 80}")
+        print("\n" + "=" * 80)
         print("EXECUTING DRIVER ENGINE")
-        print(f"{'=' * 80}")
-
+        print("=" * 80)
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
-
-        print(f"{'=' * 80}\n")
-
+        print("=" * 80 + "\n")
         try:
-
+            _serenum_checkpoint()
             download_scheduled_images()
+            _serenum_checkpoint()
+            print("execute_engine: Initializing WebDriver...")
+            driver_instance, wait_instance = initialize_driver(mode="headed")
+            _serenum_checkpoint()
+            if driver_instance is None or wait_instance is None:
+                raise RuntimeError("WebDriver initialization returned None. Check browser installation and driver setup.")
+            print("execute_engine: WebDriver initialized successfully")
+            print("execute_engine: Calling update_calendar...")
+            _serenum_checkpoint()
+            update_calendar()
+            _serenum_checkpoint()
+            print("execute_engine: update_calendar completed")
+            print("execute_engine: Calling launch_profile...")
+            launch_profile()
+            _serenum_checkpoint()
+            move_downloaded_urls_to_uploadedjpgsurl()
+            _serenum_checkpoint()
+            print("execute_engine: launch_profile completed")
+            print(f"\n✅ DRIVER engine completed successfully for '{author}'")
+            return {"engine": "driver", "status": "completed", "author": author}
+        except BaseException as exc:
+            raise RuntimeError(f"DRIVER engine aborted during execution: {type(exc).__name__}: {exc}") from exc
 
-            print(
-                "execute_engine: Initializing WebDriver..."
-            )
-
-            driver, wait = initialize_driver(mode="headed")
-
-            if driver is None or wait is None:
-
-                print(
-                    "❌ execute_engine: DRIVER engine failed - "
-                    "WebDriver initialization returned None"
-                )
-
-                return
-
-            print(
-                "execute_engine: WebDriver initialized successfully"
-            )
-
-            print(
-                "execute_engine: Calling update_calendar..."
-            )
-
-            try:
-
-                update_calendar()
-
-                print(
-                    "execute_engine: update_calendar completed"
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"⚠️ execute_engine: update_calendar failed: {exc}; "
-                    "continuing anyway"
-                )
-
-            print(
-                "execute_engine: Calling launch_profile..."
-            )
-
-            try:
-
-                launch_profile()
-
-                move_downloaded_urls_to_uploadedjpgsurl()
-
-                print(
-                    "execute_engine: launch_profile completed"
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"❌ execute_engine: launch_profile failed: {exc}"
-                )
-
-                return
-
-            print(
-                "execute_engine: update_settings completed"
-            )
-
-            print(
-                f"\n✅ DRIVER engine completed successfully for '{author}'"
-            )
-
-            return
-
-        except Exception as exc:
-
-            print(
-                f"\n❌ execute_engine: DRIVER engine failed: {exc}"
-            )
-
-            return
-
-    elif engine_matches(engine_value, "csv"):
-
-        print(f"\n{'=' * 80}")
+    if engine_matches(engine_value, "csv"):
+        print("\n" + "=" * 80)
         print("EXECUTING CSV ENGINE")
-        print(f"{'=' * 80}")
-
+        print("=" * 80)
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
-
-        print(f"{'=' * 80}\n")
-
+        print("=" * 80 + "\n")
         try:
+            _serenum_checkpoint()
+            print("execute_engine: Calling csv_engine...")
+            result = csv_engine()
+            _serenum_checkpoint()
+            print(f"\n✅ CSV engine completed successfully for '{author}'")
+            return result if result is not None else {"engine": "csv", "status": "completed", "author": author}
+        except BaseException as exc:
+            raise RuntimeError(f"CSV engine aborted during execution: {type(exc).__name__}: {exc}") from exc
 
-            print(
-                "execute_engine: Calling csv_engine..."
-            )
-
-            csv_engine()
-
-            print(
-                "execute_engine: csv_engine completed"
-            )
-
-            print(
-                "execute_engine: update_settings completed"
-            )
-
-            print(
-                f"\n✅ CSV engine completed successfully for '{author}'"
-            )
-
-            return
-
-        except Exception as exc:
-
-            print(
-                f"\n❌ execute_engine: CSV engine failed: {exc}"
-            )
-
-            return
-
-    # ============================================================
-    # NEW ENGINE: WASH AI INFO
-    # ============================================================
-
-    elif engine_matches(
-        engine_value,
-        "wash_ai_info",
-        "wash ai info",
-        "wash-ai-info"
-    ):
-
-        print(f"\n{'=' * 80}")
+    if engine_matches(engine_value, "wash_ai_info", "wash ai info", "wash-ai-info"):
+        print("\n" + "=" * 75)
         print("EXECUTING WASH AI INFO ENGINE")
-        print(f"{'=' * 80}")
-
+        print("=" * 75)
         print(f"Author: {author}")
-
         print("Operation:")
         print("1. Download configured image URLs.")
         print("2. Save images into the author's folder.")
         print("3. Resize and compress the images.")
         print("4. Save processed images into AI info washed.")
-
-        print(f"{'=' * 80}\n")
-
+        print("=" * 75 + "\n")
         try:
-
-            print(
-                "execute_engine: Calling wash_ai_info()..."
-            )
-
+            _serenum_checkpoint()
+            print("execute_engine: Calling wash_ai_info()...")
             result = wash_ai_info()
-
-            print(
-                "\nexecute_engine: wash_ai_info() returned."
-            )
-
-            if isinstance(result, dict):
-
-                downloaded = result.get("downloaded", 0)
-                download_failed = result.get("download_failed", 0)
-                processed = result.get("processed", 0)
-                failed = result.get("failed", 0)
-                skipped = result.get("skipped", 0)
-
-                print("\nWASH AI INFO SUMMARY")
-
-                print(f"Downloaded: {downloaded}")
-                print(f"Download failures: {download_failed}")
-                print(f"Successfully washed: {processed}")
-                print(f"Processing failures: {failed}")
-                print(f"Skipped: {skipped}")
-
-                if download_failed or failed:
-
-                    print(
-                        "\n⚠️ WASH AI INFO completed with "
-                        "some download or processing failures."
-                    )
-
-                else:
-
-                    print(
-                        "\n✅ WASH AI INFO completed successfully."
-                    )
-
-                print(
-                    f"Destination: {result.get('destination', 'Unknown')}"
+            _serenum_checkpoint()
+            if isinstance(result, dict) and (result.get("download_failed") or result.get("failed")):
+                details = result.get("download_errors") or []
+                detail_text = " | ".join(str(item) for item in details[:5])
+                raise RuntimeError(
+                    f"WASH AI INFO reported {result.get('download_failed', 0)} download failure(s) "
+                    f"and {result.get('failed', 0)} processing failure(s). {detail_text}"
                 )
-
-            print(
-                f"\n✅ execute_engine: WASH AI INFO operation "
-                f"finished for '{author}'"
-            )
-
+            print("\n✅ WASH AI INFO operation finished successfully.")
             return result
+        except BaseException as exc:
+            raise RuntimeError(f"WASH AI INFO engine aborted during execution: {type(exc).__name__}: {exc}") from exc
 
-        except Exception as exc:
-
-            print(
-                f"\n❌ execute_engine: WASH AI INFO failed: {exc}"
-            )
-
-            return
-
-    # ============================================================
-    # IMAGE GENERATION ENGINE
-    # ============================================================
-
-    elif engine_matches(
-        engine_value,
-        "image_generation",
-        "image generation",
-        "image-generation",
-    ):
-
-        print(f"\n{'=' * 80}")
+    if engine_matches(engine_value, "image_generation", "image generation", "image-generation"):
+        print("\n" + "=" * 80)
         print("EXECUTING IMAGE GENERATION")
-        print(f"{'=' * 80}")
-
+        print("=" * 80)
         print(f"Author: {author}")
         print(f"Time Order: {time_order}")
-
-        print(f"{'=' * 80}\n")
-
+        print("=" * 80 + "\n")
         try:
+            _serenum_checkpoint()
+            print("execute_engine: Calling serenum_google_flow_images_generation_engine()...")
+            result = serenum_google_flow_images_generation_engine()
+            _serenum_checkpoint()
+            print(f"\n✅ Image generation operation finished for '{author}'")
+            return result if result is not None else {"engine": "image_generation", "status": "completed", "author": author}
+        except BaseException as exc:
+            raise RuntimeError(f"IMAGE GENERATION engine aborted during execution: {type(exc).__name__}: {exc}") from exc
 
-            print(
-                "execute_engine: Calling "
-                "serenum_google_flow_images_generation_engine()..."
-            )
+    raise ValueError(
+        f"Unknown engine '{engine_value}'. Supported engines: driver, csv, image_generation, and wash_ai_info."
+    )
 
-            serenum_google_flow_images_generation_engine()
+# ============================================================================
+# SERENUM DESKTOP APPLICATION
+# ============================================================================
+class _SerenumTextStream:
+    """Thread-safe stdout/stderr adapter that forwards output into the GUI."""
+    def __init__(self, app, fallback):
+        self.app = app
+        self.fallback = fallback
+        self.encoding = getattr(fallback, "encoding", "utf-8")
 
-            print(
-                "execute_engine: Image generation function returned"
-            )
+    def write(self, value):
+        if value:
+            self.app.enqueue_log(str(value))
+        return len(value) if value is not None else 0
 
-            print(
-                f"\n✅ Image generation operation finished for '{author}'"
-            )
+    def flush(self):
+        return None
 
-            return
+    def isatty(self):
+        return False
 
-        except Exception as exc:
+    def writable(self):
+        return True
 
-            print(
-                f"\n❌ execute_engine: Image generation failed: {exc}"
-            )
 
-            return
+class SerenumApp:
+    """Dark, technical desktop console for running the existing Serenum engine."""
 
-    # ============================================================
-    # UNKNOWN ENGINE
-    # ============================================================
+    BG = "#080D18"
+    PANEL = "#101827"
+    PANEL_ALT = "#0C1422"
+    BORDER = "#23334B"
+    TEXT = "#E6F0FF"
+    MUTED = "#8CA0BA"
+    CYAN = "#27D7F2"
+    GREEN = "#38D996"
+    AMBER = "#FFBE55"
+    RED = "#FF5D75"
 
-    else:
+    def __init__(self, root):
+        global SERENUM_APP
+        self.root = root
+        self.events = queue.Queue()
+        self.worker = None  # stdout reader thread for the isolated engine process
+        self.process = None
+        self.active_run_id = None
+        self.run_counter = 0
+        self.selected_mode = None
+        self.running = False
+        self.paused = False
+        self.stop_requested = False
+        self._pending_worker_failure = None
+        self.stdout_original = sys.stdout
+        self.stderr_original = sys.stderr
+        self.total_errors = 0
+        self.total_warnings = 0
+        self.started_at = None
+        self.log_history = []
+        self._console_timer_id = None
+        self._console_deadline = None
+        self.console_view_active = False
+        self.cover_path = None
+        self.cover_frames = []
+        self.cover_frame_index = 0
+        self.cover_photo = None
+        self.cover_animation_after_id = None
+        self.cover_install_warning = None
+        self._closing = False
+        SERENUM_APP = self
 
-        print(
-            "\n❌ execute_engine: ERROR - Unknown engine: "
-            f"'{engine_value}'. "
-            "Supported engines: driver, csv, image_generation, "
-            "and wash_ai_info."
+        self.root.title("Serenum — Automation Control Center")
+        self.root.configure(bg=self.BG)
+        self.root.geometry("1220x790")
+        self.root.minsize(900, 620)
+        self._center_window(1220, 790)
+
+        self._build_interface()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.bind("<Control-Return>", lambda _e: self.show_config_choice())
+
+        sys.stdout = _SerenumTextStream(self, self.stdout_original)
+        sys.stderr = _SerenumTextStream(self, self.stderr_original)
+
+        self.root.after(80, self._process_events)
+        self.root.after(350, self.show_config_choice)
+        self.log("Serenum desktop interface initialized.", "INFO")
+        self.log(f"Author configuration: {AUTHOR_PATH}", "INFO")
+        self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
+        self._set_visual_state(
+            "ready", "AUTHOR CONFIGURATION REQUIRED",
+            "Choose existing author data or enter a new configuration. After that, press START OPERATION when you are ready.",
+            self.CYAN, detail="No operation has started.",
         )
 
-        return
+    def _center_window(self, width, height):
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = max(0, (sw - width) // 2)
+        y = max(0, (sh - height) // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _build_interface(self):
+        import tkinter.font as tkfont
+        from tkinter import ttk
+        self.ttk = ttk
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure(
+            "Serenum.Horizontal.TProgressbar",
+            troughcolor="#1B2A3F", background=self.CYAN,
+            bordercolor="#1B2A3F", lightcolor=self.CYAN,
+            darkcolor=self.CYAN,
+        )
+
+        self.root.option_add("*Font", "{Segoe UI} 10")
+        outer = tk.Frame(self.root, bg=self.BG)
+        outer.pack(fill="both", expand=True, padx=22, pady=18)
+
+        # Header / brand area.
+        header = tk.Frame(outer, bg=self.BG)
+        header.pack(fill="x", pady=(0, 15))
+        brand = tk.Frame(header, bg=self.BG)
+        brand.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            brand, text="SERENUM", bg=self.BG, fg=self.CYAN,
+            font=("Segoe UI", 25, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            brand, text="AUTOMATION CONTROL CENTER  /  DESKTOP COMMAND",
+            bg=self.BG, fg=self.MUTED, font=("Consolas", 9),
+        ).pack(anchor="w", pady=(1, 0))
+        self.header_status = tk.Label(
+            header, text="●  STANDBY", bg=self.PANEL, fg=self.CYAN,
+            font=("Consolas", 10, "bold"), padx=15, pady=10,
+        )
+        self.header_status.pack(side="right", padx=(10, 0), pady=6)
+
+        # Status strip.
+        strip = tk.Frame(outer, bg=self.PANEL, highlightthickness=1, highlightbackground=self.BORDER)
+        strip.pack(fill="x", pady=(0, 14))
+        self.status_value = tk.Label(
+            strip, text="AUTHOR CONFIGURATION REQUIRED", bg=self.PANEL,
+            fg=self.TEXT, font=("Segoe UI", 11, "bold"), anchor="w",
+        )
+        self.status_value.pack(side="left", padx=16, pady=12, fill="x", expand=True)
+        self.mode_value = tk.Label(
+            strip, text="AUTHOR CONFIGURATION REQUIRED", bg=self.PANEL, fg=self.MUTED,
+            font=("Consolas", 9), padx=16,
+        )
+        self.mode_value.pack(side="right")
+
+        body = tk.Frame(outer, bg=self.BG)
+        body.pack(fill="both", expand=True)
+
+        # Persistent left command deck; this remains visible in every view.
+        side = tk.Frame(body, bg=self.PANEL, width=250, highlightthickness=1, highlightbackground=self.BORDER)
+        side.pack(side="left", fill="y", padx=(0, 14))
+        side.pack_propagate(False)
+        tk.Label(side, text="COMMAND DECK", bg=self.PANEL, fg=self.CYAN,
+                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=16, pady=(18, 12))
+
+        self.start_button = self._make_button(side, "▶   START OPERATION", self.start_selected_operation, self.GREEN, state="disabled")
+        self.start_button.pack(fill="x", padx=14, pady=4)
+        self.pause_button = self._make_button(side, "Ⅱ   PAUSE OPERATION", self.pause_or_resume, self.AMBER, state="disabled")
+        self.pause_button.pack(fill="x", padx=14, pady=4)
+        self.stop_button = self._make_button(side, "■   STOP OPERATION", self.stop_operation, "#C5D0DF", state="disabled")
+        self.stop_button.pack(fill="x", padx=14, pady=4)
+
+        tk.Frame(side, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=13)
+        self.console_button = self._make_button(side, "▤   SHOW CONSOLE", self.show_console, self.CYAN)
+        self.console_button.pack(fill="x", padx=14, pady=4)
+        self.config_button = self._make_button(side, "⚙   CONFIGURATION", self.show_config_choice, self.MUTED)
+        self.config_button.pack(fill="x", padx=14, pady=4)
+        self.clear_button = self._make_button(side, "⌫   CLEAR CONSOLE", self.clear_log, self.MUTED)
+        self.clear_button.pack(fill="x", padx=14, pady=4)
+
+        tk.Frame(side, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=14)
+        tk.Label(side, text="SESSION", bg=self.PANEL, fg=self.MUTED,
+                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=16, pady=(0, 7))
+        self.runtime_value = tk.Label(side, text="00:00:00", bg=self.PANEL, fg=self.TEXT,
+                                      font=("Consolas", 19, "bold"))
+        self.runtime_value.pack(anchor="w", padx=16)
+        self.error_value = tk.Label(side, text="ERRORS     0", bg=self.PANEL, fg=self.GREEN,
+                                     font=("Consolas", 9, "bold"))
+        self.error_value.pack(anchor="w", padx=16, pady=(12, 3))
+        self.warning_value = tk.Label(side, text="WARNINGS   0", bg=self.PANEL, fg=self.AMBER,
+                                      font=("Consolas", 9, "bold"))
+        self.warning_value.pack(anchor="w", padx=16, pady=3)
+        self.progress = ttk.Progressbar(side, mode="indeterminate", style="Serenum.Horizontal.TProgressbar")
+        self.progress.pack(fill="x", padx=16, pady=(17, 8))
+        tk.Label(
+            side,
+            text="The console is optional.\nUse EXIT CONSOLE to return\nto the cover, or wait for\nautomatic return after 10 seconds.",
+            bg=self.PANEL, fg=self.MUTED, justify="left",
+            font=("Segoe UI", 8),
+        ).pack(anchor="w", padx=16, pady=(5, 0))
+
+        # Main workspace: status cover and execution console are separate views.
+        workspace = tk.Frame(body, bg=self.BG)
+        workspace.pack(side="left", fill="both", expand=True)
+        self.workspace = workspace
+
+        self.status_view = tk.Frame(workspace, bg=self.PANEL, highlightthickness=1, highlightbackground=self.BORDER)
+        self.status_view.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        hero_top = tk.Frame(self.status_view, bg=self.PANEL_ALT)
+        hero_top.pack(fill="x")
+        tk.Label(
+            hero_top, text="SERENUM  /  LIVE STATUS", bg=self.PANEL_ALT, fg=self.CYAN,
+            font=("Consolas", 9, "bold"),
+        ).pack(side="left", padx=18, pady=13)
+        self.hero_state_chip = tk.Label(
+            hero_top, text="● READY", bg=self.PANEL_ALT, fg=self.CYAN,
+            font=("Consolas", 9, "bold"),
+        )
+        self.hero_state_chip.pack(side="right", padx=18)
+
+        hero_content = tk.Frame(self.status_view, bg=self.PANEL)
+        hero_content.pack(fill="both", expand=True, padx=24, pady=20)
+        hero_content.grid_columnconfigure(0, weight=5)
+        hero_content.grid_columnconfigure(1, weight=6)
+        hero_content.grid_rowconfigure(0, weight=1)
+
+        cover_stage = tk.Frame(hero_content, bg="#0B1423", highlightthickness=1, highlightbackground=self.BORDER)
+        cover_stage.grid(row=0, column=0, sticky="nsew", padx=(0, 20))
+        cover_stage.grid_rowconfigure(0, weight=1)
+        cover_stage.grid_columnconfigure(0, weight=1)
+        self.cover_image_label = tk.Label(
+            cover_stage, text="SERENUM", bg="#0B1423", fg=self.CYAN,
+            font=("Segoe UI", 24, "bold"), compound="center",
+        )
+        self.cover_image_label.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        tk.Label(
+            cover_stage, text="AUTOMATION IN MOTION", bg="#0B1423", fg=self.MUTED,
+            font=("Consolas", 8, "bold"),
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 14))
+
+        info = tk.Frame(hero_content, bg=self.PANEL)
+        info.grid(row=0, column=1, sticky="nsew")
+        tk.Label(
+            info, text="YOUR AUTOMATION, AT A GLANCE", bg=self.PANEL, fg=self.MUTED,
+            font=("Consolas", 8, "bold"),
+        ).pack(anchor="w", pady=(9, 12))
+        self.hero_title = tk.Label(
+            info, text="READY WHEN YOU ARE", bg=self.PANEL, fg=self.TEXT,
+            font=("Segoe UI", 23, "bold"), anchor="w", justify="left", wraplength=470,
+        )
+        self.hero_title.pack(fill="x", pady=(0, 10))
+        self.hero_description = tk.Label(
+            info,
+            text="Select your author configuration, then press START OPERATION. Nothing runs until you choose Start.",
+            bg=self.PANEL, fg=self.MUTED, font=("Segoe UI", 10), anchor="w",
+            justify="left", wraplength=470,
+        )
+        self.hero_description.pack(fill="x", pady=(0, 22))
+
+        detail_card = tk.Frame(info, bg=self.PANEL_ALT, highlightthickness=1, highlightbackground=self.BORDER)
+        detail_card.pack(fill="x", pady=(0, 18))
+        tk.Label(detail_card, text="CURRENT SESSION", bg=self.PANEL_ALT, fg=self.MUTED,
+                 font=("Consolas", 8, "bold")).pack(anchor="w", padx=15, pady=(12, 4))
+        self.hero_detail = tk.Label(
+            detail_card, text="No operation is running.", bg=self.PANEL_ALT, fg=self.TEXT,
+            font=("Segoe UI", 10), anchor="w", justify="left", wraplength=445,
+        )
+        self.hero_detail.pack(fill="x", padx=15, pady=(0, 13))
+
+        action_row = tk.Frame(info, bg=self.PANEL)
+        action_row.pack(fill="x", pady=(5, 0))
+        self.hero_console_button = self._make_button(action_row, "▤   VIEW CONSOLE", self.show_console, self.CYAN)
+        self.hero_console_button.pack(side="left", padx=(0, 8))
+
+        # Console view is hidden initially. It is shown on request and returns
+        # to the cover automatically after ten seconds.
+        self.console_view = tk.Frame(workspace, bg=self.PANEL, highlightthickness=1, highlightbackground=self.BORDER)
+        self.console_view.place(relx=0, rely=0, relwidth=1, relheight=1)
+        console_header = tk.Frame(self.console_view, bg=self.PANEL_ALT)
+        console_header.pack(fill="x")
+        tk.Label(console_header, text="LIVE EXECUTION CONSOLE", bg=self.PANEL_ALT, fg=self.CYAN,
+                 font=("Consolas", 10, "bold")).pack(side="left", padx=15, pady=13)
+        self.console_countdown_label = tk.Label(
+            console_header, text="Returning to status view in 10s", bg=self.PANEL_ALT,
+            fg=self.MUTED, font=("Consolas", 8),
+        )
+        self.console_countdown_label.pack(side="right", padx=15)
+
+        log_wrap = tk.Frame(self.console_view, bg=self.PANEL)
+        log_wrap.pack(fill="both", expand=True, padx=12, pady=12)
+        self.log_text = tk.Text(
+            log_wrap, bg="#070C15", fg="#C7D6EA", insertbackground=self.CYAN,
+            selectbackground="#1A4861", relief="flat", wrap="word",
+            font=("Consolas", 9), padx=13, pady=12, state="disabled",
+        )
+        scrollbar = tk.Scrollbar(log_wrap, command=self.log_text.yview,
+                                 bg=self.PANEL, troughcolor=self.PANEL_ALT,
+                                 activebackground=self.CYAN, relief="flat")
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.log_text.pack(side="left", fill="both", expand=True)
+        self.log_text.tag_configure("INFO", foreground="#C7D6EA")
+        self.log_text.tag_configure("SUCCESS", foreground=self.GREEN)
+        self.log_text.tag_configure("WARNING", foreground=self.AMBER)
+        self.log_text.tag_configure("ERROR", foreground=self.RED)
+        self.log_text.tag_configure("TIME", foreground="#647994")
+
+        console_footer = tk.Frame(self.console_view, bg=self.PANEL_ALT)
+        console_footer.pack(fill="x")
+        tk.Button(
+            console_footer, text="COPY ALL CONSOLE RESULTS", command=self.copy_all_results,
+            bg="#172E49", fg=self.CYAN, activebackground="#214767",
+            relief="flat", bd=0, padx=18, pady=10,
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+        ).pack(side="left", padx=12, pady=9)
+        tk.Button(
+            console_footer, text="←  EXIT CONSOLE", command=self.show_status_view,
+            bg="#202C3E", fg=self.TEXT, activebackground="#2B3B52",
+            relief="flat", bd=0, padx=18, pady=10,
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+        ).pack(side="right", padx=12, pady=9)
+
+        footer = tk.Frame(outer, bg=self.BG)
+        footer.pack(fill="x", pady=(10, 0))
+        tk.Label(footer, text="SERENUM  •  DESKTOP CONTROL CENTER", bg=self.BG, fg=self.MUTED,
+                 font=("Consolas", 8)).pack(side="left")
+        tk.Label(footer, text="START  /  PAUSE  /  RESUME  /  STOP", bg=self.BG, fg=self.MUTED,
+                 font=("Consolas", 8)).pack(side="right")
+
+        self._install_cover_animation()
+        self.show_status_view()
+
+    def _prepare_cover_assets(self):
+        """Install the supplied GIF pair; use the custom robot if either is unavailable."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        bundled_dir = os.path.join(script_dir, "ai_cover_assets")
+        target_dir = r"C:\xampp\htdocs\AI automation\ai cover"
+        gif_names = ("Robot.gif", "Mapping for machine learning.gif")
+        fallback_name = "Serenum_Robot_Fallback.png"
+        failures = []
+
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except Exception as exc:
+            failures.append(f"Could not prepare the cover library: {type(exc).__name__}: {exc}")
+
+        # Try to install both supplied animated covers into the requested folder.
+        for name in gif_names:
+            source = os.path.join(bundled_dir, name)
+            destination = os.path.join(target_dir, name)
+            if os.path.isfile(source):
+                try:
+                    if os.path.abspath(source).lower() != os.path.abspath(destination).lower():
+                        shutil.copy2(source, destination)
+                except Exception as exc:
+                    failures.append(f"Could not install {name}: {type(exc).__name__}: {exc}")
+
+        def is_valid_image(path):
+            if not os.path.isfile(path):
+                return False
+            try:
+                from PIL import Image
+                with Image.open(path) as image:
+                    image.verify()
+                return True
+            except Exception:
+                return False
+
+        installed_gifs = [os.path.join(target_dir, name) for name in gif_names]
+        # Only use the random animated selection when BOTH requested GIFs exist
+        # and can be read from the AI cover folder.
+        if all(is_valid_image(path) for path in installed_gifs):
+            selected = random.choice(installed_gifs)
+            self.log("Both animated cover files are ready in the cover library.", "SUCCESS")
+            self.log(f"Animated cover selected: {os.path.basename(selected)}", "INFO")
+            if failures:
+                self.log("Cover setup notes: " + " | ".join(failures), "WARNING")
+            return selected
+
+        # If either GIF is absent or unreadable, use the custom robot artwork.
+        fallback_source = os.path.join(bundled_dir, fallback_name)
+        fallback_target = os.path.join(target_dir, fallback_name)
+        if os.path.isfile(fallback_source):
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                shutil.copy2(fallback_source, fallback_target)
+            except Exception as exc:
+                failures.append(f"Could not install custom robot cover: {type(exc).__name__}: {exc}")
+
+        for candidate in (fallback_target, fallback_source, os.path.join(script_dir, fallback_name)):
+            if is_valid_image(candidate):
+                self.log("One or both animated covers are missing or invalid. Using the custom Serenum robot cover.", "SUCCESS")
+                self.log(f"Custom robot cover selected: {candidate}", "INFO")
+                if failures:
+                    self.log("Cover setup notes: " + " | ".join(failures), "WARNING")
+                return candidate
+
+        self.cover_install_warning = (
+            "The animated covers and custom robot fallback are unavailable. "
+            "Restore the ai_cover_assets folder and restart Serenum."
+        )
+        if failures:
+            self.log("Cover setup details: " + " | ".join(failures), "WARNING")
+        return None
+
+    def _install_cover_animation(self):
+        """Load the selected animated GIF and advance its frames in Tkinter."""
+        self.cover_path = self._prepare_cover_assets()
+        if not self.cover_path:
+            self.cover_image_label.configure(text="SERENUM\nAUTOMATION CONTROL CENTER")
+            if self.cover_install_warning:
+                self.log(self.cover_install_warning, "WARNING")
+            return
+        try:
+            from PIL import Image, ImageSequence, ImageTk
+            frames = []
+            with Image.open(self.cover_path) as animation:
+                for frame in ImageSequence.Iterator(animation):
+                    image = frame.convert("RGBA")
+                    resampling = getattr(Image, "Resampling", Image)
+                    image.thumbnail((390, 330), resampling.LANCZOS)
+                    duration = max(40, int(frame.info.get("duration", 80) or 80))
+                    frames.append((image.copy(), duration))
+            if not frames:
+                raise ValueError("The selected cover GIF contains no frames.")
+            self.cover_frames = frames
+            self._cover_image_tk = ImageTk
+            self.cover_frame_index = 0
+            self._animate_cover_frame()
+            self.log(f"Animated cover selected: {os.path.basename(self.cover_path)}", "INFO")
+        except Exception as exc:
+            self.cover_image_label.configure(text="SERENUM\nAUTOMATION CONTROL CENTER")
+            self.log(f"Animated cover could not be loaded: {type(exc).__name__}: {exc}", "WARNING")
+        if self.cover_install_warning:
+            self.log(self.cover_install_warning, "WARNING")
+
+    def _animate_cover_frame(self):
+        if self._closing or not self.cover_frames:
+            return
+        image, duration = self.cover_frames[self.cover_frame_index]
+        try:
+            self.cover_photo = self._cover_image_tk.PhotoImage(image)
+            self.cover_image_label.configure(image=self.cover_photo, text="")
+        except Exception:
+            return
+        self.cover_frame_index = (self.cover_frame_index + 1) % len(self.cover_frames)
+        self.cover_animation_after_id = self.root.after(duration, self._animate_cover_frame)
+
+    def _set_visual_state(self, key, title, description, color=None, detail=None):
+        color = color or self.CYAN
+        state_names = {
+            "ready": "● READY",
+            "running": "● RUNNING",
+            "paused": "Ⅱ PAUSED",
+            "stopped": "■ STOPPED",
+            "finished": "✓ COMPLETE",
+            "aborted": "● NEEDS ATTENTION",
+        }
+        if hasattr(self, "hero_state_chip"):
+            self.hero_state_chip.configure(text=state_names.get(key, "● STATUS"), fg=color)
+            self.hero_title.configure(text=self._safe_gui_text(title), fg=color if key in ("paused", "stopped", "aborted") else self.TEXT)
+            self.hero_description.configure(text=self._safe_gui_text(description))
+            self.hero_detail.configure(text=self._safe_gui_text(detail or description))
+
+    def show_status_view(self):
+        self._cancel_console_timer()
+        self.console_view_active = False
+        if hasattr(self, "status_view"):
+            self.status_view.tkraise()
+
+    def show_console(self):
+        if not hasattr(self, "console_view"):
+            return
+        self._cancel_console_timer()
+        self.console_view_active = True
+        self.console_view.tkraise()
+        self._console_deadline = time.monotonic() + 10.0
+        self._update_console_countdown()
+
+    def _update_console_countdown(self):
+        if self._closing or not self.console_view_active:
+            return
+        remaining = max(0, int(self._console_deadline - time.monotonic() + 0.999))
+        self.console_countdown_label.configure(text=f"Returning to status view in {remaining}s")
+        if remaining <= 0:
+            self.show_status_view()
+            return
+        self._console_timer_id = self.root.after(250, self._update_console_countdown)
+
+    def _cancel_console_timer(self):
+        if self._console_timer_id is not None:
+            try:
+                self.root.after_cancel(self._console_timer_id)
+            except Exception:
+                pass
+        self._console_timer_id = None
+        self._console_deadline = None
+
+    def copy_all_results(self):
+        """Copy the complete collected console stream, including older trimmed display lines."""
+        try:
+            content = "".join(self.log_history)
+            if not content:
+                content = "Serenum console is empty."
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            self.root.update_idletasks()
+            self.log("All collected console results copied to the clipboard.", "SUCCESS")
+            if hasattr(self, "hero_detail") and not self.console_view_active:
+                self.hero_detail.configure(text="All collected console results have been copied to your clipboard.")
+        except Exception as exc:
+            self.log(f"Could not copy console results: {type(exc).__name__}: {exc}", "WARNING")
+
+    def _make_button(self, parent, label, command, color, state="normal"):
+        return tk.Button(
+            parent, text=label, command=command, state=state,
+            bg="#17243A", fg=color, activebackground="#243852",
+            activeforeground=self.TEXT, disabledforeground="#53647A",
+            relief="flat", bd=0, padx=11, pady=12,
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+        )
+
+    def enqueue_log(self, value):
+        self.events.put(("log", value))
+
+    def publish_status(self, value, status_type="processing"):
+        self.events.put(("status", value, status_type))
+        self.events.put(("log", f"[HUD] {value}\n"))
+
+    def log(self, message, level="INFO"):
+        self.events.put(("log", f"[{level}] {message}\n"))
+
+    @staticmethod
+    def _safe_gui_text(value):
+        """Hide local filesystem paths from the friendly dashboard; details remain in console."""
+        text = str(value or "")
+        # Windows drive paths, UNC paths, and common POSIX absolute paths.
+        text = re.sub(r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:\\|\\\\)[^\r\n<>|]+", "[details in console]", text)
+        text = re.sub(r"(?<![A-Za-z0-9])/(?:[^\s<>|]+/)*[^\s<>|]+", "[details in console]", text)
+        return text[:240]
+
+    def set_status(self, message, color=None):
+        color = color or self.CYAN
+        safe_message = self._safe_gui_text(message)
+        self.status_value.configure(text=safe_message, fg=color)
+        self.header_status.configure(text=f"●  {safe_message.upper()[:24]}", fg=color)
+
+    def _append_log(self, value):
+        if not value:
+            return
+        lowered = value.lower()
+        tag = "INFO"
+        if any(x in lowered for x in ("❌", "fatal error", "traceback", "exception:")):
+            tag = "ERROR"
+            self.total_errors += 1
+        elif any(x in lowered for x in ("⚠️", "warning", "could not", "failed")):
+            tag = "WARNING"
+            self.total_warnings += 1
+        elif any(x in lowered for x in ("✅", "successfully", "completed successfully")):
+            tag = "SUCCESS"
+        self.log_history.append(value)
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", value, tag)
+        # The visible widget is bounded for responsiveness; log_history retains
+        # the entire stream for the Copy All Results action.
+        try:
+            line_count = int(self.log_text.index("end-1c").split(".")[0])
+            if line_count > 12000:
+                self.log_text.delete("1.0", "4001.0")
+        except Exception:
+            pass
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+        self.error_value.configure(text=f"ERRORS     {self.total_errors}",
+                                    fg=self.RED if self.total_errors else self.GREEN)
+        self.warning_value.configure(text=f"WARNINGS   {self.total_warnings}")
+
+    def _process_events(self):
+        try:
+            while True:
+                item = self.events.get_nowait()
+                if item[0] == "log":
+                    self._append_log(item[1])
+                elif item[0] == "status":
+                    message, status_type = item[1], item[2]
+                    color_map = {
+                        "success": self.GREEN, "complete": self.GREEN,
+                        "error": self.RED, "warning": self.AMBER,
+                        "waiting": self.AMBER, "processing": self.CYAN,
+                    }
+                    self.set_status(message, color_map.get(status_type, self.CYAN))
+                elif item[0] == "worker_log":
+                    _kind, run_id, line = item
+                    if run_id == self.active_run_id:
+                        self._append_log(line)
+                elif item[0] == "worker_fatal":
+                    _kind, run_id, payload = item
+                    if run_id == self.active_run_id:
+                        self._pending_worker_failure = payload
+                elif item[0] == "worker_exit":
+                    _kind, run_id, return_code, payload = item
+                    if run_id == self.active_run_id and self.running:
+                        self._finish_worker(return_code, payload or self._pending_worker_failure)
+        except queue.Empty:
+            pass
+        if not self._closing:
+            self.root.after(80, self._process_events)
+
+    def clear_log(self):
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+        self.log_history.clear()
+        self.total_errors = 0
+        self.total_warnings = 0
+        self.error_value.configure(text="ERRORS     0", fg=self.GREEN)
+        self.warning_value.configure(text="WARNINGS   0")
+
+    def _read_author_config(self):
+        if not os.path.isfile(AUTHOR_PATH):
+            raise FileNotFoundError(f"Author configuration does not exist: {AUTHOR_PATH}")
+        with open(AUTHOR_PATH, "r", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+        if not raw:
+            raise ValueError("The existing author configuration file is empty.")
+        data = json.loads(raw)
+        self._validate_config_shape(data)
+        return data
+
+    @staticmethod
+    def _validate_config_shape(data):
+        if isinstance(data, dict):
+            if not data:
+                raise ValueError("The JSON object is empty. Enter a complete Serenum configuration.")
+            return
+        if isinstance(data, list):
+            if not data or not isinstance(data[-1], dict):
+                raise ValueError("The JSON list must contain at least one configuration object at the end.")
+            return
+        raise ValueError("The configuration JSON must be an object or a non-empty list of objects.")
+
+    def show_config_choice(self):
+        """Show the author configuration chooser without starting the engine."""
+        if self.running:
+            return
+        existing_ok = False
+        if not os.path.isfile(AUTHOR_PATH):
+            existing_note = "No saved author configuration is available. Choose ENTER NEW DATA."
+        else:
+            try:
+                self._read_author_config()
+                existing_ok = True
+                existing_note = "Saved author data is available. Select it, then press START OPERATION."
+            except Exception as exc:
+                self.log(f"Existing author configuration is unavailable: {type(exc).__name__}: {exc}", "WARNING")
+                existing_note = "Saved author data could not be validated. Choose ENTER NEW DATA to replace it."
+
+        win = tk.Toplevel(self.root)
+        win.title("Serenum — Author Configuration")
+        win.configure(bg=self.BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+        win.geometry("620x365")
+        self._center_child(win, 620, 365)
+
+        tk.Label(
+            win, text="AUTHOR CONFIGURATION REQUIRED", bg=self.BG, fg=self.CYAN,
+            font=("Segoe UI", 18, "bold"),
+        ).pack(anchor="w", padx=28, pady=(25, 5))
+        tk.Label(
+            win,
+            text="Choose how you want to provide the author data. Serenum will wait until you press START OPERATION.",
+            bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9), wraplength=555, justify="left",
+        ).pack(anchor="w", padx=28, pady=(0, 16))
+
+        existing_button = tk.Button(
+            win, text="USE EXISTING DATA", command=lambda: self._choose_existing(win),
+            state="normal" if existing_ok else "disabled",
+            bg="#153A3B", fg=self.GREEN, activebackground="#1C5554",
+            disabledforeground="#53647A", relief="flat", bd=0,
+            font=("Segoe UI", 10, "bold"), pady=13, cursor="hand2",
+        )
+        existing_button.pack(fill="x", padx=28, pady=5)
+        tk.Button(
+            win, text="ENTER NEW DATA", command=lambda: self._open_author_editor(win),
+            bg="#172E49", fg=self.CYAN, activebackground="#214767",
+            relief="flat", bd=0, font=("Segoe UI", 10, "bold"),
+            pady=13, cursor="hand2",
+        ).pack(fill="x", padx=28, pady=5)
+        tk.Label(
+            win, text=existing_note, bg=self.BG,
+            fg=self.AMBER if not existing_ok else self.MUTED,
+            font=("Segoe UI", 8), wraplength=550, justify="left",
+        ).pack(anchor="w", padx=28, pady=(12, 0))
+        win.protocol("WM_DELETE_WINDOW", lambda: self._close_choice(win))
+
+    def _center_child(self, win, width, height):
+        self.root.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - width) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - height) // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _close_choice(self, win):
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        win.destroy()
+
+    def _choose_existing(self, win):
+        """Select existing author data and wait for the explicit Start command."""
+        try:
+            self._read_author_config()
+        except Exception as exc:
+            self.log(f"Could not select existing author data: {type(exc).__name__}: {exc}", "ERROR")
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Author data unavailable",
+                "The saved author configuration could not be opened or validated. Open VIEW CONSOLE for technical details, or choose ENTER NEW DATA.",
+                parent=win,
+            )
+            return
+        self._close_choice(win)
+        self._mark_configuration_ready("existing")
+        self.log("Selected existing author data. The saved configuration will be read without legacy analysis.", "SUCCESS")
+        self.log(f"Selected author configuration source: {AUTHOR_PATH}", "INFO")
+
+    def _mark_configuration_ready(self, mode):
+        """Enable Start after configuration selection; never launch automation here."""
+        self.selected_mode = mode
+        mode_label = "EXISTING DATA" if mode == "existing" else "NEW DATA"
+        self.mode_value.configure(text=f"CONFIGURATION: {mode_label}", fg=self.GREEN)
+        self.start_button.configure(state="normal", text="▶   START OPERATION")
+        self.set_status("CONFIGURATION READY — PRESS START", self.GREEN)
+        self._set_visual_state(
+            "ready", "READY TO START",
+            "Your author configuration is ready. Press START OPERATION whenever you want Serenum to begin.",
+            self.GREEN,
+            detail="Configuration selected • Operation has not started.",
+        )
+        self.show_status_view()
+
+    def _open_author_editor(self, choice_window):
+        """Open a modal JSON editor with a permanently visible save footer."""
+        self._close_choice(choice_window)
+        editor = tk.Toplevel(self.root)
+        editor.title("Serenum — Save New Configuration")
+        editor.configure(bg=self.BG)
+        editor.geometry("900x650")
+        editor.minsize(760, 480)
+        editor.transient(self.root)
+        editor.grab_set()
+        self._center_child(editor, 900, 650)
+
+        # Grid keeps the action bar outside the expandable editor area, so the
+        # SAVE & PROCEED button cannot be pushed below the visible window.
+        editor.grid_rowconfigure(3, weight=1)
+        editor.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            editor, text="AUTHOR CONFIGURATION", bg=self.BG, fg=self.CYAN,
+            font=("Segoe UI", 18, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=22, pady=(17, 3))
+
+        tk.Label(
+            editor,
+            text="Paste or edit the complete JSON configuration. Save it here, then return to the main screen and press START OPERATION. Saving does not start Serenum.",
+            bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9),
+            wraplength=840, justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 9))
+
+        tk.Label(
+            editor, text="AUTHOR DATA  •  JSON CONFIGURATION", bg=self.PANEL_ALT,
+            fg="#B9CBE2", font=("Consolas", 8), anchor="w", padx=10, pady=8,
+            wraplength=840, justify="left",
+        ).grid(row=2, column=0, sticky="ew", padx=22, pady=(0, 9))
+
+        text_frame = tk.Frame(
+            editor, bg=self.PANEL, highlightthickness=1,
+            highlightbackground=self.BORDER,
+        )
+        text_frame.grid(row=3, column=0, sticky="nsew", padx=22, pady=(0, 10))
+        text_frame.grid_rowconfigure(0, weight=1)
+        text_frame.grid_columnconfigure(0, weight=1)
+
+        editor_text = tk.Text(
+            text_frame, bg="#070C15", fg="#D8E6FA",
+            insertbackground=self.CYAN, selectbackground="#1A4861",
+            relief="flat", wrap="none", undo=True,
+            font=("Consolas", 10), padx=14, pady=12,
+        )
+        yscroll = tk.Scrollbar(text_frame, command=editor_text.yview)
+        xscroll = tk.Scrollbar(text_frame, command=editor_text.xview, orient="horizontal")
+        editor_text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        editor_text.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+
+        # Load the current file as an editable starting point. Saving remains
+        # an explicit user action; merely opening this window never writes JSON.
+        initial = "{}"
+        try:
+            with open(AUTHOR_PATH, "r", encoding="utf-8") as handle:
+                candidate = handle.read()
+            json.loads(candidate)
+            initial = candidate
+        except Exception:
+            pass
+        editor_text.insert("1.0", initial)
+
+        button_row = tk.Frame(editor, bg=self.BG)
+        button_row.grid(row=4, column=0, sticky="ew", padx=22, pady=(0, 15))
+
+        tk.Button(
+            button_row, text="CANCEL", command=lambda: self._cancel_author_editor(editor),
+            bg="#202C3E", fg=self.MUTED, activebackground="#2B3B52",
+            relief="flat", bd=0, padx=22, pady=11,
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+        ).pack(side="left")
+
+        save_button = tk.Button(
+            button_row, text="SAVE CONFIGURATION", 
+            command=lambda: self._save_and_start(editor, editor_text),
+            bg="#124B4A", fg=self.GREEN, activebackground="#17615E",
+            activeforeground="#FFFFFF", relief="flat", bd=0,
+            padx=30, pady=12, font=("Segoe UI", 10, "bold"),
+            cursor="hand2", takefocus=True,
+        )
+        save_button.pack(side="right")
+        editor.bind("<Control-s>", lambda _event: self._save_and_start(editor, editor_text))
+        editor.protocol("WM_DELETE_WINDOW", lambda: self._cancel_author_editor(editor))
+        editor_text.focus_set()
+        editor.lift()
+        editor.after(100, editor.focus_force)
+
+    def _cancel_author_editor(self, editor):
+        """Close the editor without saving or starting the engine."""
+        try:
+            editor.grab_release()
+        except Exception:
+            pass
+        try:
+            editor.destroy()
+        except Exception:
+            pass
+
+    def _save_and_start(self, editor, editor_text):
+        """Validate and save new author data, then return to the cover without running."""
+        from tkinter import messagebox
+        raw = editor_text.get("1.0", "end-1c").strip()
+        try:
+            data = json.loads(raw)
+            self._validate_config_shape(data)
+            target_dir = os.path.dirname(AUTHOR_PATH)
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+            temp_path = AUTHOR_PATH + ".serenum_tmp"
+            with open(temp_path, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(data, handle, indent=2, ensure_ascii=False)
+                handle.write("\n")
+            os.replace(temp_path, AUTHOR_PATH)
+            self._read_author_config()
+        except json.JSONDecodeError as exc:
+            self.log(f"New author JSON is invalid at line {exc.lineno}, column {exc.colno}: {exc.msg}", "ERROR")
+            messagebox.showerror(
+                "Invalid JSON",
+                f"The configuration contains invalid JSON at line {exc.lineno}, column {exc.colno}. Correct the syntax and try saving again.",
+                parent=editor,
+            )
+            return
+        except Exception as exc:
+            self.log(f"Could not save new author configuration: {type(exc).__name__}: {exc}", "ERROR")
+            messagebox.showerror(
+                "Configuration not saved",
+                "The author configuration could not be saved or validated. Open VIEW CONSOLE for technical details, correct the issue, and try again.",
+                parent=editor,
+            )
+            return
+
+        try:
+            editor.grab_release()
+        except Exception:
+            pass
+        try:
+            editor.destroy()
+        except Exception:
+            pass
+
+        self._mark_configuration_ready("new")
+        self.log("New author configuration saved and validated. Press START OPERATION when ready.", "SUCCESS")
+        self.log(f"New author configuration saved to: {AUTHOR_PATH}", "INFO")
+
+    def _worker_python_executable(self):
+        """Use python.exe for the hidden worker even when the GUI uses pythonw.exe."""
+        executable = os.path.abspath(sys.executable)
+        if os.path.basename(executable).lower() == "pythonw.exe":
+            candidate = os.path.join(os.path.dirname(executable), "python.exe")
+            if os.path.isfile(candidate):
+                return candidate
+        return executable
+
+    def start_selected_operation(self):
+        """Start only after the user has selected or saved author configuration."""
+        if not self.selected_mode:
+            self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
+            self.show_config_choice()
+            return
+        try:
+            self._read_author_config()
+        except Exception as exc:
+            self.log(f"Author configuration validation failed before Start: {type(exc).__name__}: {exc}", "ERROR")
+            self.selected_mode = None
+            self.start_button.configure(state="disabled")
+            self.mode_value.configure(text="AUTHOR CONFIGURATION REQUIRED", fg=self.AMBER)
+            self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Author configuration required",
+                "The selected author data is no longer available or is invalid. Please select existing data again or enter new data.",
+                parent=self.root,
+            )
+            self.show_config_choice()
+            return
+        self.start_engine(self.selected_mode)
+
+    def start_engine(self, mode):
+        """Start the engine in a separate process so the GUI is independent."""
+        if self.running:
+            return
+        if not self.selected_mode:
+            self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
+            self.show_config_choice()
+            return
+        # The mode must already have been selected or saved by the user.
+        # This prevents configuration selection from starting the engine implicitly.
+        mode = self.selected_mode
+        script_path = os.path.abspath(__file__)
+        python_exe = self._worker_python_executable()
+        command = [python_exe, "-u", script_path, "--serenum-worker", self.selected_mode]
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        self.run_counter += 1
+        run_id = self.run_counter
+        self.active_run_id = run_id
+        self.stop_requested = False
+        self._pending_worker_failure = None
+        self.paused = False
+        self.running = True
+        self.started_at = time.monotonic()
+        self.total_errors = 0
+        self.total_warnings = 0
+        self.error_value.configure(text="ERRORS     0", fg=self.GREEN)
+        self.warning_value.configure(text="WARNINGS   0")
+        self.start_button.configure(state="disabled")
+        self.pause_button.configure(state="normal", text="Ⅱ   PAUSE OPERATION")
+        self.stop_button.configure(state="normal")
+        self.config_button.configure(state="disabled")
+        self.progress.start(12)
+        self.set_status("OPERATION IN PROGRESS", self.GREEN)
+        self._set_visual_state(
+            "running", "SERENUM IS WORKING",
+            "Your automation is running in the background. This control center stays available so you can pause, resume, stop, or inspect the console.",
+            self.GREEN,
+            detail="Preparing your selected operation • Console available on request.",
+        )
+        self.show_status_view()
+        self.log(f"Starting automation using: {python_exe}", "INFO")
+
+        try:
+            worker_environment = os.environ.copy()
+            worker_environment["PYTHONIOENCODING"] = "utf-8"
+            self.process = subprocess.Popen(
+                command,
+                cwd=os.path.dirname(script_path),
+                env=worker_environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                creationflags=creation_flags,
+            )
+        except Exception as exc:
+            self.process = None
+            self.running = False
+            self.active_run_id = None
+            self.progress.stop()
+            self.pause_button.configure(state="disabled", text="Ⅱ   PAUSE OPERATION")
+            self.stop_button.configure(state="disabled")
+            self.start_button.configure(state="normal")
+            self.config_button.configure(state="normal")
+            self.log(f"Could not start the engine process: {type(exc).__name__}: {exc}", "ERROR")
+            self._show_abort_dialog({
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+            })
+            return
+
+        self.log(
+            f"Engine worker started (PID {self.process.pid}). The desktop window is running independently.",
+            "SUCCESS",
+        )
+        self.worker = threading.Thread(
+            target=self._read_worker_output,
+            args=(self.process, run_id),
+            name=f"SerenumWorkerOutput-{run_id}",
+            daemon=True,
+        )
+        self.worker.start()
+        self.root.after(350, self._update_runtime)
+
+    def _read_worker_output(self, process, run_id):
+        """Forward only this worker's output; GUI control remains in the parent."""
+        fatal_payload = None
+        output_tail = []
+        try:
+            stream = process.stdout
+            if stream is not None:
+                for line in iter(stream.readline, ""):
+                    output_tail.append(line)
+                    if len(output_tail) > 120:
+                        output_tail.pop(0)
+                    marker = "SERENUM_FATAL_JSON="
+                    if marker in line:
+                        raw = line.split(marker, 1)[1].strip()
+                        try:
+                            fatal_payload = json.loads(raw)
+                            self.events.put(("worker_fatal", run_id, fatal_payload))
+                            console_failure = (
+                                "\n[ERROR] OPERATION FAILURE DETAILS\n"
+                                f"Type: {fatal_payload.get('error_type', 'UnknownError')}\n"
+                                f"Reason: {fatal_payload.get('message', 'Unknown failure')}\n"
+                                "Traceback:\n"
+                                f"{fatal_payload.get('traceback', 'No traceback was supplied.')}\n"
+                            )
+                            self.events.put(("worker_log", run_id, console_failure))
+                        except Exception:
+                            self.events.put(("worker_log", run_id, line))
+                        continue
+                    self.events.put(("worker_log", run_id, line))
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            return_code = process.wait()
+        except Exception as exc:
+            return_code = process.poll()
+            if return_code is None:
+                return_code = -1
+            output_tail.append(f"[GUI WORKER READER ERROR] {exc}\n")
+            self.events.put(("worker_log", run_id, output_tail[-1]))
+
+        if return_code != 0 and fatal_payload is None:
+            captured = "".join(output_tail)[-7000:]
+            lines = [line.strip() for line in output_tail if line.strip()]
+            detected_type = "WorkerProcessExit"
+            detected_message = f"The engine worker exited with code {return_code}."
+            for candidate in reversed(lines):
+                match = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Interrupt|Exit)):\s*(.*)$", candidate)
+                if match:
+                    detected_type = match.group(1).split(".")[-1]
+                    detected_message = match.group(2) or candidate
+                    break
+            fatal_payload = {
+                "error_type": detected_type,
+                "message": detected_message,
+                "traceback": captured or "The worker exited before it could report a detailed error.",
+            }
+        self.events.put(("worker_exit", run_id, return_code, fatal_payload))
+
+    def _process_tree(self, pid):
+        """Return worker process and descendants without touching unrelated apps."""
+        try:
+            root_process = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return None, []
+        try:
+            descendants = root_process.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            descendants = []
+        return root_process, descendants
+
+    def _suspend_worker_tree(self, pid):
+        root_process, descendants = self._process_tree(pid)
+        if root_process is None:
+            raise RuntimeError("The worker process has already exited.")
+        suspended = []
+        try:
+            for process in reversed(descendants):
+                process.suspend()
+                suspended.append(process)
+            root_process.suspend()
+            suspended.append(root_process)
+        except Exception:
+            for process in reversed(suspended):
+                try:
+                    process.resume()
+                except Exception:
+                    pass
+            raise
+
+    def _resume_worker_tree(self, pid):
+        root_process, descendants = self._process_tree(pid)
+        if root_process is None:
+            raise RuntimeError("The worker process is no longer running. Start a new operation instead.")
+        errors = []
+        # Resume the controlling Python process first, then its browser/driver children.
+        for process in [root_process] + descendants:
+            try:
+                process.resume()
+            except psutil.NoSuchProcess:
+                continue
+            except Exception as exc:
+                errors.append(str(exc))
+        if errors:
+            raise RuntimeError("Could not resume every worker process: " + "; ".join(errors))
+
+    def _terminate_worker_tree(self, pid):
+        """Terminate only the worker and processes it launched, then force-kill stragglers."""
+        # Capture process handles first. On Windows, taskkill /T provides an
+        # additional OS-level process-tree termination; psutil handles follow-up.
+        root_process, descendants = self._process_tree(pid)
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                pass
+        targets = list(reversed(descendants))
+        if root_process is not None:
+            targets.append(root_process)
+        for process in targets:
+            try:
+                process.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            except Exception:
+                pass
+        if targets:
+            try:
+                _gone, alive = psutil.wait_procs(targets, timeout=2.5)
+            except Exception:
+                alive = targets
+            for process in alive:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+        process = self.process
+        if process is not None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=1.0)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
+    def _update_runtime(self):
+        if not self.running or self.started_at is None:
+            return
+        elapsed = max(0, int(time.monotonic() - self.started_at))
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.runtime_value.configure(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        self.root.after(500, self._update_runtime)
+
+    def pause_or_resume(self):
+        if not self.running or self.process is None:
+            return
+        pid = self.process.pid
+        if not self.paused:
+            try:
+                self._suspend_worker_tree(pid)
+            except Exception as exc:
+                self.log(f"Pause failed: {type(exc).__name__}: {exc}", "ERROR")
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Could not pause Serenum",
+                    "Serenum could not pause the operation. Open VIEW CONSOLE for the technical reason. "
+                    "Check that the application can manage its background activity and that the operation is still active.",
+                    parent=self.root,
+                )
+                return
+            self.paused = True
+            self.pause_button.configure(text="▶   RESUME OPERATION")
+            self.set_status("OPERATION PAUSED", self.AMBER)
+            self._set_visual_state(
+                "paused", "OPERATION PAUSED",
+                "The operation is on hold. No automation activity will continue until you press Resume.",
+                self.AMBER,
+                detail="Paused by your request • The desktop control center remains active.",
+            )
+            self.show_status_view()
+            self.log(
+                f"Operation paused by user. Background activity is suspended (session {pid}).",
+                "INFO",
+            )
+            return
+
+        try:
+            self._resume_worker_tree(pid)
+        except Exception as exc:
+            self.log(f"Resume failed: {type(exc).__name__}: {exc}", "ERROR")
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Could not resume Serenum",
+                "Serenum could not resume the operation. Open VIEW CONSOLE for the technical reason. "
+                "Try again, or press Stop and then Start to begin a fresh run.",
+                parent=self.root,
+            )
+            return
+        self.paused = False
+        self.pause_button.configure(text="Ⅱ   PAUSE OPERATION")
+        self.set_status("OPERATION IN PROGRESS", self.GREEN)
+        self._set_visual_state(
+            "running", "WELCOME BACK — RESUMED",
+            "Your operation is continuing from where it was paused. You can pause or stop it again at any time.",
+            self.GREEN,
+            detail="Resumed by your request • Same run continues.",
+        )
+        self.show_status_view()
+        self.log("Operation resumed by user. The same run is continuing.", "INFO")
+
+    def stop_operation(self):
+        """Stop terminates the worker process immediately; the GUI remains open."""
+        if not self.running or self.process is None:
+            return
+        process = self.process
+        pid = process.pid
+        self.stop_requested = True
+        self._terminate_worker_tree(pid)
+        self.process = None
+        self.running = False
+        self.paused = False
+        # Keep this run ID until a new Start so any already-buffered worker
+        # output can still be collected into Copy All Results after Stop.
+        self.progress.stop()
+        self.pause_button.configure(state="disabled", text="Ⅱ   PAUSE OPERATION")
+        self.stop_button.configure(state="disabled")
+        self.start_button.configure(state="normal", text="▶   START OPERATION")
+        self.config_button.configure(state="normal")
+        self.set_status("OPERATION STOPPED BY REQUEST", self.MUTED)
+        self._set_visual_state(
+            "stopped", "OPERATION STOPPED",
+            "Your operation has stopped because you requested it. This is not an error. The control center is still open and ready when you are.",
+            self.MUTED,
+            detail="Stopped by user • Press Start Operation to launch a fresh run.",
+        )
+        self.show_status_view()
+        self.log(
+            "Operation stopped by user. The desktop interface remains open.",
+            "INFO",
+        )
+
+    def _diagnose_failure(self, payload):
+        """Return a plain-language summary; exact diagnostics stay in the console."""
+        raw_error_type = str(payload.get("error_type") or "UnknownError")
+        combined = f"{raw_error_type}: {payload.get('message', '')}\n{payload.get('traceback', '')}".lower()
+
+        if "modulenotfounderror" in combined or "no module named" in combined or "importerror" in combined:
+            title = "A required component is unavailable"
+            message = "Serenum could not load a required Python component."
+            action = "Open VIEW CONSOLE to see the missing component name. Install the dependency in the Python environment used by Serenum, then press Start again."
+        elif "jsondecodeerror" in combined or "invalid json" in combined:
+            title = "The author configuration is invalid"
+            message = "The configuration data could not be read because its JSON structure or syntax is invalid."
+            action = "Open the author configuration, correct the JSON syntax, save it, and press Start again. The exact line and error are available in VIEW CONSOLE."
+        elif "filenotfounderror" in combined or "no such file" in combined:
+            title = "A required file or folder is missing"
+            message = "Serenum could not find a file or folder needed for this operation."
+            action = "Open VIEW CONSOLE to identify the missing item. Restore it or correct the related setting, then press Start again."
+        elif "permissionerror" in combined or "access is denied" in combined:
+            title = "Access was denied"
+            message = "Serenum could not access a file or folder required for this operation."
+            action = "Close any application holding the item, check access permissions and available disk space, then press Start again."
+        elif any(term in combined for term in ("requests", "connectionerror", "httperror", "readtimeout", "connecttimeout", "ssl")):
+            title = "A network request could not complete"
+            message = "Serenum could not reach an external service or download a required resource."
+            action = "Check your internet connection and confirm the affected service is available. Open VIEW CONSOLE for the exact request and response, then retry."
+        elif any(term in combined for term in ("selenium", "webdriver", "chromedriver", "msedgedriver", "edge")):
+            title = "The browser automation could not continue"
+            message = "Serenum encountered a browser or browser-driver problem."
+            action = "Confirm the browser opens normally and that its driver is compatible. Open VIEW CONSOLE for the exact browser error, correct it, and retry."
+        elif any(term in combined for term in ("pillow", "image", "unidentifiedimageerror", "cannot identify image")):
+            title = "An image could not be processed"
+            message = "A downloaded or selected image was invalid, incomplete, or unsupported."
+            action = "Check the image source and confirm it returns a valid image. Open VIEW CONSOLE to identify the affected item, then retry."
+        else:
+            title = "The operation encountered a problem"
+            message = "Serenum encountered an unexpected technical issue and stopped this run."
+            action = "Open VIEW CONSOLE for the exact error and technical details. Correct the reported issue, then press Start to run again."
+        return title, message, action
+
+    def _show_abort_dialog(self, payload):
+        title, message, action = self._diagnose_failure(payload)
+        # Keep raw exception details and traceback in the console only.
+        self._set_visual_state(
+            "aborted", "OPERATION NEEDS ATTENTION",
+            "Serenum stopped because it encountered a problem. Technical details are available in the console.",
+            self.RED,
+            detail="A technical issue interrupted this operation. Open the console for details.",
+        )
+        self.show_status_view()
+        self.log(
+            f"Operation aborted: {payload.get('error_type', 'UnknownError')}: {payload.get('message', 'Unknown failure')}\n"
+            f"{payload.get('traceback', '')}",
+            "ERROR",
+        )
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Serenum — Operation Needs Attention")
+        dialog.configure(bg=self.BG)
+        dialog.geometry("760x440")
+        dialog.minsize(650, 390)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        self._center_child(dialog, 760, 440)
+
+        tk.Label(
+            dialog, text=title.upper(), bg=self.BG, fg=self.RED,
+            font=("Segoe UI", 18, "bold"), wraplength=700, justify="left",
+        ).pack(anchor="w", padx=24, pady=(22, 8))
+        tk.Label(
+            dialog, text=message, bg=self.BG, fg=self.TEXT,
+            font=("Segoe UI", 11), wraplength=700, justify="left",
+        ).pack(anchor="w", padx=24, pady=(0, 16))
+
+        card = tk.Frame(dialog, bg=self.PANEL, highlightthickness=1, highlightbackground=self.BORDER)
+        card.pack(fill="both", expand=True, padx=24, pady=(0, 15))
+        tk.Label(
+            card, text="WHAT TO DO NEXT", bg=self.PANEL, fg=self.CYAN,
+            font=("Consolas", 9, "bold"),
+        ).pack(anchor="w", padx=16, pady=(15, 6))
+        tk.Label(
+            card, text=action, bg=self.PANEL, fg=self.MUTED,
+            font=("Segoe UI", 10), wraplength=670, justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 16))
+
+        button_row = tk.Frame(dialog, bg=self.BG)
+        button_row.pack(fill="x", padx=24, pady=(0, 18))
+
+        def view_console_details():
+            close_dialog()
+            self.show_console()
+
+        tk.Button(
+            button_row, text="VIEW CONSOLE", command=view_console_details,
+            bg="#172E49", fg=self.CYAN, activebackground="#214767",
+            relief="flat", bd=0, padx=20, pady=11,
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+        ).pack(side="left")
+
+        def close_dialog():
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        tk.Button(
+            button_row, text="CLOSE", command=close_dialog,
+            bg="#303D52", fg=self.TEXT, activebackground="#43536B",
+            relief="flat", bd=0, padx=26, pady=11,
+            font=("Segoe UI", 9, "bold"), cursor="hand2",
+        ).pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        dialog.lift()
+        dialog.after(100, dialog.focus_force)
+
+    def _finish_worker(self, return_code, fatal_payload):
+        self.running = False
+        self.paused = False
+        self.process = None
+        self.active_run_id = None
+        self.pause_button.configure(state="disabled", text="Ⅱ   PAUSE OPERATION")
+        self.stop_button.configure(state="disabled")
+        self.start_button.configure(state="normal", text="▶   START OPERATION")
+        self.config_button.configure(state="normal")
+        self.progress.stop()
+
+        if return_code == 0 and not fatal_payload:
+            self.set_status("OPERATION COMPLETE", self.GREEN)
+            self._set_visual_state(
+                "finished", "OPERATION COMPLETE",
+                "Serenum has finished the selected operation successfully. The desktop control center remains ready.",
+                self.GREEN,
+                detail="Completed successfully • Start is available for the next run.",
+            )
+            self.show_status_view()
+            self.log("Engine process exited successfully.", "SUCCESS")
+        else:
+            if not fatal_payload:
+                fatal_payload = {
+                    "error_type": "Unexpected operation interruption",
+                    "message": f"The operation ended with code {return_code} without reporting a normal completion.",
+                    "traceback": "The automation may have stopped during startup or an external dependency may have interrupted it.",
+                }
+            self.set_status("OPERATION ABORTED — ACTION REQUIRED", self.RED)
+            self._set_visual_state(
+                "aborted", "OPERATION NEEDS ATTENTION",
+                "Serenum encountered a problem and stopped this run. Review the detailed report for the cause and recommended fix.",
+                self.RED,
+                detail="A technical issue interrupted this operation. Open the console for details.",
+            )
+            self.show_status_view()
+            self._show_abort_dialog(fatal_payload)
+
+    def on_close(self):
+        if self.running and self.process is not None:
+            from tkinter import messagebox
+            confirm = messagebox.askyesno(
+                "Exit Serenum?",
+                "An operation is currently running. Exiting will stop it and close the desktop window. Continue?",
+                parent=self.root,
+            )
+            if not confirm:
+                return
+            self._terminate_worker_tree(self.process.pid)
+            self.process = None
+            self.running = False
+            self.paused = False
+            self.active_run_id = None
+        self._close_application()
+
+    def _close_application(self):
+        global SERENUM_APP
+        if self._closing:
+            return
+        self._closing = True
+        self._cancel_console_timer()
+        if self.cover_animation_after_id is not None:
+            try:
+                self.root.after_cancel(self.cover_animation_after_id)
+            except Exception:
+                pass
+            self.cover_animation_after_id = None
+        _serenum_restore_sleep_controls()
+        try:
+            sys.stdout = self.stdout_original
+            sys.stderr = self.stderr_original
+        except Exception:
+            pass
+        SERENUM_APP = None
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+
+def _serenum_worker_entry(mode):
+    """CLI entry used by the GUI parent. All engine work happens in this process."""
+    try:
+        print("\n" + "=" * 76)
+        print("SERENUM ENGINE WORKER STARTED")
+        print(f"Configuration mode: {mode}")
+        print(f"Configuration file: {AUTHOR_PATH}")
+        print(f"Worker PID: {os.getpid()}")
+        print("=" * 76 + "\n", flush=True)
+        execute_engine(run_config_analysis=False)
+        print("\nSERENUM_WORKER_RESULT=SUCCESS", flush=True)
+        return 0
+    except BaseException as exc:
+        payload = {
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        }
+        try:
+            print("\nSERENUM_FATAL_JSON=" + json.dumps(payload, ensure_ascii=False), flush=True)
+        except Exception:
+            print(f"SERENUM FATAL ERROR: {type(exc).__name__}: {exc}", flush=True)
+            traceback.print_exc()
+        return 1
 
 
 if __name__ == "__main__":
-    print("🚀 Starting Google Flow image generation...", flush=True)
+    if len(sys.argv) >= 2 and sys.argv[1] == "--serenum-worker":
+        selected_mode = sys.argv[2] if len(sys.argv) >= 3 else "existing"
+        raise SystemExit(_serenum_worker_entry(selected_mode))
 
     try:
-        wash_ai_info()
-    except Exception as e:
-        import traceback
-        print(f"❌ FATAL ERROR: {e}", flush=True)
-        traceback.print_exc()
-
-
-   
+        application_root = tk.Tk()
+        app = SerenumApp(application_root)
+        application_root.mainloop()
+    except Exception as startup_error:
+        try:
+            sys.__stderr__.write(f"Serenum failed to start: {startup_error}\n")
+            traceback.print_exc(file=sys.__stderr__)
+        except Exception:
+            pass
+        raise
