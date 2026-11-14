@@ -83,13 +83,22 @@ def find_latest_download_script(progress=None) -> tuple[Path | None, int]:
     matches: list[Path] = []
     scanned = 0
     for root, dirs, files in os.walk(downloads, topdown=True):
-        dirs[:] = [d for d in dirs if d.casefold() not in SKIP_DIRS and not d.startswith(".")]
+        dirs[:] = [
+            d for d in dirs
+            if d.casefold() not in SKIP_DIRS
+            and not d.startswith(".")
+            and not d.casefold().endswith(".zip")
+        ]
         scanned += 1
         if progress and scanned % 25 == 0:
             progress(scanned)
+        folder = Path(root)
+        # Only consider real extracted directories whose own name includes Serenum.
+        if "serenum" not in folder.name.casefold():
+            continue
         for filename in files:
             if filename.casefold() == "serenum.py":
-                candidate = Path(root) / filename
+                candidate = folder / filename
                 # Exclude the installed production script if Downloads was redirected there.
                 try:
                     if os.path.normcase(str(candidate.resolve())) == os.path.normcase(str((INSTALL_DIR / "serenum.py").resolve())):
@@ -206,7 +215,7 @@ class UpdaterWindow:
         panel.pack(fill="both", expand=True, pady=(22, 15))
         self.status = tk.Label(panel, text="SEARCHING DOWNLOADS", bg=self.PANEL, fg=self.CYAN, font=("Segoe UI", 11, "bold"))
         self.status.pack(anchor="w", padx=20, pady=(20, 8))
-        self.message = tk.Label(panel, text="Looking for the newest folder containing a valid serenum.py file.", bg=self.PANEL, fg=self.TEXT, font=("Segoe UI", 10), wraplength=570, justify="left")
+        self.message = tk.Label(panel, text="Looking for the newest extracted Serenum folder. ZIP files are ignored.", bg=self.PANEL, fg=self.TEXT, font=("Segoe UI", 10), wraplength=570, justify="left")
         self.message.pack(anchor="w", padx=20, pady=(0, 14))
         style = ttk.Style(self.root)
         try:
@@ -232,7 +241,7 @@ class UpdaterWindow:
             return
         self.scanning = True
         self.status.configure(text="SEARCHING DOWNLOADS", fg=self.CYAN)
-        self.message.configure(text="Searching your Downloads folders for the most recently added valid Serenum script. This may take a moment.")
+        self.message.configure(text="Searching Downloads for the newest extracted folder with “serenum” in its name and a valid serenum.py. ZIP files are ignored.")
         self.progress.configure(value=5)
         self.update_button.configure(text="SEARCHING…", state="disabled")
 

@@ -22095,6 +22095,9 @@ class SerenumApp:
         self._console_timer_id = None
         self._console_deadline = None
         self.console_view_active = False
+        self.config_view_active = False
+        self.author_json_text = None
+        self.config_feedback = None
         self.cover_path = None
         self.cover_frames = []
         self.cover_frame_index = 0
@@ -22111,22 +22114,36 @@ class SerenumApp:
         self._center_window(1220, 790)
 
         self._build_interface()
+        # Match the native Windows title bar to the application's dark surface.
+        self.root.after(250, self._apply_dark_title_bar)
+        self.root.after(1000, self._apply_dark_title_bar)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.root.bind("<Control-Return>", lambda _e: self.show_config_choice())
+        self.root.bind("<Control-Return>", lambda _e: self.show_author_configuration())
 
         sys.stdout = _SerenumTextStream(self, self.stdout_original)
         sys.stderr = _SerenumTextStream(self, self.stderr_original)
 
         self.root.after(80, self._process_events)
-        self.root.after(350, self.show_config_choice)
         self.log("Serenum desktop interface initialized.", "INFO")
         self.log(f"Author configuration: {AUTHOR_PATH}", "INFO")
-        self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
-        self._set_visual_state(
-            "ready", "AUTHOR CONFIGURATION REQUIRED",
-            "Choose existing author data or enter a new configuration. After that, press START OPERATION when you are ready.",
-            self.CYAN, detail="No operation has started.",
-        )
+
+        # A valid saved configuration is selected automatically. The user is
+        # never forced through a chooser when the application opens.
+        try:
+            self._read_author_config()
+        except Exception as exc:
+            self.selected_mode = None
+            self.start_button.configure(state="disabled")
+            self.mode_value.configure(text="AUTHOR CONFIGURATION REQUIRED", fg=self.AMBER)
+            self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
+            self._set_visual_state(
+                "ready", "AUTHOR CONFIGURATION REQUIRED",
+                "Open CONFIGURATION to create or correct the author JSON. Serenum will not start until a valid configuration is saved.",
+                self.CYAN, detail="No operation has started.",
+            )
+            self.log(f"No valid saved author configuration was selected: {type(exc).__name__}: {exc}", "WARNING")
+        else:
+            self._mark_configuration_ready("existing")
 
     def _center_window(self, width, height):
         self.root.update_idletasks()
@@ -22135,6 +22152,57 @@ class SerenumApp:
         x = max(0, (sw - width) // 2)
         y = max(0, (sh - height) // 2)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _apply_dark_title_bar(self):
+        """Set the native Windows caption to the same color as Serenum's window."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            self.root.update_idletasks()
+            hwnd = ctypes.c_void_p(self.root.winfo_id())
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            get_ancestor = user32.GetAncestor
+            get_ancestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            get_ancestor.restype = ctypes.c_void_p
+            top_hwnd = get_ancestor(hwnd, 2) or hwnd  # GA_ROOT
+
+            dwmapi = ctypes.WinDLL("dwmapi")
+            set_attribute = dwmapi.DwmSetWindowAttribute
+            set_attribute.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint,
+            ]
+            set_attribute.restype = ctypes.c_long
+
+            dark_mode = ctypes.c_int(1)
+            result = set_attribute(
+                top_hwnd, 20, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode),
+            )
+            if result != 0:
+                set_attribute(
+                    top_hwnd, 19, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode),
+                )
+
+            def _colorref(hex_color):
+                value = hex_color.lstrip("#")
+                red, green, blue = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+                return ctypes.c_uint((blue << 16) | (green << 8) | red)
+
+            for attribute, color in (
+                (35, _colorref(self.BG)),
+                (34, _colorref(self.BORDER)),
+                (36, _colorref(self.TEXT)),
+            ):
+                try:
+                    set_attribute(
+                        top_hwnd, attribute, ctypes.byref(color), ctypes.sizeof(color),
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            # Window decoration styling is best-effort and must not block startup.
+            return
 
     def _build_interface(self):
         import tkinter.font as tkfont
@@ -22145,6 +22213,28 @@ class SerenumApp:
             style.theme_use("clam")
         except Exception:
             pass
+
+        # Keep vertical and horizontal scrollbars in the Serenum palette.
+        # The clam theme honors these colors on Windows instead of drawing white bars.
+        for scrollbar_style in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.configure(
+                scrollbar_style,
+                background="#1B3D59",
+                troughcolor=self.BG,
+                bordercolor=self.BG,
+                lightcolor="#1B3D59",
+                darkcolor="#1B3D59",
+                arrowcolor=self.CYAN,
+                arrowsize=12,
+                relief="flat",
+            )
+            style.map(
+                scrollbar_style,
+                background=[("pressed", "#23617D"), ("active", self.CYAN)],
+                arrowcolor=[("pressed", self.BG), ("active", self.BG)],
+                bordercolor=[("active", self.BORDER)],
+            )
+
         style.configure(
             "Serenum.Horizontal.TProgressbar",
             troughcolor="#1B2A3F", background=self.CYAN,
@@ -22192,48 +22282,121 @@ class SerenumApp:
         body = tk.Frame(outer, bg=self.BG)
         body.pack(fill="both", expand=True)
 
-        # Persistent left command deck; this remains visible in every view.
-        side = tk.Frame(body, bg=self.PANEL, width=250, highlightthickness=1, highlightbackground=self.BORDER)
+        # Scrollable left command deck. All existing controls stay in their
+        # original order, but can now be reached at shorter window heights.
+        side = tk.Frame(
+            body, bg=self.PANEL, width=250,
+            highlightthickness=1, highlightbackground=self.BORDER,
+        )
         side.pack(side="left", fill="y", padx=(0, 14))
         side.pack_propagate(False)
-        tk.Label(side, text="COMMAND DECK", bg=self.PANEL, fg=self.CYAN,
-                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=16, pady=(18, 12))
 
-        self.start_button = self._make_button(side, "▶   START OPERATION", self.start_selected_operation, self.GREEN, state="disabled")
+        # Keep Configuration pinned at the very top while the commands below
+        # it scroll independently when the panel is shorter than its contents.
+        self.config_button = self._make_button(
+            side, "⚙   CONFIGURATION", self.show_author_configuration, self.CYAN,
+        )
+        self.config_button.pack(fill="x", padx=14, pady=(16, 10))
+        tk.Frame(side, bg=self.BORDER, height=1).pack(
+            fill="x", padx=14, pady=(0, 8),
+        )
+
+        deck_scrollbar = ttk.Scrollbar(
+            side, orient="vertical", style="Vertical.TScrollbar",
+        )
+        deck_scrollbar.pack(side="right", fill="y")
+        self.command_deck_canvas = tk.Canvas(
+            side, bg=self.PANEL, highlightthickness=0, bd=0,
+            yscrollcommand=deck_scrollbar.set,
+        )
+        self.command_deck_canvas.pack(side="left", fill="both", expand=True)
+        deck_scrollbar.configure(command=self.command_deck_canvas.yview)
+
+        deck_content = tk.Frame(self.command_deck_canvas, bg=self.PANEL)
+        self.command_deck_content = deck_content
+        deck_window = self.command_deck_canvas.create_window(
+            (0, 0), window=deck_content, anchor="nw",
+        )
+
+        def _refresh_command_deck_scrollregion(_event=None):
+            self.command_deck_canvas.configure(
+                scrollregion=self.command_deck_canvas.bbox("all"),
+            )
+
+        def _fit_command_deck_width(event):
+            self.command_deck_canvas.itemconfigure(deck_window, width=event.width)
+            _refresh_command_deck_scrollregion()
+
+        deck_content.bind("<Configure>", _refresh_command_deck_scrollregion)
+        self.command_deck_canvas.bind("<Configure>", _fit_command_deck_width)
+
+        # Mouse-wheel scrolling works while the pointer is over any control in
+        # this panel, without stealing wheel events from the console/editor.
+        def _command_deck_wheel(event):
+            widget = event.widget
+            inside_deck = False
+            while widget is not None:
+                if widget is self.command_deck_canvas or widget is deck_scrollbar:
+                    inside_deck = True
+                    break
+                widget = getattr(widget, "master", None)
+            if not inside_deck:
+                return None
+
+            if getattr(event, "num", None) == 4:
+                units = -3
+            elif getattr(event, "num", None) == 5:
+                units = 3
+            else:
+                delta = getattr(event, "delta", 0)
+                if not delta:
+                    return None
+                units = -int(delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+                if units == 0:
+                    units = -1 if delta > 0 else 1
+            self.command_deck_canvas.yview_scroll(units, "units")
+            return "break"
+
+        self.root.bind_all("<MouseWheel>", _command_deck_wheel, add="+")
+        self.root.bind_all("<Button-4>", _command_deck_wheel, add="+")
+        self.root.bind_all("<Button-5>", _command_deck_wheel, add="+")
+
+        tk.Label(deck_content, text="COMMAND DECK", bg=self.PANEL, fg=self.CYAN,
+                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=16, pady=(0, 12))
+
+        self.start_button = self._make_button(deck_content, "▶   START OPERATION", self.start_selected_operation, self.GREEN, state="disabled")
         self.start_button.pack(fill="x", padx=14, pady=4)
-        self.pause_button = self._make_button(side, "Ⅱ   PAUSE OPERATION", self.pause_or_resume, self.AMBER, state="disabled")
+        self.pause_button = self._make_button(deck_content, "Ⅱ   PAUSE OPERATION", self.pause_or_resume, self.AMBER, state="disabled")
         self.pause_button.pack(fill="x", padx=14, pady=4)
-        self.stop_button = self._make_button(side, "■   STOP OPERATION", self.stop_operation, "#C5D0DF", state="disabled")
+        self.stop_button = self._make_button(deck_content, "■   STOP OPERATION", self.stop_operation, "#C5D0DF", state="disabled")
         self.stop_button.pack(fill="x", padx=14, pady=4)
 
-        tk.Frame(side, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=13)
-        self.console_button = self._make_button(side, "▤   SHOW CONSOLE", self.show_console, self.CYAN)
+        tk.Frame(deck_content, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=13)
+        self.console_button = self._make_button(deck_content, "▤   SHOW CONSOLE", self.show_console, self.CYAN)
         self.console_button.pack(fill="x", padx=14, pady=4)
-        self.config_button = self._make_button(side, "⚙   CONFIGURATION", self.show_config_choice, self.MUTED)
-        self.config_button.pack(fill="x", padx=14, pady=4)
-        self.clear_button = self._make_button(side, "⌫   CLEAR CONSOLE", self.clear_log, self.MUTED)
+        self.clear_button = self._make_button(deck_content, "⌫   CLEAR CONSOLE", self.clear_log, self.MUTED)
         self.clear_button.pack(fill="x", padx=14, pady=4)
 
-        tk.Frame(side, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=14)
-        tk.Label(side, text="SESSION", bg=self.PANEL, fg=self.MUTED,
+        tk.Frame(deck_content, bg=self.BORDER, height=1).pack(fill="x", padx=14, pady=14)
+        tk.Label(deck_content, text="SESSION", bg=self.PANEL, fg=self.MUTED,
                  font=("Consolas", 9, "bold")).pack(anchor="w", padx=16, pady=(0, 7))
-        self.runtime_value = tk.Label(side, text="00:00:00", bg=self.PANEL, fg=self.TEXT,
+        self.runtime_value = tk.Label(deck_content, text="00:00:00", bg=self.PANEL, fg=self.TEXT,
                                       font=("Consolas", 19, "bold"))
         self.runtime_value.pack(anchor="w", padx=16)
-        self.error_value = tk.Label(side, text="ERRORS     0", bg=self.PANEL, fg=self.GREEN,
+        self.error_value = tk.Label(deck_content, text="ERRORS     0", bg=self.PANEL, fg=self.GREEN,
                                      font=("Consolas", 9, "bold"))
         self.error_value.pack(anchor="w", padx=16, pady=(12, 3))
-        self.warning_value = tk.Label(side, text="WARNINGS   0", bg=self.PANEL, fg=self.AMBER,
+        self.warning_value = tk.Label(deck_content, text="WARNINGS   0", bg=self.PANEL, fg=self.AMBER,
                                       font=("Consolas", 9, "bold"))
         self.warning_value.pack(anchor="w", padx=16, pady=3)
-        self.progress = ttk.Progressbar(side, mode="indeterminate", style="Serenum.Horizontal.TProgressbar")
+        self.progress = ttk.Progressbar(deck_content, mode="indeterminate", style="Serenum.Horizontal.TProgressbar")
         self.progress.pack(fill="x", padx=16, pady=(17, 8))
         tk.Label(
-            side,
-            text="The console is optional.\nUse EXIT CONSOLE to return\nto the cover, or wait for\nautomatic return after 10 seconds.",
+            deck_content,
+            text="Open VIEW CONSOLE to inspect\nthe live technical output. Use\nBACK TO HOME at the top-right\nto return to the Serenum cover.",
             bg=self.PANEL, fg=self.MUTED, justify="left",
             font=("Segoe UI", 8),
-        ).pack(anchor="w", padx=16, pady=(5, 0))
+        ).pack(anchor="w", padx=16, pady=(5, 14))
 
         # Main workspace: status cover and execution console are separate views.
         workspace = tk.Frame(body, bg=self.BG)
@@ -22309,19 +22472,21 @@ class SerenumApp:
         self.hero_console_button = self._make_button(action_row, "▤   VIEW CONSOLE", self.show_console, self.CYAN)
         self.hero_console_button.pack(side="left", padx=(0, 8))
 
-        # Console view is hidden initially. It is shown on request and returns
-        # to the cover automatically after ten seconds.
+        # Console view is hidden initially. The header's BACK TO HOME button
+        # returns directly to the Serenum cover in this same window.
         self.console_view = tk.Frame(workspace, bg=self.PANEL, highlightthickness=1, highlightbackground=self.BORDER)
         self.console_view.place(relx=0, rely=0, relwidth=1, relheight=1)
         console_header = tk.Frame(self.console_view, bg=self.PANEL_ALT)
         console_header.pack(fill="x")
         tk.Label(console_header, text="LIVE EXECUTION CONSOLE", bg=self.PANEL_ALT, fg=self.CYAN,
                  font=("Consolas", 10, "bold")).pack(side="left", padx=15, pady=13)
-        self.console_countdown_label = tk.Label(
-            console_header, text="Returning to status view in 10s", bg=self.PANEL_ALT,
-            fg=self.MUTED, font=("Consolas", 8),
+        self.console_home_button = tk.Button(
+            console_header, text="←  BACK TO HOME", command=self.show_status_view,
+            bg="#12364B", fg=self.CYAN, activebackground="#1C526B",
+            activeforeground=self.TEXT, relief="flat", bd=0,
+            padx=20, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2",
         )
-        self.console_countdown_label.pack(side="right", padx=15)
+        self.console_home_button.pack(side="right", padx=12, pady=7)
 
         log_wrap = tk.Frame(self.console_view, bg=self.PANEL)
         log_wrap.pack(fill="both", expand=True, padx=12, pady=12)
@@ -22330,9 +22495,10 @@ class SerenumApp:
             selectbackground="#1A4861", relief="flat", wrap="word",
             font=("Consolas", 9), padx=13, pady=12, state="disabled",
         )
-        scrollbar = tk.Scrollbar(log_wrap, command=self.log_text.yview,
-                                 bg=self.PANEL, troughcolor=self.PANEL_ALT,
-                                 activebackground=self.CYAN, relief="flat")
+        scrollbar = ttk.Scrollbar(
+            log_wrap, orient="vertical", command=self.log_text.yview,
+            style="Vertical.TScrollbar",
+        )
         self.log_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         self.log_text.pack(side="left", fill="both", expand=True)
@@ -22350,12 +22516,83 @@ class SerenumApp:
             relief="flat", bd=0, padx=18, pady=10,
             font=("Segoe UI", 9, "bold"), cursor="hand2",
         ).pack(side="left", padx=12, pady=9)
-        tk.Button(
-            console_footer, text="←  EXIT CONSOLE", command=self.show_status_view,
-            bg="#202C3E", fg=self.TEXT, activebackground="#2B3B52",
-            relief="flat", bd=0, padx=18, pady=10,
-            font=("Segoe UI", 9, "bold"), cursor="hand2",
-        ).pack(side="right", padx=12, pady=9)
+
+
+        # Author configuration is displayed in this same Serenum workspace.
+        # No Toplevel or separate editor window is created.
+        self.config_view = tk.Frame(
+            workspace, bg=self.PANEL,
+            highlightthickness=1, highlightbackground=self.BORDER,
+        )
+        self.config_view.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        config_header = tk.Frame(self.config_view, bg=self.PANEL_ALT)
+        config_header.pack(fill="x")
+        tk.Label(
+            config_header, text="AUTHOR CONFIGURATION  /  JSON CONSOLE",
+            bg=self.PANEL_ALT, fg=self.CYAN,
+            font=("Consolas", 10, "bold"),
+        ).pack(side="left", padx=16, pady=14)
+        self.config_home_button = tk.Button(
+            config_header, text="←  BACK TO HOME", command=self.exit_author_configuration,
+            bg="#12364B", fg=self.CYAN, activebackground="#1C526B",
+            activeforeground=self.TEXT, relief="flat", bd=0,
+            padx=20, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2",
+        )
+        self.config_home_button.pack(side="right", padx=12, pady=7)
+        tk.Label(
+            self.config_view,
+            text="Edit the author configuration below. SAVE CONFIGURATION writes the JSON file. Use BACK TO HOME at the top-right to return to the Serenum cover.",
+            bg=self.PANEL, fg=self.MUTED, font=("Segoe UI", 9),
+            anchor="w", justify="left", wraplength=900,
+        ).pack(fill="x", padx=18, pady=(13, 10))
+
+        config_text_frame = tk.Frame(
+            self.config_view, bg=self.PANEL,
+            highlightthickness=1, highlightbackground=self.BORDER,
+        )
+        config_text_frame.pack(fill="both", expand=True, padx=14, pady=(0, 9))
+        config_text_frame.grid_rowconfigure(0, weight=1)
+        config_text_frame.grid_columnconfigure(0, weight=1)
+        self.author_json_text = tk.Text(
+            config_text_frame, bg="#070C15", fg="#D8E6FA",
+            insertbackground=self.CYAN, selectbackground="#1A4861",
+            relief="flat", wrap="none", undo=True,
+            font=("Consolas", 10), padx=14, pady=12,
+        )
+        config_y_scroll = ttk.Scrollbar(
+            config_text_frame, command=self.author_json_text.yview,
+            orient="vertical", style="Vertical.TScrollbar",
+        )
+        config_x_scroll = ttk.Scrollbar(
+            config_text_frame, command=self.author_json_text.xview,
+            orient="horizontal", style="Horizontal.TScrollbar",
+        )
+        self.author_json_text.configure(
+            yscrollcommand=config_y_scroll.set,
+            xscrollcommand=config_x_scroll.set,
+        )
+        self.author_json_text.grid(row=0, column=0, sticky="nsew")
+        config_y_scroll.grid(row=0, column=1, sticky="ns")
+        config_x_scroll.grid(row=1, column=0, sticky="ew")
+
+        self.config_feedback = tk.Label(
+            self.config_view,
+            text="Changes are not saved until SAVE CONFIGURATION is clicked.",
+            bg=self.PANEL, fg=self.MUTED, font=("Segoe UI", 8),
+            anchor="w", justify="left",
+        )
+        self.config_feedback.pack(fill="x", padx=18, pady=(0, 8))
+
+        config_footer = tk.Frame(self.config_view, bg=self.PANEL_ALT)
+        config_footer.pack(fill="x", side="bottom")
+        self.config_save_button = self._make_button(
+            config_footer, "SAVE CONFIGURATION", self.save_author_configuration, self.GREEN,
+        )
+        self.config_save_button.pack(side="left", padx=12, pady=10)
+
+
+        self.author_json_text.bind("<Control-s>", lambda _event: self.save_author_configuration())
 
         footer = tk.Frame(outer, bg=self.BG)
         footer.pack(fill="x", pady=(10, 0))
@@ -22507,27 +22744,19 @@ class SerenumApp:
     def show_status_view(self):
         self._cancel_console_timer()
         self.console_view_active = False
+        self.config_view_active = False
         if hasattr(self, "status_view"):
             self.status_view.tkraise()
 
     def show_console(self):
+        """Show the live console and keep it open until Back to Cover is clicked."""
         if not hasattr(self, "console_view"):
             return
         self._cancel_console_timer()
         self.console_view_active = True
-        self.console_view.tkraise()
-        self._console_deadline = time.monotonic() + 10.0
-        self._update_console_countdown()
+        self.config_view_active = False
 
-    def _update_console_countdown(self):
-        if self._closing or not self.console_view_active:
-            return
-        remaining = max(0, int(self._console_deadline - time.monotonic() + 0.999))
-        self.console_countdown_label.configure(text=f"Returning to status view in {remaining}s")
-        if remaining <= 0:
-            self.show_status_view()
-            return
-        self._console_timer_id = self.root.after(250, self._update_console_countdown)
+        self.console_view.tkraise()
 
     def _cancel_console_timer(self):
         if self._console_timer_id is not None:
@@ -22682,215 +22911,54 @@ class SerenumApp:
         raise ValueError("The configuration JSON must be an object or a non-empty list of objects.")
 
     def show_config_choice(self):
-        """Show the author configuration chooser without starting the engine."""
+        """Backward-compatible entry point; now opens the in-window JSON editor."""
+        self.show_author_configuration()
+
+    def show_author_configuration(self):
+        """Display the saved author JSON inside the existing Serenum window."""
         if self.running:
             return
-        existing_ok = False
-        if not os.path.isfile(AUTHOR_PATH):
-            existing_note = "No saved author configuration is available. Choose ENTER NEW DATA."
-        else:
-            try:
-                self._read_author_config()
-                existing_ok = True
-                existing_note = "Saved author data is available. Select it, then press START OPERATION."
-            except Exception as exc:
-                self.log(f"Existing author configuration is unavailable: {type(exc).__name__}: {exc}", "WARNING")
-                existing_note = "Saved author data could not be validated. Choose ENTER NEW DATA to replace it."
+        self._cancel_console_timer()
+        self.console_view_active = False
+        self.config_view_active = True
 
-        win = tk.Toplevel(self.root)
-        win.title("Serenum — Author Configuration")
-        win.configure(bg=self.BG)
-        win.resizable(False, False)
-        win.transient(self.root)
-        win.grab_set()
-        win.geometry("620x365")
-        self._center_child(win, 620, 365)
-
-        tk.Label(
-            win, text="AUTHOR CONFIGURATION REQUIRED", bg=self.BG, fg=self.CYAN,
-            font=("Segoe UI", 18, "bold"),
-        ).pack(anchor="w", padx=28, pady=(25, 5))
-        tk.Label(
-            win,
-            text="Choose how you want to provide the author data. Serenum will wait until you press START OPERATION.",
-            bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9), wraplength=555, justify="left",
-        ).pack(anchor="w", padx=28, pady=(0, 16))
-
-        existing_button = tk.Button(
-            win, text="USE EXISTING DATA", command=lambda: self._choose_existing(win),
-            state="normal" if existing_ok else "disabled",
-            bg="#153A3B", fg=self.GREEN, activebackground="#1C5554",
-            disabledforeground="#53647A", relief="flat", bd=0,
-            font=("Segoe UI", 10, "bold"), pady=13, cursor="hand2",
-        )
-        existing_button.pack(fill="x", padx=28, pady=5)
-        tk.Button(
-            win, text="ENTER NEW DATA", command=lambda: self._open_author_editor(win),
-            bg="#172E49", fg=self.CYAN, activebackground="#214767",
-            relief="flat", bd=0, font=("Segoe UI", 10, "bold"),
-            pady=13, cursor="hand2",
-        ).pack(fill="x", padx=28, pady=5)
-        tk.Label(
-            win, text=existing_note, bg=self.BG,
-            fg=self.AMBER if not existing_ok else self.MUTED,
-            font=("Segoe UI", 8), wraplength=550, justify="left",
-        ).pack(anchor="w", padx=28, pady=(12, 0))
-        win.protocol("WM_DELETE_WINDOW", lambda: self._close_choice(win))
-
-    def _center_child(self, win, width, height):
-        self.root.update_idletasks()
-        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - width) // 2)
-        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - height) // 2)
-        win.geometry(f"{width}x{height}+{x}+{y}")
-
-    def _close_choice(self, win):
+        read_error = None
         try:
-            win.grab_release()
-        except Exception:
-            pass
-        win.destroy()
-
-    def _choose_existing(self, win):
-        """Select existing author data and wait for the explicit Start command."""
-        try:
-            self._read_author_config()
+            if os.path.isfile(AUTHOR_PATH):
+                with open(AUTHOR_PATH, "r", encoding="utf-8") as handle:
+                    initial = handle.read()
+                if not initial.strip():
+                    initial = "{}"
+            else:
+                initial = "{}"
         except Exception as exc:
-            self.log(f"Could not select existing author data: {type(exc).__name__}: {exc}", "ERROR")
-            from tkinter import messagebox
-            messagebox.showerror(
-                "Author data unavailable",
-                "The saved author configuration could not be opened or validated. Open VIEW CONSOLE for technical details, or choose ENTER NEW DATA.",
-                parent=win,
-            )
-            return
-        self._close_choice(win)
-        self._mark_configuration_ready("existing")
-        self.log("Selected existing author data. The saved configuration will be read without legacy analysis.", "SUCCESS")
-        self.log(f"Selected author configuration source: {AUTHOR_PATH}", "INFO")
+            initial = "{}"
+            read_error = exc
+            self.log(f"Could not read the author JSON for editing: {type(exc).__name__}: {exc}", "WARNING")
 
-    def _mark_configuration_ready(self, mode):
-        """Enable Start after configuration selection; never launch automation here."""
-        self.selected_mode = mode
-        mode_label = "EXISTING DATA" if mode == "existing" else "NEW DATA"
-        self.mode_value.configure(text=f"CONFIGURATION: {mode_label}", fg=self.GREEN)
-        self.start_button.configure(state="normal", text="▶   START OPERATION")
-        self.set_status("CONFIGURATION READY — PRESS START", self.GREEN)
-        self._set_visual_state(
-            "ready", "READY TO START",
-            "Your author configuration is ready. Press START OPERATION whenever you want Serenum to begin.",
-            self.GREEN,
-            detail="Configuration selected • Operation has not started.",
-        )
+        self.author_json_text.delete("1.0", "end")
+        self.author_json_text.insert("1.0", initial)
+        if read_error is not None:
+            self.config_feedback.configure(
+                text=f"Could not read the existing file: {type(read_error).__name__}: {read_error}",
+                fg=self.AMBER,
+            )
+        else:
+            self.config_feedback.configure(
+                text="Edit the JSON and click SAVE CONFIGURATION. Use BACK TO HOME at the top-right to return to the Serenum cover.",
+                fg=self.MUTED,
+            )
+        self.config_view.tkraise()
+        self.author_json_text.focus_set()
+
+    def exit_author_configuration(self):
+        """Return from the JSON editor to the Serenum cover without another window."""
+        self.config_view_active = False
         self.show_status_view()
 
-    def _open_author_editor(self, choice_window):
-        """Open a modal JSON editor with a permanently visible save footer."""
-        self._close_choice(choice_window)
-        editor = tk.Toplevel(self.root)
-        editor.title("Serenum — Save New Configuration")
-        editor.configure(bg=self.BG)
-        editor.geometry("900x650")
-        editor.minsize(760, 480)
-        editor.transient(self.root)
-        editor.grab_set()
-        self._center_child(editor, 900, 650)
-
-        # Grid keeps the action bar outside the expandable editor area, so the
-        # SAVE & PROCEED button cannot be pushed below the visible window.
-        editor.grid_rowconfigure(3, weight=1)
-        editor.grid_columnconfigure(0, weight=1)
-
-        tk.Label(
-            editor, text="AUTHOR CONFIGURATION", bg=self.BG, fg=self.CYAN,
-            font=("Segoe UI", 18, "bold"),
-        ).grid(row=0, column=0, sticky="w", padx=22, pady=(17, 3))
-
-        tk.Label(
-            editor,
-            text="Paste or edit the complete JSON configuration. Save it here, then return to the main screen and press START OPERATION. Saving does not start Serenum.",
-            bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9),
-            wraplength=840, justify="left",
-        ).grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 9))
-
-        tk.Label(
-            editor, text="AUTHOR DATA  •  JSON CONFIGURATION", bg=self.PANEL_ALT,
-            fg="#B9CBE2", font=("Consolas", 8), anchor="w", padx=10, pady=8,
-            wraplength=840, justify="left",
-        ).grid(row=2, column=0, sticky="ew", padx=22, pady=(0, 9))
-
-        text_frame = tk.Frame(
-            editor, bg=self.PANEL, highlightthickness=1,
-            highlightbackground=self.BORDER,
-        )
-        text_frame.grid(row=3, column=0, sticky="nsew", padx=22, pady=(0, 10))
-        text_frame.grid_rowconfigure(0, weight=1)
-        text_frame.grid_columnconfigure(0, weight=1)
-
-        editor_text = tk.Text(
-            text_frame, bg="#070C15", fg="#D8E6FA",
-            insertbackground=self.CYAN, selectbackground="#1A4861",
-            relief="flat", wrap="none", undo=True,
-            font=("Consolas", 10), padx=14, pady=12,
-        )
-        yscroll = tk.Scrollbar(text_frame, command=editor_text.yview)
-        xscroll = tk.Scrollbar(text_frame, command=editor_text.xview, orient="horizontal")
-        editor_text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        editor_text.grid(row=0, column=0, sticky="nsew")
-        yscroll.grid(row=0, column=1, sticky="ns")
-        xscroll.grid(row=1, column=0, sticky="ew")
-
-        # Load the current file as an editable starting point. Saving remains
-        # an explicit user action; merely opening this window never writes JSON.
-        initial = "{}"
-        try:
-            with open(AUTHOR_PATH, "r", encoding="utf-8") as handle:
-                candidate = handle.read()
-            json.loads(candidate)
-            initial = candidate
-        except Exception:
-            pass
-        editor_text.insert("1.0", initial)
-
-        button_row = tk.Frame(editor, bg=self.BG)
-        button_row.grid(row=4, column=0, sticky="ew", padx=22, pady=(0, 15))
-
-        tk.Button(
-            button_row, text="CANCEL", command=lambda: self._cancel_author_editor(editor),
-            bg="#202C3E", fg=self.MUTED, activebackground="#2B3B52",
-            relief="flat", bd=0, padx=22, pady=11,
-            font=("Segoe UI", 9, "bold"), cursor="hand2",
-        ).pack(side="left")
-
-        save_button = tk.Button(
-            button_row, text="SAVE CONFIGURATION", 
-            command=lambda: self._save_and_start(editor, editor_text),
-            bg="#124B4A", fg=self.GREEN, activebackground="#17615E",
-            activeforeground="#FFFFFF", relief="flat", bd=0,
-            padx=30, pady=12, font=("Segoe UI", 10, "bold"),
-            cursor="hand2", takefocus=True,
-        )
-        save_button.pack(side="right")
-        editor.bind("<Control-s>", lambda _event: self._save_and_start(editor, editor_text))
-        editor.protocol("WM_DELETE_WINDOW", lambda: self._cancel_author_editor(editor))
-        editor_text.focus_set()
-        editor.lift()
-        editor.after(100, editor.focus_force)
-
-    def _cancel_author_editor(self, editor):
-        """Close the editor without saving or starting the engine."""
-        try:
-            editor.grab_release()
-        except Exception:
-            pass
-        try:
-            editor.destroy()
-        except Exception:
-            pass
-
-    def _save_and_start(self, editor, editor_text):
-        """Validate and save new author data, then return to the cover without running."""
-        from tkinter import messagebox
-        raw = editor_text.get("1.0", "end-1c").strip()
+    def save_author_configuration(self):
+        """Validate and atomically save the JSON without closing the editor."""
+        raw = self.author_json_text.get("1.0", "end-1c").strip()
         try:
             data = json.loads(raw)
             self._validate_config_shape(data)
@@ -22904,34 +22972,35 @@ class SerenumApp:
             os.replace(temp_path, AUTHOR_PATH)
             self._read_author_config()
         except json.JSONDecodeError as exc:
-            self.log(f"New author JSON is invalid at line {exc.lineno}, column {exc.colno}: {exc.msg}", "ERROR")
-            messagebox.showerror(
-                "Invalid JSON",
-                f"The configuration contains invalid JSON at line {exc.lineno}, column {exc.colno}. Correct the syntax and try saving again.",
-                parent=editor,
-            )
+            message = f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+            self.config_feedback.configure(text=message, fg=self.RED)
+            self.log(message, "ERROR")
             return
         except Exception as exc:
-            self.log(f"Could not save new author configuration: {type(exc).__name__}: {exc}", "ERROR")
-            messagebox.showerror(
-                "Configuration not saved",
-                "The author configuration could not be saved or validated. Open VIEW CONSOLE for technical details, correct the issue, and try again.",
-                parent=editor,
-            )
+            message = f"Configuration was not saved: {type(exc).__name__}: {exc}"
+            self.config_feedback.configure(text=message, fg=self.RED)
+            self.log(message, "ERROR")
             return
 
-        try:
-            editor.grab_release()
-        except Exception:
-            pass
-        try:
-            editor.destroy()
-        except Exception:
-            pass
+        self._mark_configuration_ready("configured")
+        self.config_feedback.configure(
+            text="Configuration saved and validated successfully. Use BACK TO HOME at the top-right to return to the Serenum cover.",
+            fg=self.GREEN,
+        )
+        self.log(f"Author configuration saved and validated: {AUTHOR_PATH}", "SUCCESS")
 
-        self._mark_configuration_ready("new")
-        self.log("New author configuration saved and validated. Press START OPERATION when ready.", "SUCCESS")
-        self.log(f"New author configuration saved to: {AUTHOR_PATH}", "INFO")
+    def _mark_configuration_ready(self, mode="existing"):
+        """Enable Start after a valid author JSON is available; never start it here."""
+        self.selected_mode = "existing" if mode == "existing" else "configured"
+        self.mode_value.configure(text="CONFIGURATION: READY", fg=self.GREEN)
+        self.start_button.configure(state="normal", text="▶   START OPERATION")
+        self.set_status("CONFIGURATION READY — PRESS START", self.GREEN)
+        self._set_visual_state(
+            "ready", "READY TO START",
+            "Your author configuration is valid. Press START OPERATION whenever you want Serenum to begin.",
+            self.GREEN,
+            detail="Configuration validated • Operation has not started.",
+        )
 
     def _worker_python_executable(self):
         """Use python.exe for the hidden worker even when the GUI uses pythonw.exe."""
@@ -22943,10 +23012,10 @@ class SerenumApp:
         return executable
 
     def start_selected_operation(self):
-        """Start only after the user has selected or saved author configuration."""
+        """Start only when a valid author JSON is available."""
         if not self.selected_mode:
             self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
-            self.show_config_choice()
+            self.show_author_configuration()
             return
         try:
             self._read_author_config()
@@ -22956,13 +23025,11 @@ class SerenumApp:
             self.start_button.configure(state="disabled")
             self.mode_value.configure(text="AUTHOR CONFIGURATION REQUIRED", fg=self.AMBER)
             self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
-            from tkinter import messagebox
-            messagebox.showerror(
-                "Author configuration required",
-                "The selected author data is no longer available or is invalid. Please select existing data again or enter new data.",
-                parent=self.root,
+            self.show_author_configuration()
+            self.config_feedback.configure(
+                text=f"The author configuration needs correction: {type(exc).__name__}: {exc}",
+                fg=self.RED,
             )
-            self.show_config_choice()
             return
         self.start_engine(self.selected_mode)
 
@@ -22972,7 +23039,7 @@ class SerenumApp:
             return
         if not self.selected_mode:
             self.set_status("AUTHOR CONFIGURATION REQUIRED", self.CYAN)
-            self.show_config_choice()
+            self.show_author_configuration()
             return
         # The mode must already have been selected or saved by the user.
         # This prevents configuration selection from starting the engine implicitly.

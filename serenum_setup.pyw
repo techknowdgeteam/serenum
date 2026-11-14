@@ -43,6 +43,102 @@ else:
 SETUP_SCRIPT_NAME = "serenum_setup.pyw"
 LAUNCHER_NAME = "Start_Serenum.vbs"
 
+_SOURCE_SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "env", "node_modules", "site-packages"}
+
+
+def _get_downloads_folder() -> Path:
+    """Resolve the user's Windows Downloads folder, including redirected folders."""
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            value, _kind = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")
+            candidate = Path(os.path.expandvars(value)).expanduser()
+            if candidate.is_dir():
+                return candidate
+    except Exception:
+        pass
+    profile = Path(os.environ.get("USERPROFILE", str(Path.home())))
+    for candidate in (profile / "Downloads", Path.home() / "Downloads"):
+        if candidate.is_dir():
+            return candidate
+    return profile / "Downloads"
+
+
+def _valid_serenum_script(path: Path) -> tuple[bool, str]:
+    try:
+        if not path.is_file() or path.name.casefold() != "serenum.py":
+            return False, "serenum.py is missing"
+        source = path.read_text(encoding="utf-8-sig")
+        tree = ast.parse(source, filename=str(path))
+        names = {
+            node.name for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        }
+        missing = sorted({"execute_engine", "SerenumApp"} - names)
+        if missing:
+            return False, "serenum.py is incomplete: " + ", ".join(missing)
+        if len(source) < 100_000:
+            return False, "serenum.py is unexpectedly small"
+        compile(source, str(path), "exec")
+        return True, "Valid Serenum application script"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _download_stamp(script: Path) -> tuple[int, int, int]:
+    folder_stat = script.parent.stat()
+    file_stat = script.stat()
+    folder_created = int(getattr(folder_stat, "st_birthtime", folder_stat.st_ctime) * 1_000_000_000)
+    file_created = int(getattr(file_stat, "st_birthtime", file_stat.st_ctime) * 1_000_000_000)
+    return (max(folder_created, file_created), int(file_stat.st_mtime_ns), int(file_stat.st_size))
+
+
+def _find_latest_extracted_serenum_script(progress=None) -> tuple[Path | None, int]:
+    """Find the newest valid serenum.py in a folder whose own name contains Serenum.
+
+    ZIP files are never opened or treated as folders. A candidate must be an
+    extracted directory with serenum.py directly inside it.
+    """
+    downloads = _get_downloads_folder()
+    if not downloads.is_dir():
+        return None, 0
+    matches: list[Path] = []
+    scanned = 0
+    try:
+        installed_script = (INSTALL_DIR / "serenum.py").resolve()
+    except Exception:
+        installed_script = None
+    for root, dirs, files in os.walk(downloads, topdown=True):
+        dirs[:] = [
+            name for name in dirs
+            if name.casefold() not in _SOURCE_SKIP_DIRS
+            and not name.startswith(".")
+            and not name.casefold().endswith(".zip")
+        ]
+        scanned += 1
+        if progress and scanned % 25 == 0:
+            progress(scanned)
+        folder = Path(root)
+        if "serenum" not in folder.name.casefold():
+            continue
+        for filename in files:
+            if filename.casefold() != "serenum.py":
+                continue
+            candidate = folder / filename
+            try:
+                if installed_script is not None and candidate.resolve() == installed_script:
+                    continue
+            except Exception:
+                pass
+            valid, _reason = _valid_serenum_script(candidate)
+            if valid:
+                matches.append(candidate)
+    if not matches:
+        return None, scanned
+    matches.sort(key=_download_stamp, reverse=True)
+    return matches[0], scanned
+
 # Import name -> PyPI distribution name. All remaining imports in serenum.py
 # are Python standard-library modules and are verified but never installed.
 PACKAGE_MAP = {
@@ -1994,11 +2090,17 @@ class SerenumSetup:
         self.started = False
         self.completed = False
         self.failed = False
+        self.handed_off = False
+        self.runtime_app = None
+        self.runtime_module = None
         self.install_log: list[str] = []
         self.log_file = INSTALL_DIR / "serenum_setup.log"
         self.main_script = INSTALL_DIR / "serenum.py"
         self.python_console = self._python_console_executable()
         self._build_ui()
+        # Match the native Windows title bar to the installer's dark surface.
+        self.root.after(250, self._apply_dark_title_bar)
+        self.root.after(1000, self._apply_dark_title_bar)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self._poll_events)
         self.root.after(350, self.start_setup)
@@ -2010,6 +2112,52 @@ class SerenumSetup:
             if sibling.is_file():
                 return str(sibling)
         return str(exe)
+
+    def _apply_dark_title_bar(self):
+        """Match the native Windows caption to this setup window's dark surface."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            self.root.update_idletasks()
+            raw_hwnd = wintypes.HWND(self.root.winfo_id())
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetAncestor.restype = wintypes.HWND
+            hwnd = user32.GetAncestor(raw_hwnd, 2) or raw_hwnd
+
+            dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+            set_attribute = dwm.DwmSetWindowAttribute
+            set_attribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+            set_attribute.restype = ctypes.c_long
+
+            def colorref(value):
+                value = value.lstrip("#")
+                red, green, blue = (int(value[index:index + 2], 16) for index in (0, 2, 4))
+                return red | (green << 8) | (blue << 16)
+
+            def apply(attribute, value):
+                data = ctypes.c_int(int(value))
+                return set_attribute(hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data))
+
+            dark_result = apply(20, 1)
+            if dark_result != 0:
+                apply(19, 1)
+            for attribute, value in (
+                (35, colorref(self.BG)),
+                (36, colorref(self.TEXT)),
+                (34, colorref(self.BG)),
+            ):
+                data = ctypes.c_uint(value)
+                try:
+                    set_attribute(hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data))
+                except Exception:
+                    pass
+        except Exception:
+            # Native decoration styling is best-effort and never blocks setup.
+            return
 
     def _build_ui(self):
         self.root.title("Serenum • First-Run Setup")
@@ -2023,6 +2171,28 @@ class SerenumSetup:
             style.theme_use("clam")
         except Exception:
             pass
+
+        # Keep any vertical or horizontal ttk scrollbar in the installer's
+        # technical palette rather than the Windows white default.
+        for scrollbar_style in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.configure(
+                scrollbar_style,
+                background="#1B3D59",
+                troughcolor=self.BG,
+                bordercolor=self.BG,
+                lightcolor="#1B3D59",
+                darkcolor="#1B3D59",
+                arrowcolor=self.CYAN,
+                arrowsize=12,
+                relief="flat",
+            )
+            style.map(
+                scrollbar_style,
+                background=[("pressed", "#23617D"), ("active", self.CYAN)],
+                arrowcolor=[("pressed", self.BG), ("active", self.BG)],
+                bordercolor=[("active", self.BORDER)],
+            )
+
         style.configure(
             "Serenum.Green.Horizontal.TProgressbar",
             troughcolor="#173049", background=self.GREEN,
@@ -2179,54 +2349,115 @@ class SerenumSetup:
         return code, captured
 
     def _install_layout(self):
-        """Safely replace application files, preserve user data, and prepare the cover."""
+        """Copy the complete newest extracted Serenum folder, then prepare required folders."""
+        global SOURCE_DIR, SOURCE_SCRIPT
+
+        # A normal install/repair discovers the newest extracted Serenum folder in
+        # Downloads. An updater launch passes the already-selected serenum.py via
+        # SERENUM_SOURCE_SCRIPT and must keep that exact source folder.
+        if not _SOURCE_OVERRIDE:
+            latest_script, scanned = _find_latest_extracted_serenum_script()
+            if latest_script is not None:
+                SOURCE_SCRIPT = latest_script
+                SOURCE_DIR = latest_script.parent
+                self._write_log(
+                    f"Selected newest extracted Serenum folder: {SOURCE_DIR} "
+                    f"(searched {scanned} directories)."
+                )
+            else:
+                self._write_log(
+                    "No newer extracted Serenum folder was found in Downloads; "
+                    f"using the folder containing this setup program: {SOURCE_DIR}."
+                )
+        else:
+            self._write_log(f"Using the updater-selected extracted folder: {SOURCE_DIR}.")
+
         destination_script = INSTALL_DIR / "serenum.py"
-        if not SOURCE_SCRIPT.is_file() and not destination_script.is_file():
+        if SOURCE_SCRIPT.is_file():
+            valid, reason = _valid_serenum_script(SOURCE_SCRIPT)
+            if not valid:
+                raise SetupFailure(f"The selected Serenum application file is invalid: {reason}")
+        elif not destination_script.is_file():
             raise SetupFailure(
-                "No valid Serenum application script was found. Extract the installer package or place an updated serenum.py in Downloads, then retry."
+                "No valid Serenum application script was found. Extract the complete Serenum folder into Downloads and run Install_Serenum.vbs again."
             )
 
         INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+
+        source_root = SOURCE_DIR.resolve()
+        install_root = INSTALL_DIR.resolve()
+        same_folder = os.path.normcase(str(source_root)) == os.path.normcase(str(install_root))
+        copied_files = 0
+        skipped_caches = 0
+
+        if not same_folder:
+            # Keep a rollback copy of the installed main script before replacing it.
+            if SOURCE_SCRIPT.is_file() and destination_script.is_file():
+                try:
+                    same_script = SOURCE_SCRIPT.resolve() == destination_script.resolve()
+                except Exception:
+                    same_script = False
+                if not same_script:
+                    backup_dir = INSTALL_DIR / "_update_backups"
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+                    stamp = time.strftime("%Y%m%d_%H%M%S")
+                    backup_path = backup_dir / f"serenum_{stamp}.py"
+                    shutil.copy2(destination_script, backup_path)
+                    self._write_log(f"Previous main script backed up as {backup_path.name}.")
+
+            for current_root, dirs, files in os.walk(source_root, topdown=True):
+                # Python caches and source-control metadata are not application files.
+                removed = [name for name in dirs if name.casefold() in {"__pycache__", ".git"}]
+                skipped_caches += len(removed)
+                dirs[:] = [name for name in dirs if name.casefold() not in {"__pycache__", ".git"}]
+
+                current_dir = Path(current_root)
+                relative_dir = current_dir.relative_to(source_root)
+                destination_dir = install_root / relative_dir
+                destination_dir.mkdir(parents=True, exist_ok=True)
+                for dirname in dirs:
+                    (destination_dir / dirname).mkdir(parents=True, exist_ok=True)
+
+                for filename in files:
+                    source_file = current_dir / filename
+                    relative_file = source_file.relative_to(source_root)
+                    target_file = install_root / relative_file
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        if source_file.resolve() == target_file.resolve():
+                            continue
+                    except Exception:
+                        pass
+
+                    if source_file.resolve() == SOURCE_SCRIPT.resolve():
+                        # Stage and compile serenum.py before atomically replacing it.
+                        staged_script = target_file.with_name("serenum.py.installing")
+                        shutil.copy2(source_file, staged_script)
+                        compile(staged_script.read_text(encoding="utf-8-sig"), str(staged_script), "exec")
+                        os.replace(staged_script, target_file)
+                    else:
+                        shutil.copy2(source_file, target_file)
+                    copied_files += 1
+
+            self._write_log(
+                f"Copied {copied_files} files and subfolder contents from the selected "
+                f"Serenum folder to {INSTALL_DIR}."
+            )
+            if skipped_caches:
+                self._write_log(f"Skipped {skipped_caches} Python cache/source-control folders.")
+        else:
+            self._write_log("Source folder is already the installation folder; no duplicate copy was needed.")
+
+        if not destination_script.is_file():
+            raise SetupFailure("The complete source-folder copy did not produce serenum.py in the installation folder.")
+        try:
+            compile(destination_script.read_text(encoding="utf-8-sig"), str(destination_script), "exec")
+        except Exception as exc:
+            raise SetupFailure(f"The installed serenum.py failed its final syntax check: {type(exc).__name__}: {exc}") from exc
+
         for folder in REQUIRED_DIRECTORIES:
             folder.mkdir(parents=True, exist_ok=True)
-
-        # Replace the old application script atomically. Keep a dated rollback copy
-        # rather than deleting the previous installation or any user data.
-        if SOURCE_SCRIPT.is_file() and os.path.normcase(str(SOURCE_SCRIPT)) != os.path.normcase(str(destination_script)):
-            source_text = SOURCE_SCRIPT.read_text(encoding="utf-8")
-            compile(source_text, str(SOURCE_SCRIPT), "exec")
-            if destination_script.is_file():
-                backup_dir = INSTALL_DIR / "_update_backups"
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                stamp = time.strftime("%Y%m%d_%H%M%S")
-                backup_path = backup_dir / f"serenum_{stamp}.py"
-                shutil.copy2(destination_script, backup_path)
-                self._write_log(f"Previous application version backed up as {backup_path.name}.")
-            staged_script = destination_script.with_name("serenum.py.installing")
-            shutil.copy2(SOURCE_SCRIPT, staged_script)
-            # Re-validate the exact staged bytes before replacing the installed app.
-            compile(staged_script.read_text(encoding="utf-8"), str(staged_script), "exec")
-            os.replace(staged_script, destination_script)
-            self._write_log("Latest Serenum application script installed successfully.")
-
-        # Refresh the desktop application/updater components when the source package
-        # includes them. A script-only update leaves these installed support files intact.
-        support_files = (
-            "serenum_setup.pyw",
-            "serenum_updater.pyw",
-            "Start_Serenum.vbs",
-            "Update_Serenum.vbs",
-            "Install_Serenum.vbs",
-            "requirements-serenum.txt",
-            "README_Serenum_Desktop_Installer.txt",
-            "Serenum.ico",
-        )
-        for file_name in support_files:
-            source = SOURCE_DIR / file_name
-            target = INSTALL_DIR / file_name
-            if source.is_file() and os.path.normcase(str(source)) != os.path.normcase(str(target)):
-                self._copy_file(source, target)
-                self._write_log(f"Application component refreshed: {file_name}")
+        self._write_log(f"Verified installed application script: {destination_script}")
 
         # Copy available cover art into the app folder so subsequent repairs can use it.
         for file_name in COVER_SOURCE_NAMES:
@@ -2663,7 +2894,7 @@ class SerenumSetup:
         self.thread.start()
 
     def _poll_events(self):
-        if not self.root.winfo_exists():
+        if self.handed_off or not self.root.winfo_exists():
             return
         try:
             while True:
@@ -2704,31 +2935,23 @@ class SerenumSetup:
         self.log_box.configure(state="disabled")
 
     def _show_complete(self, message: str):
+        """Finish setup silently, then turn this exact window into Serenum."""
         self.completed = True
         self.progress.configure(value=100)
         self.percent_label.configure(text="100%")
-        self.status_label.configure(text="SETUP COMPLETE", fg=self.GREEN)
+        self.status_label.configure(text="ENVIRONMENT VERIFIED", fg=self.GREEN)
         self.heading.configure(text="Serenum is ready")
-        self.subheading.configure(text=message + " Opening the main control center shortly.")
-        self._append_log("SUCCESS — Environment confirmed. Desktop and Start Menu shortcuts have been verified.")
-        details = getattr(self, "shortcut_summary", "Serenum shortcuts have been created.")
-        self.subheading.configure(text=message + "\n\n" + details + "\n\nOpening the main control center shortly.")
-        try:
-            messagebox.showinfo(
-                "Serenum installation complete",
-                "Serenum has been installed successfully.\n\n"
-                "You can now find it on your Desktop as 'Serenum' or in Windows Search / Start Menu.\n"
-                "The updater is available as 'Update Serenum'.\n\n"
-                "The main Serenum window will open automatically.",
-                parent=self.root,
-            )
-        except Exception:
-            pass
-        self.action_button.configure(
-            text="OPEN SERENUM NOW", command=self.open_serenum,
-            bg="#0B704A", fg="#FFFFFF", state="normal",
+        self.subheading.configure(
+            text="Environment verified. Opening the Serenum control center in this same window."
         )
-        self.root.after(700, self.open_serenum)
+        self._append_log("SUCCESS — Environment confirmed. Desktop and Start Menu shortcuts have been verified.")
+        self.action_button.configure(
+            text="OPENING SERENUM…", command=lambda: None,
+            bg="#0B704A", fg="#FFFFFF", state="disabled",
+        )
+        # No success modal and no second process: the existing Tk root is handed
+        # directly to Serenum after the final setup event has been rendered.
+        self.root.after(250, self.open_serenum)
 
     def _show_failure(self, payload: dict):
         self.failed = True
@@ -2767,32 +2990,54 @@ class SerenumSetup:
         self.start_setup()
 
     def open_serenum(self):
-        if not self.completed:
+        """Replace the setup widgets with Serenum inside the same Tk window."""
+        if not self.completed or self.handed_off:
             return
         try:
             app_path = INSTALL_DIR / "serenum.py"
             if not app_path.is_file():
                 raise FileNotFoundError("The main Serenum script is not installed.")
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
-            subprocess.Popen(
-                [sys.executable, "-X", "utf8", str(app_path)],
-                cwd=str(INSTALL_DIR),
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=CREATE_NO_WINDOW,
-                close_fds=True,
-            )
-            self.root.destroy()
+
+            # Import the installed app as a module, not as a new __main__ process.
+            # Its mainloop is therefore the already-running setup root's mainloop.
+            install_dir_text = str(INSTALL_DIR)
+            if install_dir_text not in sys.path:
+                sys.path.insert(0, install_dir_text)
+            os.chdir(INSTALL_DIR)
+            module_name = "_serenum_installed_runtime"
+            spec = importlib.util.spec_from_file_location(module_name, str(app_path))
+            if spec is None or spec.loader is None:
+                raise ImportError("Could not create a module loader for the installed Serenum script.")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+
+            app_class = getattr(module, "SerenumApp", None)
+            if app_class is None:
+                raise AttributeError("The installed Serenum script does not define SerenumApp.")
+
+            # The setup UI is no longer needed. Destroy only its child widgets;
+            # keep the root window itself alive and let Serenum populate it.
+            for widget in self.root.winfo_children():
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
+
+            self.runtime_module = module
+            self.runtime_app = app_class(self.root)
+            self.handed_off = True
         except Exception as exc:
             self.failed = True
-            messagebox.showerror(
-                "Could not open Serenum",
-                f"The environment check passed, but the main window could not be opened.\n\n{type(exc).__name__}: {exc}",
-                parent=self.root,
-            )
+            self._write_log(f"Could not open Serenum in the setup window: {type(exc).__name__}: {exc}")
+            try:
+                messagebox.showerror(
+                    "Could not open Serenum",
+                    f"The environment check passed, but the Serenum control center could not be loaded in this window.\n\n{type(exc).__name__}: {exc}",
+                    parent=self.root,
+                )
+            except Exception:
+                pass
 
     def copy_report(self):
         try:
