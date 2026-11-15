@@ -2816,8 +2816,8 @@ class SerenumSetup:
             self._write_log("Application folders and cover assets are ready.")
 
             version = sys.version_info
-            self._write_log(f"Python runtime detected: {version.major}.{version.minor}.{version.micro}")
-            if not (version.major == 3 and 10 <= version.minor <= 12):
+            self._write_log(f"Python runtime selected: {version.major}.{version.minor}.{version.micro} ({sys.executable})")
+            if not (version.major == 3 and version.minor in (10, 11, 12)):
                 raise SetupFailure(
                     f"This Serenum build requires Python 3.10, 3.11 or 3.12. The selected runtime is {version.major}.{version.minor}. "
                     "Install a supported Python version and launch Serenum again."
@@ -3059,9 +3059,139 @@ class SerenumSetup:
             pass
 
 
+def _supported_python_candidates():
+    """Return installed Python 3.12, 3.11, then 3.10 interpreters only."""
+    candidates = []
+    seen = set()
+
+    def add(path):
+        if not path:
+            return
+        try:
+            p = Path(str(path).strip().strip('"')).expanduser().resolve()
+            if p.is_file() and p.name.lower() in {"python.exe", "pythonw.exe"}:
+                key = os.path.normcase(str(p))
+                if key not in seen:
+                    seen.add(key)
+                    # Prefer console python.exe for verification/install commands.
+                    if p.name.lower() == "pythonw.exe":
+                        sibling = p.with_name("python.exe")
+                        if sibling.is_file():
+                            p = sibling
+                    candidates.append(p)
+        except Exception:
+            pass
+
+    # The Windows Python Launcher is the most reliable way to find versions
+    # installed outside the standard Program Files/LocalAppData directories.
+    py_launcher = shutil.which("py.exe") or shutil.which("py")
+    if py_launcher:
+        for version in ("3.12", "3.11", "3.10"):
+            try:
+                result = subprocess.run(
+                    [py_launcher, f"-{version}", "-c", "import sys; print(sys.executable)"],
+                    capture_output=True, text=True, timeout=8,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                if result.returncode == 0:
+                    add(result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "")
+            except Exception:
+                pass
+
+    local = Path(os.environ.get("LOCALAPPDATA", ""))
+    for version in ("312", "311", "310"):
+        add(Path(r"C:\Program Files") / f"Python{version}" / "python.exe")
+        add(local / "Programs" / "Python" / f"Python{version}" / "python.exe")
+
+    # Check PATH entries, but never trust the first python.exe blindly.
+    for name in ("python.exe", "python3.exe"):
+        found = shutil.which(name)
+        add(found)
+
+    return candidates
+
+
+def _find_supported_python():
+    """Validate candidates by executing them; PATH order cannot select 3.14."""
+    for candidate in _supported_python_candidates():
+        try:
+            result = subprocess.run(
+                [str(candidate), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+                capture_output=True, text=True, timeout=8,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            version = result.stdout.strip()
+            if result.returncode == 0 and version in {"3.12", "3.11", "3.10"}:
+                return candidate, version
+        except Exception:
+            continue
+    return None, None
+
+
+def _bootstrap_supported_runtime():
+    """Relaunch setup under Python 3.12/3.11/3.10 if the launcher chose another version."""
+    if sys.version_info.major == 3 and sys.version_info.minor in (10, 11, 12):
+        return True
+
+    # Prevent a relaunch loop if Windows cannot start the selected interpreter.
+    if os.environ.get("SERENUM_RUNTIME_RELAUNCHED") == "1":
+        return False
+
+    interpreter, version = _find_supported_python()
+    if interpreter is None:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Supported Python Required",
+            "Serenum currently requires Python 3.10, 3.11 or 3.12.\n\n"
+            "The current Python is " + sys.version.split()[0] + ", and no supported interpreter was found.\n\n"
+            "Install Python 3.12 (recommended), then run Serenum again. "
+            "You do not need to uninstall Python 3.14.",
+            parent=root,
+        )
+        root.destroy()
+        return False
+
+    # Use pythonw.exe for the GUI when available; otherwise use python.exe hidden.
+    gui_interpreter = interpreter.with_name("pythonw.exe")
+    if not gui_interpreter.is_file():
+        gui_interpreter = interpreter
+
+    env = os.environ.copy()
+    env["SERENUM_RUNTIME_RELAUNCHED"] = "1"
+    env["SERENUM_SELECTED_PYTHON"] = str(interpreter)
+    env["PYTHONIOENCODING"] = "utf-8"
+    setup_path = Path(__file__).resolve()
+    try:
+        subprocess.Popen(
+            [str(gui_interpreter), "-X", "utf8", str(setup_path)],
+            cwd=str(INSTALL_DIR if INSTALL_DIR.exists() else setup_path.parent),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            close_fds=True,
+        )
+        return False
+    except Exception as exc:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Could Not Start Supported Python",
+            f"Python {version} was found at:\n{interpreter}\n\n"
+            f"But Serenum could not restart under it:\n{type(exc).__name__}: {exc}",
+            parent=root,
+        )
+        root.destroy()
+        return False
+
+
 def main():
     if sys.platform != "win32":
         raise SystemExit("Serenum setup is designed for Windows.")
+    if not _bootstrap_supported_runtime():
+        return
     root = tk.Tk()
     SerenumSetup(root)
     root.mainloop()

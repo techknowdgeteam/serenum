@@ -1,28 +1,63 @@
 Option Explicit
-Dim fso, shell, baseDir, updaterFile, pythonw, localAppData, pathValue, entries, item
+Dim fso, shell, baseDir, targetFile, pythonExe, pythonw, version, localAppData
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 baseDir = fso.GetParentFolderName(WScript.ScriptFullName)
-updaterFile = fso.BuildPath(baseDir, "serenum_updater.pyw")
-If Not fso.FileExists(updaterFile) Then
+targetFile = fso.BuildPath(baseDir, "serenum_updater.pyw")
+If Not fso.FileExists(targetFile) Then
     MsgBox "The Serenum updater is missing. Reinstall Serenum using the complete installer ZIP.", vbCritical, "Update Serenum"
     WScript.Quit 2
 End If
+
+pythonExe = ""
 pythonw = ""
 localAppData = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
-If fso.FileExists("C:\Program Files\Python310\pythonw.exe") Then pythonw = "C:\Program Files\Python310\pythonw.exe"
-If pythonw = "" And localAppData <> "%LOCALAPPDATA%" Then
-    If fso.FileExists(localAppData & "\Programs\Python\Python310\pythonw.exe") Then pythonw = localAppData & "\Programs\Python\Python310\pythonw.exe"
+
+' Ask the Windows Python Launcher for a specific supported runtime.
+For Each version In Array("3.12", "3.11", "3.10")
+    If pythonExe = "" Then
+        On Error Resume Next
+        Dim proc, output
+        Set proc = shell.Exec("py -" & version & " -c ""import sys; print(sys.executable)""")
+        If Err.Number = 0 Then
+            Do While proc.Status = 0
+                WScript.Sleep 50
+            Loop
+            output = Trim(proc.StdOut.ReadAll)
+            If fso.FileExists(output) Then
+                pythonExe = output
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+    End If
+Next
+
+' Fallback to standard installation locations, still restricted to 3.10-3.12.
+If pythonExe = "" Then
+    For Each version In Array("312", "311", "310")
+        If fso.FileExists("C:\Program Files\Python" & version & "\python.exe") Then
+            pythonExe = "C:\Program Files\Python" & version & "\python.exe"
+            Exit For
+        End If
+        If localAppData <> "%LOCALAPPDATA%" Then
+            If fso.FileExists(localAppData & "\Programs\Python\Python" & version & "\python.exe") Then
+                pythonExe = localAppData & "\Programs\Python\Python" & version & "\python.exe"
+                Exit For
+            End If
+        End If
+    Next
 End If
-If pythonw = "" And fso.FileExists("C:\Program Files\Python311\pythonw.exe") Then pythonw = "C:\Program Files\Python311\pythonw.exe"
-If pythonw = "" And fso.FileExists("C:\Program Files\Python312\pythonw.exe") Then pythonw = "C:\Program Files\Python312\pythonw.exe"
-If pythonw = "" And localAppData <> "%LOCALAPPDATA%" Then
-    If fso.FileExists(localAppData & "\Programs\Python\Python311\pythonw.exe") Then pythonw = localAppData & "\Programs\Python\Python311\pythonw.exe"
-    If pythonw = "" And fso.FileExists(localAppData & "\Programs\Python\Python312\pythonw.exe") Then pythonw = localAppData & "\Programs\Python\Python312\pythonw.exe"
+
+If pythonExe <> "" Then
+    pythonw = fso.BuildPath(fso.GetParentFolderName(pythonExe), "pythonw.exe")
+    If Not fso.FileExists(pythonw) Then pythonw = pythonExe
 End If
+
 If pythonw = "" Then
-    MsgBox "Python 3.10, 3.11 or 3.12 with Tcl/Tk could not be found. Install or repair Python, then retry.", vbExclamation, "Update Serenum"
+    MsgBox "Serenum requires Python 3.10, 3.11 or 3.12. Install Python 3.12 (recommended) and run this shortcut again. Python 3.14 can remain installed.", vbExclamation, "Update Serenum"
     WScript.Quit 3
 End If
+
 shell.CurrentDirectory = baseDir
-shell.Run Chr(34) & pythonw & Chr(34) & " " & Chr(34) & updaterFile & Chr(34), 0, False
+shell.Run Chr(34) & pythonw & Chr(34) & " -X utf8 " & Chr(34) & targetFile & Chr(34), 0, False
